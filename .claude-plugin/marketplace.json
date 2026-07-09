@@ -1,0 +1,22 @@
+{
+  "name": "setlist",
+  "owner": {
+    "name": "AlexCiortan"
+  },
+  "metadata": {
+    "description": "Self-hosting marketplace for Setlist, the spec-driven development plugin"
+  },
+  "renames": {
+    "sdd": "setlist",
+    "sdd-framework": "setlist"
+  },
+  "plugins": [
+    {
+      "name": "setlist",
+      "source": "./",
+      "description": "Spec-driven development as installable Claude Code commands, skills, and stamped instance enforcement",
+      "category": "workflows",
+      "tags": ["spec-driven", "workflow", "discipline", "planning", "gates", "hooks"]
+    }
+  ]
+}

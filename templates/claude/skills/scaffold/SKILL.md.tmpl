@@ -1,0 +1,39 @@
+---
+name: scaffold
+description: One-time project scaffold on the locked stack (framework Part 6). Bootstrap only; run once, then never again.
+disable-model-invocation: true
+---
+
+Scaffold {{PROJECT_NAME}} on the locked stack ({{STACK}}). This runs exactly
+once, after phase 2 of the bootstrap; a repo that is already scaffolded gets
+/setlist:validate instead.
+
+1. Scaffold the project on the stack recorded in steering/tech.md. Create the
+   pure-logic skeleton under {{SRC_ROLE}}/ and the test harness under
+   {{TESTS_ROLE}}/, keeping the boundary steering/structure.md draws between
+   pure logic and framework/UI code.
+
+   [PHASE 2 SLOT: the exact scaffold commands for this stack (init, dependency
+   install, test runner, linter, typechecker, CI workflow), filled during
+   tailored generation from the Step 2 decisions.]
+
+2. Wire the gates: tests, lint, typecheck, build. Record the single command that
+   runs the FULL suite in .claude/sdd.json as "gate_command" (the close gate and
+   /setlist:checkpoint run it verbatim).
+
+3. Flip "scaffolded" to true in .claude/sdd.json. This arms the scope hook:
+   from the next write on, feature code on the trunk branch (the "trunk"
+   field in .claude/sdd.json) is blocked, so finish the scaffold before
+   flipping.
+
+4. Write the scaffold record to journal/0001-scaffold.md: dependency versions,
+   files created, anything machine-specific learned during the install. Point
+   to it from specs/STATUS.md (Pointers), and name the next action in Current
+   state.
+
+5. Commit the scaffold as one commit on the trunk (the one-time exception to
+   the branch rule; the scope hook is armed only after step 3, which is why
+   steps run in this order). If no git repo exists yet, run git init first
+   with the trunk named in .claude/sdd.json as the initial branch
+   (git init -b <trunk>) and make this the repo's first commit, covering the
+   uncommitted session-zero output. Do not push.

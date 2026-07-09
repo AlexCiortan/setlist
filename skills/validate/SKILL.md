@@ -1,0 +1,70 @@
+---
+name: validate
+description: Idempotent framework health check of the instance (Part 6). Reports findings, fixes nothing without approval.
+---
+
+You are the framework health check (Part 6 of the committed edition). This
+command is a thin binding: the check list lives here, project facts come from
+`.claude/sdd.json` (role paths, trunk, gate command), and on any conflict the
+edition wins. Load the full Part when in doubt:
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/part.sh" 6`
+
+Run any time; idempotent. Report findings as a list ordered by severity, and
+fix nothing without approval.
+
+**Structural by design.** This check verifies shape: files in place, sections
+present, wiring intact, config coherent. It does not judge semantic consistency
+(a plan that contradicts its spec, criteria that miss the goal); that is
+Planner work at spec time. Domain checks an instance accumulates (a shellcheck
+sweep, a stack-specific hygiene rule) live in an instance-owned skill under the
+instance's own name, never in a copy of this command.
+
+Checks:
+
+1. `.claude/settings.json` parses as JSON and still carries the permission
+   rules (deny on .env reads; ask on push, hard reset, force push, rm -rf).
+2. The four stamped hooks are present in `.claude/hooks/` and wired in
+   settings.json: scope-hook on Write|Edit (PreToolUse), commit-gate and
+   close-gate on Bash (PreToolUse), regrounding-hook on SessionStart. A
+   disabled or missing hook is a finding, not an error: report it with the
+   settings line that would re-enable it.
+3. `.claude/sdd.json` parses, names the src and tests role paths (`roles.src`,
+   `roles.tests`, each a string or a list of strings) and the `trunk`, and
+   carries a non-empty `gate_command` once `scaffolded` is true. A role path
+   of `"."` is a finding: the scope hook ignores it by design (Part 6);
+   recommend enumerating the real code paths as a list.
+4. Required files exist: CLAUDE.md, README.md, ROADMAP.md, RUNBOOK.md,
+   DECISIONS.md, .gitignore, .env.example, specs/STATUS.md, specs/TEMPLATE.md,
+   the steering docs, and exactly ONE committed edition file at the repo root:
+   `setlist.md` (an instance not yet upgraded to the setlist cutover carries
+   the edition file under its original pre-cutover name instead; still
+   exactly one, and any name other than setlist.md is a finding recommending
+   /setlist:upgrade).
+5. specs/STATUS.md has its five bounded sections (Current state, Spec
+   inventory, Open chores, Open questions for the Planner, Pointers) AND
+   passes row discipline: inventory notes and chore archive lines are single
+   lines, and no resolved item lingers under Open questions.
+6. steering/structure.md contains an architecture diagram (a mermaid block).
+7. .gitignore does not exclude `.claude/`.
+8. No [PHASE 2 SLOT: ...] markers remain anywhere in the instance (a leftover
+   slot means tailored generation skipped a file).
+9. DECISIONS.md has its index table, and no INFERRED row lingers past the flip
+   ceremony (retrofits only).
+10. No stale generated skills linger: `.claude/skills/checkpoint/` and
+    `.claude/skills/validate/` were removed by the plugin-era migrations
+    (their duties ship as /setlist:checkpoint and /setlist:validate);
+    report any survivor with the removal step from the upgrade protocol.
+11. Binding dependencies are installed: `jq` resolves on PATH (all four
+    stamped hooks need it; a missing jq silently breaks every gate and the
+    re-grounding injection), and, when `.claude/skills/browser-qa/` exists,
+    Playwright resolves (`npx playwright --version`) with its Chromium
+    installed. Report the exact install command for anything missing; install
+    nothing yourself.
+
+## Gotchas (field-observed)
+
+- A finding is not always a framework defect. A missing SessionStart wiring
+  turned out to be an uncommitted local edit, correctly identified by diffing
+  settings.json against git history before reporting. Classify each finding
+  as committed drift or local edit first; the recommended fix differs, and
+  restoring still requires approval either way.

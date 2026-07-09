@@ -1,0 +1,8 @@
+# Secrets never land in the repo; .env.example documents the required names.
+.env
+.env.*
+!.env.example
+
+# Never exclude .claude/: it is part of the framework instance (/setlist:validate checks this).
+
+# /scaffold appends the stack-specific lines (build output, dependency dirs, caches).
