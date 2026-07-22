@@ -55,8 +55,11 @@ Checks:
     (their duties ship as /setlist:checkpoint and /setlist:validate);
     report any survivor with the removal step from the upgrade protocol.
 11. Binding dependencies are installed: `jq` resolves on PATH (all four
-    stamped hooks need it; a missing jq silently breaks every gate and the
-    re-grounding injection), and, when `.claude/skills/browser-qa/` exists,
+    stamped hooks need it; since plugin 1.0.1 the three gates FAIL CLOSED
+    without it, denying the writes, commits, and merges they govern rather
+    than allowing them unchecked, and the re-grounding pointer says so at
+    session start, so a missing jq presents as a blocked session rather than
+    silent damage), and, when `.claude/skills/browser-qa/` exists,
     Playwright resolves (`npx playwright --version`) with its Chromium
     installed. Report the exact install command for anything missing; install
     nothing yourself.

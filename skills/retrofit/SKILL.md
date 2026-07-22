@@ -39,6 +39,11 @@ question. One round, genuine forks only, recommendations inline, and the same
 opener: "what has changed since this framework edition was written" comes
 first.
 
+Verify the environment in this round too: the `opusplan` live probe, and
+`command -v jq`. The three stamped gates fail closed without jq, so a retrofit
+onto a machine that lacks it will deny its own first commits. Report the
+install command and let the user run it; install nothing yourself.
+
 ## 4. Phase 1: the mechanical stamp
 
 Write `.claude/stamp-answers.txt` (KEY=VALUE) with `mode=retrofit` and the

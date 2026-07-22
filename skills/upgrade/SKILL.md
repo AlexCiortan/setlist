@@ -26,6 +26,15 @@ a planning-and-documentation act: reading src is permitted, editing it is not.
   line. Its Changelog section is the authoritative delta list.
 - Ask conversationally: how was the old edition adopted (a chore number, or
   the original bootstrap/retrofit), and which ADR records it, if any.
+- **When the editions match but the plugin has moved** (a plugin patch that
+  changed stamped files, the first being 1.0.1's fail-closed hooks), this is
+  not a full migration. Run the enforcement-file refresh in section 3 and
+  nothing else: hooks are byte-copied into the instance at stamp time, so a
+  plugin release fixes new instances only and an existing one keeps its old
+  hook bytes until this refresh runs. Close it as an ordinary docs-only chore
+  with a one-line ADR naming the plugin version, not an umbrella migration
+  ADR. Compare the hook bytes rather than the version numbers: the plugin
+  version is not recorded in the instance, so the diff is the evidence.
 
 ## 2. Run Part 8c as written
 

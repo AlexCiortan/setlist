@@ -1,0 +1,36 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  hooks:
+    name: hook suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      matrix:
+        # The macOS leg is not redundant: it runs bash 3.2 and the BSD
+        # userland, which is where portability breaks show up first.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure jq is present
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            if command -v brew >/dev/null 2>&1; then
+              brew install jq
+            else
+              sudo apt-get update && sudo apt-get install -y jq
+            fi
+          fi
+          jq --version
+
+      - name: Report the bash version under test
+        run: bash --version | head -n 1
+
+      - name: Run the hook suite
+        run: bash test/run-tests.sh

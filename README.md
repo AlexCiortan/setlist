@@ -3,6 +3,7 @@
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-d97757)](https://code.claude.com/docs/en/discover-plugins)
 [![Plugin version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FAlexCiortan%2Fsetlist%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&label=plugin&color=blue)](https://github.com/AlexCiortan/setlist/blob/main/.claude-plugin/plugin.json)
 [![License: CC BY 4.0](https://img.shields.io/badge/license-CC%20BY%204.0-lightgrey)](LICENSE)
+[![tests](https://github.com/AlexCiortan/setlist/actions/workflows/test.yml/badge.svg)](https://github.com/AlexCiortan/setlist/actions/workflows/test.yml)
 
 **Setlist** is spec-driven development for Claude Code: build real software by **directing rather than typing**. You act as architect and reviewer, the agent writes the code, and a spec (not the keyboard) is your control surface.
 
@@ -117,6 +118,14 @@ The plugin also carries four **reference skills**: context the model loads by it
 
 Each skill also carries a **Gotchas** section grown from real field failures, never speculation. This table is the complete surface: the publish tooling mechanically refuses a release whose README and shipped skills disagree, in either direction.
 
+## Why one spec at a time
+
+The first question anyone arriving from a multi-agent harness asks is what Setlist does about parallelism. The honest answer is that the sequential model is a deliberate position, not a missing feature.
+
+One spec is active at a time, and no two agents write coupled code at once. The bet is that for a person directing rather than typing, correctness of decisions beats throughput of execution: the bottleneck in agent-assisted work is not how fast code appears, it is how much of it you can actually review before it becomes the foundation for the next thing. Ten features arriving in parallel is not ten times the progress if you can only genuinely review two of them. Read-only parallelism is unrestricted, because that constraint protects the shared model from concurrent edits, not research from speed: inventory sweeps, ground-truth probes, and verification runs fan out freely.
+
+Nothing in the architecture precludes going wider later. A spec is already a self-contained unit of scope with its own branch, acceptance criteria, and gate, which is exactly the interface a parallel execution plane would need. If that arrives it will be because independently-scoped specs proved they could run without stepping on each other, not because throughput sounded appealing.
+
 ## Does it actually work?
 
 Every release passes a **dogfood gate**: a fresh agent with zero prior context is given only this repository and its README, and must take a small real application from empty directory to a merged, twice-QA-passed feature with the discipline holding at every step. Recent gate runs built a Go CLI, a Python CLI, and a Node.js CLI end to end, each cold from the installed plugin. The enforcement hooks are additionally **hostile-tested**: real subprocess sessions actively try to commit em-dashes and secret-shaped strings, merge specs with incomplete closing reports, and write feature code on the trunk, and the run only passes when every attack is denied by mechanism with the specific failure named.
@@ -130,12 +139,30 @@ PARTIAL with the reason, never a claimed PASS.
 QA Pass 2 (you): use the feature yourself; spot-check at least one criterion marked PASS.
 ```
 
+The mechanical layer additionally runs as an **automated suite** on every push, on Linux and macOS: fixture repositories built from scratch, every gate driven through the same payloads Claude Code sends it, and both contracts asserted on each denial (the machine-readable decision, and whether the message names the specific failure a person has to fix). That suite is a regression net for the hooks; it is not a substitute for the dogfood gate, which tests whether a stranger can actually use the thing.
+
+## Known limitations
+
+The enforcement layer is four hooks running inside your Claude Code session, on your machine. That is where it acts, and that is where it stops. Both halves are worth stating plainly: an enforcement layer whose edges you cannot see is one you cannot reason about.
+
+**Where the layer ends by design.** These are boundaries, not bugs. Setlist governs the session; it is not a server-side policy engine and does not try to be one.
+
+- **The Bash escape hatch.** The scope hook watches the Write and Edit tools, so a session that writes files through Bash instead (`cat >`, `sed -i`, a heredoc) does not trip it, and the commit gate checks what a commit contains rather than where the file lives. Prompted discipline and the close gate's structural checks cover it today; a location check is the natural extension.
+- **The remote-merge bypass.** The close gate intercepts a `git merge` run in the session. Merging through `gh pr merge`, a button in a forge's web UI, or a push of an already-merged trunk goes around it entirely, which matters the moment a project moves to a pull-request flow: the strongest gate is then out of band. Your forge is the right place to close that half. Protect the trunk and require status checks, so the merge button enforces what the local gate would have. Running the close checks themselves as a CI job is the obvious way to finish the loop, and is a candidate rather than a promise.
+
+**Known gaps inside that scope.** These are ordinary rough edges in something that does work.
+
+- **The pathspec hole.** `git commit <file>` commits the working-tree copy of that file without staging it, so the staged-content scan has nothing to look at. The test suite asserts this hole deliberately rather than hiding it, so the day it closes, we find out.
+- **The secret scan is a first cut.** It matches token-shaped and connection-string-shaped values, which catches the common accidents. It will miss exotic formats and it can flag something innocent. Tuning comes from field reports, so send them.
+- **The gates need `jq`, and fail closed without it.** If `jq` is not installed, the hooks deny the operations they govern rather than allowing them unchecked, and the session tells you so at startup. Install `jq` and they behave normally. Failing closed is the deliberate choice: a gate that quietly stops working is worse than one that stops you.
+
 ## Repository contents
 
 | File | What it is |
 |------|------------|
 | [`setlist.md`](setlist.md) | **The current framework edition** (the version is stated inside the file). The single source of truth; read this to operate or adapt the method. |
 | `.claude-plugin/`, `skills/`, `templates/`, `scripts/` | The plugin (`setlist`): the marketplace and plugin manifests, the seven `/setlist` command skills and four reference skills, the instance templates including the stamped hooks, and the stamp and Part-extraction scripts. All of it is a binding of the edition document. |
+| `test/`, `.github/` | The hook test suite and the workflow that runs it on Linux and macOS on every push. Fixture repositories are built from scratch at run time; the suite depends on nothing beyond bash, git, `jq`, and coreutils. |
 | `demo.gif` | The demo at the top of this page: a real `/setlist:new` session zero and the `/scaffold` first commit, recorded live and trimmed for pacing. |
 
 ## After bootstrap: the operating loop

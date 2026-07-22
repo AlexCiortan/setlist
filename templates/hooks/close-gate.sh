@@ -12,8 +12,10 @@
 # ref via `git show <ref>:<path>`, never the working tree.
 # Deny mechanic verified live 2026-07-04 on Claude Code 2.1.200: JSON
 # permissionDecision output, exit 0; the reason reaches the agent verbatim.
-# Requires jq. Disable with a one-line edit: remove this hook's entry from
-# .claude/settings.json.
+# Requires jq, and FAILS CLOSED without it: a missing jq used to make every
+# extraction below return empty, every check fall through, and the gate allow
+# every merge unchecked. Disable with a one-line edit: remove this hook's entry
+# from .claude/settings.json.
 
 set -u
 
@@ -23,12 +25,39 @@ deny() {
   exit 0
 }
 
+# Deny with a fixed literal reason, for the paths where jq is unavailable to
+# escape one. The text must contain no double quotes, backslashes, or newlines.
+deny_literal() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
+  exit 0
+}
+
 INPUT=$(cat)
+
+# Fail closed when jq is absent. The raw payload is scanned instead of the
+# parsed command so that a missing jq gates the merges this hook governs
+# rather than every Bash call in the session.
+if ! command -v jq >/dev/null 2>&1; then
+  case "$INPUT" in
+    *merge*)
+      deny_literal "close gate: jq is not installed, so this gate cannot verify the Closing report, the QA verdict, or the inventory row, and would otherwise allow every merge unchecked. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+      ;;
+    *) exit 0 ;;
+  esac
+fi
+
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
-case "$CMD" in
-  *"git merge"*) ;;
-  *) exit 0 ;;
-esac
+
+# Whether this gate applies must not depend on how the command is SPELLED.
+# A literal "git merge" substring test let `git  merge`, `git -C . merge`, and
+# `git --no-pager merge` past untouched. Whitespace is squeezed, quotes are
+# removed (not their contents: the branch name is an argument this gate needs),
+# and git's global options are tolerated before the subcommand.
+CMD_NORM="$(printf '%s' "$CMD" | tr -s '[:space:]' ' ' | tr -d "\"'")"
+GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
+if ! printf '%s' "$CMD_NORM" | grep -qE "(^|[;&|(]| )([^ ]*/)?git${GIT_OPTS} +merge( |$)"; then
+  exit 0
+fi
 
 PROJ="${CLAUDE_PROJECT_DIR:-.}"
 
@@ -46,7 +75,7 @@ TRUNK="$(jq -r '.trunk // "main"' "$SDD_JSON")"
 # also checks out or switches to the trunk before merging, the target is the
 # trunk even though the current branch is not yet (F4-2a).
 TARGET="$(git -C "$PROJ" branch --show-current 2>/dev/null || true)"
-if printf '%s' "$CMD" | grep -qE "git[[:space:]]+(checkout|switch)[[:space:]]+${TRUNK}([[:space:]]|$|[;&|)])"; then
+if printf '%s' "$CMD_NORM" | grep -qE "(^|[;&|(]| )([^ ]*/)?git${GIT_OPTS} +(checkout|switch) +${TRUNK}( |$|[;&|)])"; then
   TARGET="$TRUNK"
 fi
 
@@ -56,8 +85,16 @@ fi
 # Extract the merged ref: the first git-merge argument that names a spec/ or
 # chore/ branch. Other merges (e.g. the trunk into a feature branch, already
 # excluded above) pass through.
+# CMD_NORM is used, not CMD: quoting the branch name (`git merge --no-ff
+# "spec/0001-x"`, either quote style) used to leave no word matching spec/*,
+# so MERGED_REF came back empty and the gate exited silently, waving through
+# exactly the merge it exists to check. Fully-qualified and remote-tracking
+# spellings of the same branch did the same.
 MERGED_REF=""
-for word in $CMD; do
+for word in $CMD_NORM; do
+  word="${word#refs/heads/}"
+  word="${word#refs/remotes/}"
+  word="${word#origin/}"
   case "$word" in
     spec/*|chore/*) MERGED_REF="$word"; break ;;
   esac

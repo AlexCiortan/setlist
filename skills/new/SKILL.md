@@ -49,6 +49,11 @@ Ask for, in plain conversation:
   the response). Only if the probe cannot run or fails: leave the model line
   out of settings.json and park verification in STATUS.md with a named owner.
   Never park without attempting the probe.
+- Verify `jq` in the same environment check (`command -v jq`). The three
+  stamped gates fail closed without it, so an instance stamped on a machine
+  that lacks it will deny its own first writes; a clean container is the
+  common case, since jq is not in most default installs. Report the install
+  command and let the user run it; install nothing yourself.
 - Run Step 2 foundational decisions WITH the user at full depth. This is the
   product of the whole session; do not compress it. The core data model gets
   the most effort.

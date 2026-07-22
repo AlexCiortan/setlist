@@ -10,8 +10,10 @@
 # scope here and the split-form doctrine plus prompted discipline cover it.
 # Deny mechanic verified live 2026-07-04 on Claude Code 2.1.200: JSON
 # permissionDecision output, exit 0; the reason reaches the agent verbatim.
-# Requires jq. Disable with a one-line edit: remove this hook's entry from
-# .claude/settings.json.
+# Requires jq, and FAILS CLOSED without it: a missing jq used to make every
+# extraction below return empty, every check fall through, and the gate allow
+# everything silently. Disable with a one-line edit: remove this hook's entry
+# from .claude/settings.json.
 
 set -u
 
@@ -21,12 +23,45 @@ deny() {
   exit 0
 }
 
+# Deny with a fixed literal reason, for the paths where jq is unavailable to
+# escape one. The text must contain no double quotes, backslashes, or newlines.
+deny_literal() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
+  exit 0
+}
+
 INPUT=$(cat)
+
+# Fail closed when jq is absent. The raw payload is scanned instead of the
+# parsed command so that a missing jq gates the commands this hook governs
+# rather than every Bash call in the session: the agent can still run the
+# install command that fixes it. The match is the bare word here, not "git
+# commit": without jq there is no reliable parse, so this path errs toward
+# denying anything that mentions committing at all.
+if ! command -v jq >/dev/null 2>&1; then
+  case "$INPUT" in
+    *commit*)
+      deny_literal "commit gate: jq is not installed, so this gate cannot read the command it is meant to check and would otherwise allow every commit unchecked. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+      ;;
+    *) exit 0 ;;
+  esac
+fi
+
 CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
-case "$CMD" in
-  *"git commit"*) ;;
-  *) exit 0 ;;
-esac
+
+# Whether this gate applies must not depend on how the command is SPELLED.
+# A literal "git commit" substring test let `git  commit` (two spaces),
+# `git -C . commit`, `git --no-pager commit`, and `git -c k=v commit` past the
+# gate untouched: it did not error, it stopped checking, in silence. Whitespace
+# is squeezed once, quoted strings are dropped so a message mentioning the word
+# cannot trip it, and git's own global options are tolerated between the binary
+# and the subcommand.
+CMD_NORM="$(printf '%s' "$CMD" | tr -s '[:space:]' ' ')"
+CMD_BARE="$(printf '%s' "$CMD_NORM" | sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g')"
+GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
+if ! printf '%s' "$CMD_BARE" | grep -qE "(^|[;&|(]| )([^ ]*/)?git${GIT_OPTS} +commit( |$)"; then
+  exit 0
+fi
 
 PROJ="${CLAUDE_PROJECT_DIR:-.}"
 
@@ -36,7 +71,6 @@ PROJ="${CLAUDE_PROJECT_DIR:-.}"
 # hold the content: every check would pass vacuously. Quoted strings are
 # stripped first so commit messages mentioning "git add" or "-a" do not
 # false-trip the scan.
-CMD_BARE="$(printf '%s' "$CMD" | sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g')"
 if printf '%s' "$CMD_BARE" | grep -qE 'git[[:space:]]+add([[:space:]]|$)'; then
   deny "commit gate: this command stages and commits in one step, so the gate would scan an empty index and check nothing. Run git add as its own command first, then git commit separately; the gate scans the staged content and names any finding."
 fi
