@@ -12,6 +12,14 @@ edition wins. Load the full Part when in doubt:
 Run any time; idempotent. Report findings as a list ordered by severity, and
 fix nothing without approval.
 
+Open the report by stating the plugin version you are operating from and
+whether it is the newest one available: run
+`bash "${CLAUDE_PLUGIN_ROOT}/scripts/plugin-skew.sh"` and quote its verdict. A
+session binds its plugin tree at session start, so a health check run from a
+stale session is reporting on the wrong tree, and every check below inherits
+that. SKEW is a finding in its own right, above all the others, and its fix is
+to restart the session rather than to change anything in the repo.
+
 **Structural by design.** This check verifies shape: files in place, sections
 present, wiring intact, config coherent. It does not judge semantic consistency
 (a plan that contradicts its spec, criteria that miss the goal); that is
@@ -63,6 +71,15 @@ Checks:
     Playwright resolves (`npx playwright --version`) with its Chromium
     installed. Report the exact install command for anything missing; install
     nothing yourself.
+12. The instance records which plugin stamped it: `.claude/sdd.json` carries
+    `plugin.version`. An instance stamped before 1.0.2 records none, which is a
+    finding recommending `/setlist:upgrade` (the refresh records it), not an
+    error. When a version IS recorded and it is OLDER than the plugin this
+    session runs, the instance is carrying stale enforcement files and the same
+    recommendation applies. When it is NEWER, say so plainly and recommend
+    nothing yet: the instance was refreshed by a newer plugin than this session
+    holds, so this session is the stale party, and any refresh it ran would
+    reinstall older hooks over newer ones.
 
 ## Gotchas (field-observed)
 

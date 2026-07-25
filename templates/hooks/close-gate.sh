@@ -136,7 +136,15 @@ if [[ "$MERGED_REF" == spec/* ]]; then
 
   # The pasted QA Pass 1 block: between the "QA Pass 1 report" field and the
   # "QA Pass 2" field there must be at least one PASS / PARTIAL / FAIL verdict.
-  QA_BLOCK="$(printf '%s\n' "$SPEC_TEXT" | awk '/QA Pass 1 report/ { inqa=1 } /QA Pass 2/ { inqa=0 } inqa')"
+  # Both boundaries anchor on the Appendix C FIELD MARKER (start of line, past
+  # any list bullet or bold markers), never on a bare substring anywhere in the
+  # line. The bare "QA Pass 2" test ended the block at the first sentence of
+  # QA-1 prose that merely cross-referenced QA Pass 2, truncating the verdict
+  # out of the block and denying a compliant merge in the field.
+  QA_BLOCK="$(printf '%s\n' "$SPEC_TEXT" | awk '
+    /^[-*+[:space:]]*QA Pass 1 report/ { inqa = 1 }
+    /^[-*+[:space:]]*QA Pass 2/        { inqa = 0 }
+    inqa')"
   if ! printf '%s\n' "$QA_BLOCK" | grep -qE '(^|[^A-Z])(PASS|PARTIAL|FAIL)([^A-Z]|$)'; then
     deny "close gate: the Closing report for $MERGED_REF carries no pasted QA Pass 1 PASS/PARTIAL/FAIL block; run QA Pass 1, paste the report, commit it to the branch, then merge."
   fi

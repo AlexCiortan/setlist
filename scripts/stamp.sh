@@ -42,6 +42,14 @@ EDITION="$ROOT/setlist.md"
 [[ -f "$EDITION" ]] || die "setlist.md not found at the plugin root ($ROOT)"
 EDITION_FILE="setlist.md"
 
+# The stamping plugin version, read live from this tree's manifest and recorded
+# in the instance's sdd.json. Never a hardcoded string: a stamp that names the
+# wrong version is worse than one that names none, because the refresh's
+# downgrade refusal trusts what it finds there. Undeterminable is fatal for the
+# same reason.
+PLUGIN_VERSION="$(bash "$SCRIPT_DIR/plugin-version.sh" "$ROOT")" \
+  || die "cannot determine this plugin's version, so the instance would be stamped without one; see the message above"
+
 # --- answers -----------------------------------------------------------------
 
 get() { # get <key> [default]
@@ -161,6 +169,7 @@ stamp_tmpl() { # stamp_tmpl <abs-src> <abs-dest>
   content="${content//'{{TRUNK}}'/$TRUNK}"
   content="${content//'{{STAMP_DATE}}'/$STAMP_DATE}"
   content="${content//'{{EDITION_FILE}}'/$EDITION_FILE}"
+  content="${content//'{{PLUGIN_VERSION}}'/$PLUGIN_VERSION}"
   printf '%s\n' "$content" > "$2"
 }
 
@@ -209,7 +218,7 @@ done
 
 # --- report --------------------------------------------------------------------
 
-echo "stamp.sh: stamped $STAMPED files into $TARGET (mode=$MODE, ui=$UI, opusplan=$OPUSPLAN, design_surface=$DESIGN_SURFACE, trunk=$TRUNK)"
+echo "stamp.sh: stamped $STAMPED files into $TARGET (mode=$MODE, ui=$UI, opusplan=$OPUSPLAN, design_surface=$DESIGN_SURFACE, trunk=$TRUNK, plugin=$PLUGIN_VERSION)"
 if [[ ${#SKIPPED[@]} -gt 0 ]]; then
   echo "stamp.sh: skipped existing files (retrofit; phase 2 merges by hand):"
   printf '  %s\n' "${SKIPPED[@]}"

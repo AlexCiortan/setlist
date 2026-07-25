@@ -161,7 +161,7 @@ The enforcement layer is four hooks running inside your Claude Code session, on 
 | File | What it is |
 |------|------------|
 | [`setlist.md`](setlist.md) | **The current framework edition** (the version is stated inside the file). The single source of truth; read this to operate or adapt the method. |
-| `.claude-plugin/`, `skills/`, `templates/`, `scripts/` | The plugin (`setlist`): the marketplace and plugin manifests, the seven `/setlist` command skills and four reference skills, the instance templates including the stamped hooks, and the stamp and Part-extraction scripts. All of it is a binding of the edition document. |
+| `.claude-plugin/`, `skills/`, `templates/`, `scripts/` | The plugin (`setlist`): the marketplace and plugin manifests, the seven `/setlist` command skills and four reference skills, the instance templates including the stamped hooks, and the scripts that stamp an instance, extract a Part, and refresh an existing instance's enforcement files. All of it is a binding of the edition document. |
 | `test/`, `.github/` | The hook test suite and the workflow that runs it on Linux and macOS on every push. Fixture repositories are built from scratch at run time; the suite depends on nothing beyond bash, git, `jq`, and coreutils. |
 | `demo.gif` | The demo at the top of this page: a real `/setlist:new` session zero and the `/scaffold` first commit, recorded live and trimmed for pacing. |
 

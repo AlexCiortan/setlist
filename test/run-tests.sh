@@ -243,7 +243,15 @@ rm -f "$CG/hole.md"
 
 # close_fixture <dir> <closing> <qa> <diag> <statusrow> <dup> <gate_command>
 #   closing:   yes|no      Closing report section present
-#   qa:        yes|no      a PASS verdict between the QA Pass 1 and 2 fields
+#   qa:        yes|no|crossref|stray
+#                yes       a PASS verdict between the QA Pass 1 and 2 fields
+#                no        no verdict anywhere
+#                crossref  QA-1 prose that cross-references QA Pass 2, ABOVE the
+#                          verdict line: the 0112 field shape, which the bare
+#                          substring anchor truncated into a false denial
+#                stray     no verdict in the QA-1 block, but the word PASS
+#                          AFTER the QA Pass 2 field marker: proves the end
+#                          anchor still terminates the block
 #   diag:      answered|unanswered
 #   statusrow: yes|no      a CLOSED inventory row on the branch
 #   dup:       yes|no      a second specs/0001-*.md file
@@ -260,13 +268,15 @@ close_fixture() {
     printf '# Spec 0001 - thing\n\nStatus: CLOSED\n\n'
     if [[ "$closing" == "yes" ]]; then
       printf '## Closing report\n\n'
-      printf 'QA Pass 1 report:\n\n'
-      [[ "$qa" == "yes" ]] && printf 'criterion 1: PASS\n\n'
-      printf 'QA Pass 2 (human): done\n\n'
+      printf -- '- QA Pass 1 report (pasted verbatim):\n\n'
+      [[ "$qa" == "crossref" ]] && printf 'Note: the visual criteria are deferred to QA Pass 2.\n\n'
+      [[ "$qa" == "yes" || "$qa" == "crossref" ]] && printf 'criterion 1: PASS\n\n'
+      printf -- '- QA Pass 2 (human): done\n\n'
+      [[ "$qa" == "stray" ]] && printf -- '- Follow-ups filed: none; the regression suite came back PASS\n\n'
       if [[ "$diag" == "answered" ]]; then
-        printf 'Architecture diagram: no impact\n'
+        printf -- '- Architecture diagram: no impact\n'
       else
-        printf 'Architecture diagram: <updated in this commit | no impact>\n'
+        printf -- '- Architecture diagram: <updated in this commit | no impact>\n'
       fi
     fi
   } > "$d/specs/0001-thing.md"
@@ -332,6 +342,41 @@ expect_deny "close-gate p: a failing gate command is denied" "gate command"
 CL="$WORK/close-o"; close_fixture "$CL" yes yes answered yes no true
 run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
 expect_allow "close-gate o: a fully compliant merge is allowed"
+
+# The QA Pass 1 block is delimited by the Appendix C FIELD MARKERS, not by the
+# bare substring "QA Pass 2" anywhere in a line. The bare test ended the block
+# at the first line of QA-1 prose that cross-referenced QA Pass 2, dropping the
+# verdict out of the block and denying a compliant merge in the field (0112).
+CL="$WORK/close-crossref"; close_fixture "$CL" yes crossref answered yes no true
+CROSSREF_SPEC="$(git -C "$CL" show spec/0001-thing:specs/0001-thing.md)"
+XREF_LINE="$(printf '%s\n' "$CROSSREF_SPEC" | grep -n 'deferred to QA Pass 2' | head -n1 | cut -d: -f1)"
+VERDICT_LINE="$(printf '%s\n' "$CROSSREF_SPEC" | grep -n 'criterion 1: PASS' | head -n1 | cut -d: -f1)"
+MARKER_LINE="$(printf '%s\n' "$CROSSREF_SPEC" | grep -n '^[-*+[:space:]]*QA Pass 2' | head -n1 | cut -d: -f1)"
+if [[ -n "$XREF_LINE" && -n "$VERDICT_LINE" && -n "$MARKER_LINE" \
+      && "$XREF_LINE" -lt "$VERDICT_LINE" && "$VERDICT_LINE" -lt "$MARKER_LINE" ]]; then
+  ok "close-gate crossref0: the fixture really cross-references QA Pass 2 above the verdict"
+else
+  bad "close-gate crossref0: the fixture really cross-references QA Pass 2 above the verdict" \
+      "prose line '$XREF_LINE', verdict line '$VERDICT_LINE', field marker line '$MARKER_LINE'; the case below proves nothing unless prose precedes verdict precedes marker"
+fi
+run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
+expect_allow "close-gate crossref: QA-1 prose mentioning QA Pass 2 no longer truncates the verdict"
+
+# The other direction of the same fix: the end anchor must still terminate the
+# block, so a verdict-shaped word AFTER the QA Pass 2 field cannot satisfy a
+# Closing report whose QA-1 block is genuinely empty.
+CL="$WORK/close-stray"; close_fixture "$CL" yes stray answered yes no true
+STRAY_SPEC="$(git -C "$CL" show spec/0001-thing:specs/0001-thing.md)"
+STRAY_LINE="$(printf '%s\n' "$STRAY_SPEC" | grep -n 'regression suite came back PASS' | head -n1 | cut -d: -f1)"
+MARKER_LINE="$(printf '%s\n' "$STRAY_SPEC" | grep -n '^[-*+[:space:]]*QA Pass 2' | head -n1 | cut -d: -f1)"
+if [[ -n "$STRAY_LINE" && -n "$MARKER_LINE" && "$MARKER_LINE" -lt "$STRAY_LINE" ]]; then
+  ok "close-gate stray0: the fixture really places a PASS below the QA Pass 2 field marker"
+else
+  bad "close-gate stray0: the fixture really places a PASS below the QA Pass 2 field marker" \
+      "field marker line '$MARKER_LINE', stray PASS line '$STRAY_LINE'"
+fi
+run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
+expect_deny "close-gate stray: a PASS below the QA Pass 2 field does not satisfy an empty QA-1 block" "QA Pass 1"
 
 # =============================================================================
 # Command spelling must not decide enforcement
@@ -558,6 +603,271 @@ if bash "$ROOT/scripts/stamp.sh" "$WORK/answers.txt" "$STAMP_TARGET" >/dev/null 
 else
   bad "stamp y: stamp.sh copies all four hooks byte-verbatim" "stamp.sh exited non-zero"
 fi
+
+# =============================================================================
+# Plugin version, refresh direction, and session skew (plugin 1.0.2, item 21)
+#
+# The failure this whole section exists for: a refresh that compares bytes
+# without direction can reinstall older enforcement files over newer ones and
+# report success. Every refusal below is asserted to have refused AND to have
+# left the instance's bytes alone, because a refusal that copied anyway is the
+# same defect wearing a warning label.
+# =============================================================================
+
+SCRIPTS="$ROOT/scripts"
+SCRIPT_OUT=""
+SCRIPT_RC=0
+
+run_script() { # run_script <cmd> [args...]
+  SCRIPT_OUT="$("$@" 2>&1)"
+  SCRIPT_RC=$?
+}
+
+run_script_nojq() { # run_script_nojq <cmd> [args...]
+  SCRIPT_OUT="$(PATH="$NOJQ_BIN" "$@" 2>&1)"
+  SCRIPT_RC=$?
+}
+
+expect_script() { # expect_script <name> <want-rc> [substring...]
+  local name="$1" want="$2" s
+  shift 2
+  if [[ "$SCRIPT_RC" -ne "$want" ]]; then
+    bad "$name" "expected rc $want, got $SCRIPT_RC. Output: ${SCRIPT_OUT:-<empty>}"
+    return
+  fi
+  for s in "$@"; do
+    case "$SCRIPT_OUT" in
+      *"$s"*) ;;
+      *) bad "$name" "output does not mention '$s': ${SCRIPT_OUT:-<empty>}"; return ;;
+    esac
+  done
+  ok "$name"
+}
+
+assert_true() { # assert_true <name> <message-if-false> <cmd> [args...]
+  local name="$1" msg="$2"
+  shift 2
+  if "$@" >/dev/null 2>&1; then ok "$name"; else bad "$name" "$msg"; fi
+}
+
+PLUGIN_VERSION="$(bash "$SCRIPTS/plugin-version.sh" "$ROOT" 2>/dev/null || true)"
+if [[ -n "$PLUGIN_VERSION" ]]; then
+  ok "version 0: this plugin tree declares a readable version ($PLUGIN_VERSION)"
+else
+  bad "version 0: this plugin tree declares a readable version" \
+      "plugin-version.sh could not read one, so every case in this section would be comparing against nothing"
+fi
+
+# The ordering is the whole point of the file; a comparison that answers "same"
+# for everything would let every case below pass while proving nothing.
+run_script bash "$SCRIPTS/plugin-version.sh" --compare 1.0.2 1.0.1
+expect_script "version a: 1.0.2 is newer than 1.0.1" 0 "newer"
+run_script bash "$SCRIPTS/plugin-version.sh" --compare 1.0.1 1.0.2
+expect_script "version b: 1.0.1 is older than 1.0.2" 0 "older"
+run_script bash "$SCRIPTS/plugin-version.sh" --compare 1.0.1 1.0.1
+expect_script "version c: equal versions compare same" 0 "same"
+run_script bash "$SCRIPTS/plugin-version.sh" --compare 1.2.0 1.10.0
+expect_script "version d: components compare numerically, not as text" 0 "older"
+run_script bash "$SCRIPTS/plugin-version.sh" --compare "" 1.0.1
+expect_script "version e: an unreadable version refuses rather than guessing" 1 "not a version"
+
+# --- the stamp records the stamping version ------------------------------------
+
+STAMP_RECORDED="$(jq -r '.plugin.version // empty' "$STAMP_TARGET/.claude/sdd.json" 2>/dev/null || true)"
+if [[ "$STAMP_RECORDED" == "$PLUGIN_VERSION" && -n "$PLUGIN_VERSION" ]]; then
+  ok "stamp version: the stamped instance records the stamping plugin version ($STAMP_RECORDED)"
+else
+  bad "stamp version: the stamped instance records the stamping plugin version" \
+      "sdd.json records '${STAMP_RECORDED:-<none>}', the manifest declares '${PLUGIN_VERSION:-<none>}'"
+fi
+if [[ "$STAMP_RECORDED" != *"{{"* ]]; then
+  ok "stamp version 2: the recorded version is a real value, not an unsubstituted placeholder"
+else
+  bad "stamp version 2: the recorded version is a real value, not an unsubstituted placeholder" \
+      "sdd.json still carries the template placeholder: $STAMP_RECORDED"
+fi
+
+# --- refresh fixtures -----------------------------------------------------------
+
+# A minimal instance: the four stamped hooks plus sdd.json. close-gate.sh
+# carries a marker line, so "did the refresh copy anything?" is decidable by
+# looking rather than by trusting the exit code.
+MARKER="# instance marker, must survive every refusal"
+instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken>
+  local d="$1" rec="$2" h
+  rm -rf "$d"
+  mkdir -p "$d/.claude/hooks"
+  for h in scope-hook commit-gate close-gate regrounding-hook; do
+    cp "$HOOKS/$h.sh" "$d/.claude/hooks/$h.sh"
+  done
+  printf '%s\n' "$MARKER" >> "$d/.claude/hooks/close-gate.sh"
+  case "$rec" in
+    broken) printf '{ "trunk": "main", \n' > "$d/.claude/sdd.json" ;;
+    none)   printf '{ "trunk": "main", "gate_command": "", "scaffolded": false }\n' > "$d/.claude/sdd.json" ;;
+    *)      printf '{ "trunk": "main", "gate_command": "", "scaffolded": false, "plugin": { "version": "%s" } }\n' \
+              "$rec" > "$d/.claude/sdd.json" ;;
+  esac
+}
+
+marker_intact() { # marker_intact <dir>
+  grep -q "^$MARKER\$" "$1/.claude/hooks/close-gate.sh"
+}
+
+# --- refusal: a backwards move --------------------------------------------------
+
+INST="$WORK/inst-downgrade"
+instance_fixture "$INST" 9.9.9
+assert_true "refresh down0: the fixture really records a version newer than this plugin" \
+  "the fixture does not record 9.9.9, so the downgrade case below is not a downgrade" \
+  test "$(jq -r '.plugin.version' "$INST/.claude/sdd.json")" = "9.9.9"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "refresh down: a backwards refresh is refused and names both versions" 1 \
+  "BACKWARDS" "9.9.9" "$PLUGIN_VERSION"
+assert_true "refresh down2: the refused refresh copied nothing" \
+  "the instance's close-gate.sh lost its marker, so the refusal overwrote the file it refused to touch" \
+  marker_intact "$INST"
+
+# --- refusal: an undeterminable recorded version --------------------------------
+
+INST="$WORK/inst-unreadable"
+instance_fixture "$INST" "banana"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "refresh unreadable: an unreadable recorded version refuses" 1 "cannot read" "banana"
+assert_true "refresh unreadable2: the refused refresh copied nothing" \
+  "the instance's close-gate.sh lost its marker despite the refusal" \
+  marker_intact "$INST"
+
+INST="$WORK/inst-broken"
+instance_fixture "$INST" broken
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "refresh broken: sdd.json that does not parse refuses" 1 "does not parse"
+assert_true "refresh broken2: the refused refresh copied nothing" \
+  "the instance's close-gate.sh lost its marker despite the refusal" \
+  marker_intact "$INST"
+
+INST="$WORK/inst-nosdd"
+instance_fixture "$INST" 1.0.0
+rm -f "$INST/.claude/sdd.json"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "refresh nosdd: an instance with no sdd.json refuses" 1 "no .claude/sdd.json"
+
+# Without jq the recorded version cannot be read at all, which is precisely the
+# state in which a downgrade is indistinguishable from an upgrade.
+INST="$WORK/inst-nojq"
+instance_fixture "$INST" 1.0.0
+run_script_nojq bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "refresh nojq: without jq the refresh refuses rather than copying blind" 1 "jq"
+assert_true "refresh nojq2: the refused refresh copied nothing" \
+  "the instance's close-gate.sh lost its marker despite the refusal" \
+  marker_intact "$INST"
+
+# --- forward moves are performed and recorded ------------------------------------
+
+INST="$WORK/inst-legacy"
+instance_fixture "$INST" none
+assert_true "refresh legacy0: the fixture really records no plugin version" \
+  "the fixture already records one, so this is not the pre-1.0.2 case" \
+  test -z "$(jq -r '.plugin.version // empty' "$INST/.claude/sdd.json")"
+run_script bash "$SCRIPTS/refresh-instance.sh" "$INST"
+expect_script "refresh legacy: a report-only run names the differing file and changes nothing" 0 \
+  "close-gate.sh" "Re-run with --apply"
+assert_true "refresh legacy2: the report-only run copied nothing" \
+  "report mode overwrote the instance's close-gate.sh" \
+  marker_intact "$INST"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "refresh legacy3: an instance recording no version is refreshed forward" 0 "forward"
+if marker_intact "$INST"; then
+  bad "refresh legacy4: --apply restores the hook bytes" \
+      "close-gate.sh still carries the instance marker, so nothing was copied"
+elif cmp -s "$HOOKS/close-gate.sh" "$INST/.claude/hooks/close-gate.sh"; then
+  ok "refresh legacy4: --apply restores the hook bytes byte-verbatim"
+else
+  bad "refresh legacy4: --apply restores the hook bytes" "close-gate.sh differs from the template"
+fi
+if [[ "$(jq -r '.plugin.version // empty' "$INST/.claude/sdd.json")" == "$PLUGIN_VERSION" ]]; then
+  ok "refresh legacy5: --apply records the plugin version in the instance"
+else
+  bad "refresh legacy5: --apply records the plugin version in the instance" \
+      "sdd.json records '$(jq -r '.plugin.version // empty' "$INST/.claude/sdd.json")', expected '$PLUGIN_VERSION'"
+fi
+if [[ "$(jq -r '.trunk // empty' "$INST/.claude/sdd.json")" == "main" ]]; then
+  ok "refresh legacy6: recording the version preserves the rest of sdd.json"
+else
+  bad "refresh legacy6: recording the version preserves the rest of sdd.json" \
+      "the trunk field did not survive the rewrite"
+fi
+
+# --- session skew ----------------------------------------------------------------
+
+# The cache lays versions of the same plugin out side by side, which is the
+# shape the field case had: two trees present, the session bound to the older.
+fake_tree() { # fake_tree <dir> <version> [name]
+  mkdir -p "$1/.claude-plugin"
+  printf '{\n  "name": "%s",\n  "version": "%s"\n}\n' "${3:-setlist}" "$2" > "$1/.claude-plugin/plugin.json"
+}
+
+CACHE="$WORK/cache/setlist/setlist"
+fake_tree "$CACHE/1.0.1" 1.0.1
+fake_tree "$CACHE/1.0.2" 1.0.2
+assert_true "skew 0: the fixture cache really holds two trees of the same plugin" \
+  "the two-version cache fixture was not built, so the skew cases below prove nothing" \
+  test -f "$CACHE/1.0.1/.claude-plugin/plugin.json" -a -f "$CACHE/1.0.2/.claude-plugin/plugin.json"
+
+run_script bash "$SCRIPTS/plugin-skew.sh" "$CACHE/1.0.1"
+expect_script "skew a: a session on the older cached tree reports SKEW" 1 "SKEW" "1.0.1" "1.0.2"
+run_script bash "$SCRIPTS/plugin-skew.sh" "$CACHE/1.0.2"
+expect_script "skew b: a session on the newest cached tree reports no skew" 0 "no session skew"
+
+# A neighbour that is a DIFFERENT plugin is not a newer version of this one.
+# Pointed at a working checkout, the first cut of this compared unrelated
+# repositories sitting beside it and announced a confident false SKEW.
+OTHER="$WORK/cache/other"
+fake_tree "$OTHER/setlist-solo" 1.0.3 setlist
+fake_tree "$OTHER/unrelated" 9.9.9 some-other-plugin
+run_script bash "$SCRIPTS/plugin-skew.sh" "$OTHER/setlist-solo"
+expect_script "skew c: a differently named neighbouring plugin is not a newer version" 2 "Unverified, not clean"
+
+# A tree with no manifest cannot be evaluated, and says so instead of passing.
+mkdir -p "$WORK/not-a-plugin"
+run_script bash "$SCRIPTS/plugin-skew.sh" "$WORK/not-a-plugin"
+expect_script "skew d: an unreadable tree reports undeterminable, not clean" 2 "undeterminable"
+
+# --- a stale session must not refresh at all --------------------------------------
+
+# The field case end to end: the plugin tree the session is bound to is real and
+# complete, a newer tree sits beside it in the cache, and the instance is
+# willing. Refreshing here would install the OLD hook bytes and report an
+# upgrade, which is the exact chore that was nearly closed in the field.
+STALE="$WORK/cache/stale/setlist/1.0.1"
+mkdir -p "$STALE"
+cp -R "$ROOT/scripts" "$STALE/scripts"
+cp -R "$ROOT/templates" "$STALE/templates"
+fake_tree "$STALE" 1.0.1
+fake_tree "$WORK/cache/stale/setlist/1.0.2" 1.0.2
+assert_true "stale 0: the stale-session fixture really carries a runnable plugin tree" \
+  "the copied tree is missing refresh-instance.sh, so the case below is not testing the field shape" \
+  test -f "$STALE/scripts/refresh-instance.sh"
+
+INST="$WORK/inst-stale"
+instance_fixture "$INST" 1.0.0
+run_script bash "$STALE/scripts/refresh-instance.sh" --apply "$INST"
+expect_script "stale a: a session bound to a superseded plugin tree refuses to refresh" 1 \
+  "SKEW" "Restart the session"
+assert_true "stale a2: the refused refresh copied nothing" \
+  "the instance's close-gate.sh lost its marker despite the refusal" \
+  marker_intact "$INST"
+
+# The same tree, with no newer neighbour, refreshes normally: the refusal above
+# is caused by the skew and not by the fixture being unusable.
+SOLO="$WORK/cache/solo/setlist/1.0.1"
+mkdir -p "$SOLO"
+cp -R "$ROOT/scripts" "$SOLO/scripts"
+cp -R "$ROOT/templates" "$SOLO/templates"
+fake_tree "$SOLO" 1.0.1
+INST="$WORK/inst-solo"
+instance_fixture "$INST" 1.0.0
+run_script bash "$SOLO/scripts/refresh-instance.sh" --apply "$INST"
+expect_script "stale b: the same plugin tree without a newer neighbour refreshes forward" 0 "forward"
 
 # =============================================================================
 # hygiene

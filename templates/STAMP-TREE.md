@@ -15,15 +15,26 @@ documentation, never copied into instances.
   that must survive untouched).
 - **Placeholders**, filled from the answers file the command writes:
   `{{PROJECT_NAME}}`, `{{STACK}}`, `{{WORKING_MODE}}`, `{{SRC_ROLE}}`,
-  `{{TESTS_ROLE}}`, `{{STAMP_DATE}}`, `{{EDITION_FILE}}`. One exception:
-  `{{TRUNK}}` is never asked; stamp.sh detects the trunk branch name from the
-  target repo at stamp time (origin/HEAD, else the current branch, else main)
-  and the scope and close hooks read it from `.claude/sdd.json`.
+  `{{TESTS_ROLE}}`, `{{STAMP_DATE}}`, `{{EDITION_FILE}}`. Two exceptions are
+  never asked and always detected: `{{TRUNK}}`, the trunk branch name resolved
+  from the target repo at stamp time (origin/HEAD, else the current branch,
+  else main), which the scope and close hooks read from `.claude/sdd.json`;
+  and `{{PLUGIN_VERSION}}`, the stamping plugin's version read live from this
+  tree's own manifest by `scripts/plugin-version.sh`. An undeterminable plugin
+  version aborts the stamp rather than producing an instance that records
+  none, because `scripts/refresh-instance.sh` trusts the recorded value when
+  it decides whether a refresh moves forward or backward.
 - **Conditional lines**: a line starting with `{{IF:OPUSPLAN}}` is kept (marker
   stripped) when the interview verified `opusplan` resolves, dropped otherwise.
 - **Phase-2 slots** are marked `[PHASE 2 SLOT: ...]` in stamped files; tailored
   generation replaces every one of them, and `/setlist:validate`
   reports any that remain.
+- **`sdd.json` shape.** Facts about the repo itself stay flat (`trunk`,
+  `gate_command`, `scaffolded`, and the `roles` map the scope hook reads);
+  facts the framework records about its own machinery are nested blocks that
+  sit after them, `plugin` being the first. New framework blocks append rather
+  than reorder, so an instance's file grows by addition and every reader can
+  keep treating an absent block as "stamped before that block existed".
 
 ## The mapping
 

@@ -14,6 +14,16 @@ Load the protocol first. Run:
 and follow that text (the Upgrade Protocol) for everything below. An upgrade is
 a planning-and-documentation act: reading src is permitted, editing it is not.
 
+## 0. State the plugin you are operating from, before anything else
+
+Run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/plugin-skew.sh"` and report its output
+verbatim to the user before touching a file. A session binds its plugin tree at
+session start, so a session opened before a marketplace update keeps running the
+old tree, including these very instructions. If the check reports SKEW, stop:
+restart the session and run the upgrade there. If it reports that the state is
+unverified, say that too, in those words; unverified is not clean, and the
+refresh below will say the same thing again rather than let it pass quietly.
+
 ## 1. Establish old and new
 
 - The OLD edition is the framework markdown committed in this repo:
@@ -33,8 +43,10 @@ a planning-and-documentation act: reading src is permitted, editing it is not.
   plugin release fixes new instances only and an existing one keeps its old
   hook bytes until this refresh runs. Close it as an ordinary docs-only chore
   with a one-line ADR naming the plugin version, not an umbrella migration
-  ADR. Compare the hook bytes rather than the version numbers: the plugin
-  version is not recorded in the instance, so the diff is the evidence.
+  ADR. As of plugin 1.0.2 the instance records which plugin stamped it
+  (`.plugin.version` in `.claude/sdd.json`), and the refresh script reads that
+  record to establish direction; an instance stamped earlier records nothing,
+  which the script treats as a move forward and repairs.
 
 ## 2. Run Part 8c as written
 
@@ -69,21 +81,28 @@ When the instance predates this plugin, also:
   instance-owned skill under the instance's own name, then the directory is
   removed; rewrite `/validate` references to `/setlist:validate`
   (RUNBOOK.md, CLAUDE.md, .gitignore comments).
-- Stamp or refresh the enforcement files: copy the four stamped hooks from
-  `${CLAUDE_PLUGIN_ROOT}/templates/hooks/` (scope-hook, commit-gate,
-  close-gate, regrounding-hook) into `.claude/hooks/` byte for byte,
-  REPLACING any older copies whose bytes differ (the hooks are plugin-owned
-  and never hand-edited; an upgrade is exactly how an instance receives hook
-  fixes). If a copy shows hand edits, show the diff and name the fork in the
-  umbrella ADR before replacing (Part 8c: a customized stamped copy is a fork
-  to surface, never a file to silently overwrite). Wire them in
+- Stamp or refresh the enforcement files with the script, never by hand:
+  `bash "${CLAUDE_PLUGIN_ROOT}/scripts/refresh-instance.sh" .` reports what
+  would change, and `--apply` before the path performs it. The script
+  establishes DIRECTION from the version the instance records, and refuses to
+  move an instance backwards; a byte comparison alone cannot tell newer from
+  older, which is how a session once installed the older hooks over the newer
+  ones and reported success. It also refuses when it cannot determine either
+  version, rather than falling through to the copy. Read its report before
+  applying: any file listed as differing may be a deliberate instance edit, and
+  Part 8c is explicit that a customized stamped copy is a fork to surface in
+  the umbrella ADR, never a file to silently overwrite. On --apply the four
+  hooks (scope-hook, commit-gate, close-gate, regrounding-hook) are copied byte
+  for byte and the plugin version is recorded in `.claude/sdd.json`. Wire them in
   `.claude/settings.json` exactly as
   `${CLAUDE_PLUGIN_ROOT}/templates/claude/settings.json.tmpl` shows (scope
   hook on Write|Edit and commit gate and close gate on Bash, both PreToolUse;
   regrounding hook on SessionStart, no matcher). The same template also shows
   the `fallbackModel` chain (`["default"]`, v1.6); add the line when the
   instance's settings.json lacks it. Create
-  `.claude/sdd.json` from its template if missing, with this repo's real src
+  `.claude/sdd.json` from its template if missing, BEFORE running the refresh
+  (the script refuses without it, since that file is where the version record
+  lives), with this repo's real src
   and tests role paths, the full-suite gate_command, and scaffolded=true (the
   project exists; the gates should bind now). Whether created or already
   present, sdd.json must carry the `trunk` field: detect the trunk branch
