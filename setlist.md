@@ -363,9 +363,11 @@ supplies the entire chain. Degradation is not escalation (Part 2): a degraded tu
 harness routing around an outage, and a degraded planning turn is worth a journal line so
 escalation patterns stay readable.
 Since v1.5 the stamp emits this file complete with a `hooks` block wiring the stamped
-hooks (scope hook on Write|Edit PreToolUse, commit gate and close gate on Bash PreToolUse,
-and, since v1.6, the re-grounding hook on SessionStart); the
-wiring is never hand-maintained. Next to it sits `.claude/sdd.json`, the instance config
+hooks (scope hook on the file-writing tools, commit gate and close gate on Bash, all
+PreToolUse, and, since v1.6, the re-grounding hook on SessionStart), each entry carrying
+an explicit `timeout` because a hook the harness cancels is a gate that did not run; the
+wiring is never hand-maintained, and the template is the authority on the exact matcher
+set. Next to it sits `.claude/sdd.json`, the instance config
 the hooks and `/setlist:checkpoint` read: the src and tests role paths, the gate command
 (recorded by `/scaffold`), and the `scaffolded` flag that arms the scope hook.
 
@@ -1683,6 +1685,9 @@ judgment. Appendix A is the part worth keeping; everything else is implementatio
 - **v1.6 (the field edition).** The first edition cut from field findings of the plugin
   era: two live instances (a shell tool and a web app) upgraded in place and ran v1.5
   daily, and plugin releases 1.6.0 through 1.8.0 shipped under the v1.5 edition text.
+  (Those 1.x numbers belong to the pre-rename plugin, `sdd-framework`; the plugin
+  version counter restarted at 1.0.0 when the plugin shipped under its current name,
+  `setlist`, so a Setlist plugin version below 1.6.0 is not a downgrade.)
   This delta list is authoritative for `/setlist:upgrade`. **`/validate` is promoted
   to the shipped `/setlist:validate`** (Parts 3, 6, 7b, 8, 8b), closing the item the
   v1.5 changelog parked: its trigger (the `sdd.json` config proves sufficient across one

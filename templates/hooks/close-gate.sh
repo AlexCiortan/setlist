@@ -22,6 +22,8 @@ set -u
 deny() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' \
     "$(printf '%s' "$1" | jq -Rs .)"
+  # fail-open-ok: not a pass at all; exit 0 is how the hook protocol delivers
+  # the deny JSON emitted above.
   exit 0
 }
 
@@ -29,6 +31,7 @@ deny() {
 # escape one. The text must contain no double quotes, backslashes, or newlines.
 deny_literal() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
+  # fail-open-ok: not a pass at all; exit 0 delivers the deny JSON above.
   exit 0
 }
 
@@ -42,6 +45,9 @@ if ! command -v jq >/dev/null 2>&1; then
     *merge*)
       deny_literal "close gate: jq is not installed, so this gate cannot verify the Closing report, the QA verdict, or the inventory row, and would otherwise allow every merge unchecked. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
       ;;
+    # fail-open-ok: without jq the raw payload does not mention merging, so
+    # this is not a command the gate governs; gating every Bash call would
+    # block the very install command that fixes the missing jq.
     *) exit 0 ;;
   esac
 fi
@@ -56,12 +62,14 @@ CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
 CMD_NORM="$(printf '%s' "$CMD" | tr -s '[:space:]' ' ' | tr -d "\"'")"
 GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
 if ! printf '%s' "$CMD_NORM" | grep -qE "(^|[;&|(]| )([^ ]*/)?git${GIT_OPTS} +merge( |$)"; then
+  # fail-open-ok: not a merge; this gate governs merges only.
   exit 0
 fi
 
 PROJ="${CLAUDE_PROJECT_DIR:-.}"
 
 # Not an SDD instance: stay silent.
+# fail-open-ok: no sdd.json means no framework contract to enforce.
 SDD_JSON="$PROJ/.claude/sdd.json"
 [[ -f "$SDD_JSON" ]] || exit 0
 
@@ -80,6 +88,9 @@ if printf '%s' "$CMD_NORM" | grep -qE "(^|[;&|(]| )([^ ]*/)?git${GIT_OPTS} +(che
 fi
 
 # Only gate merges INTO the trunk.
+# fail-open-ok: merging the trunk into a feature branch (or any non-trunk
+# target) is not a close; the trunk is what this gate guards. (Detached HEAD
+# reads as an empty target and passes: named in Known limitations.)
 [[ "$TARGET" == "$TRUNK" ]] || exit 0
 
 # Extract the merged ref: the first git-merge argument that names a spec/ or
@@ -99,7 +110,24 @@ for word in $CMD_NORM; do
     spec/*|chore/*) MERGED_REF="$word"; break ;;
   esac
 done
-[[ -n "$MERGED_REF" ]] || exit 0
+
+# No extractable ref DENIES (1.0.3, IN-1). The 1.0.1 fix widened the parser
+# for quoted branch names but kept the fail-open disposition, so every
+# indirect naming (`git merge $BRANCH`, `-`, `@{-1}`, FETCH_HEAD, a raw SHA)
+# still merged into the trunk unchecked. A gate that cannot establish WHAT is
+# being merged cannot verify anything about it, and by the same doctrine as
+# the jq check above, it denies rather than guessing. The one exception:
+# --continue/--abort/--quit finish or cancel a merge whose initiating command
+# was already gated on its own way in.
+if [[ -z "$MERGED_REF" ]]; then
+  if printf '%s' "$CMD_NORM" | grep -qE "merge${GIT_OPTS} +--(continue|abort|quit)( |$)"; then
+    # fail-open-ok: the in-progress merge was gated when it was initiated;
+    # blocking --continue/--abort here would strand a conflicted close with
+    # no permitted way to finish or back out.
+    exit 0
+  fi
+  deny "close gate: this merges into the trunk, but the command names no spec/ or chore/ branch literally, and indirect forms (a shell variable, -, @{-1}, FETCH_HEAD, a raw SHA) cannot be verified. Name the branch literally: git merge --no-ff spec/NNNN-slug. To sync the trunk from its remote, use git pull."
+fi
 
 # The ref must resolve; every check below reads the merged ref's committed
 # tree, so working-tree edits that were never committed to the branch do not
@@ -185,4 +213,6 @@ if [[ -n "$GATE_CMD" ]]; then
   fi
 fi
 
+# fail-open-ok: every close condition above was checked against the merged
+# ref's committed tree and held; this is the gate's green path.
 exit 0

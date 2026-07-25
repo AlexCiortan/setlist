@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-# SDD scope hook: PreToolUse on matcher "Write|Edit", stamped into the instance.
+# SDD scope hook: PreToolUse on matcher "Write|Edit|MultiEdit|NotebookEdit",
+# stamped into the instance. (MultiEdit is absent from current Claude Code,
+# folded into Edit; it stays in the matcher defensively for older harnesses,
+# where matching a tool that never fires costs nothing and missing one that
+# does costs the trunk. NotebookEdit is live and sends notebook_path, not
+# file_path; both are read below.)
 # Enforces Part 6: feature code never lands directly on the trunk branch
 # (read from .claude/sdd.json, never assumed to be main).
 # Deny mechanic verified live 2026-07-04 on Claude Code 2.1.200: JSON
@@ -18,6 +23,8 @@ set -u
 deny() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' \
     "$(printf '%s' "$1" | jq -Rs .)"
+  # fail-open-ok: not a pass at all; exit 0 is how the hook protocol delivers
+  # the deny JSON emitted above.
   exit 0
 }
 
@@ -25,6 +32,7 @@ deny() {
 # escape one. The text must contain no double quotes, backslashes, or newlines.
 deny_literal() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
+  # fail-open-ok: not a pass at all; exit 0 delivers the deny JSON above.
   exit 0
 }
 
@@ -40,6 +48,8 @@ PROJ="$(cd "$PROJ_GIVEN" && pwd)"
 SDD_JSON="$PROJ/.claude/sdd.json"
 
 # Not an SDD instance, or pre-stamp: stay silent.
+# fail-open-ok: no sdd.json means no framework contract to enforce; gating a
+# repo that never opted in would make the plugin unusable outside instances.
 [[ -f "$SDD_JSON" ]] || exit 0
 
 # Fail closed when jq is absent: sdd.json is unreadable, so the branch rule
@@ -50,6 +60,7 @@ fi
 
 # Active only after /scaffold flips the flag, so the one-time bootstrap
 # scaffold on main is not blocked.
+# fail-open-ok: pre-scaffold, the trunk rule is deliberately not yet in force.
 [[ "$(jq -r '.scaffolded // false' "$SDD_JSON")" == "true" ]] || exit 0
 
 # The trunk branch name is recorded in sdd.json at stamp or upgrade time
@@ -57,10 +68,21 @@ fi
 # existed.
 TRUNK="$(jq -r '.trunk // "main"' "$SDD_JSON")"
 BRANCH="$(git -C "$PROJ" branch --show-current 2>/dev/null || true)"
+# fail-open-ok: off the trunk, writes are the point of a spec branch; this
+# gate only guards the trunk. (Detached HEAD reads as empty, never equals the
+# trunk, and passes: named in Known limitations.)
 [[ "$BRANCH" == "$TRUNK" ]] || exit 0
 
-FILE_PATH="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty')"
-[[ -n "$FILE_PATH" ]] || exit 0
+# file_path for Write/Edit/MultiEdit; notebook_path for NotebookEdit. An
+# event carrying NEITHER denies (1.0.3, IN-3): every tool this hook matches
+# sends one of the two today, so an empty extraction means the harness
+# changed shape under the hook, and a gate that cannot see the path cannot
+# tell whether the write lands on the trunk. This used to exit 0, which is
+# exactly how NotebookEdit's notebook_path slipped past the trunk rule.
+FILE_PATH="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.notebook_path // empty')"
+if [[ -z "$FILE_PATH" ]]; then
+  deny "scope hook: this tool call carries neither file_path nor notebook_path, so the gate cannot tell whether the write lands on $TRUNK and will not guess. If the harness has changed its tool-input shape, update .claude/hooks/scope-hook.sh (and report it); removing this hook entry from .claude/settings.json is the deliberate way to work without the gate."
+fi
 
 # Role paths: a string or a list of strings (multi-prefix repos, and flat-root
 # repos that enumerate their shippable files). A directory entry covers its
@@ -91,4 +113,6 @@ while IFS= read -r ROLE; do
     deny "feature code never lands directly on $TRUNK; open a spec or chore branch via /setlist:checkpoint."
   fi
 done <<< "$ROLE_PATHS"
+# fail-open-ok: the write matched no role path; docs-only trunk writes are
+# the allowed case the whole loop exists to distinguish.
 exit 0

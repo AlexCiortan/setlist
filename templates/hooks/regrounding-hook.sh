@@ -19,14 +19,17 @@ INPUT=$(cat)
 PROJ="$(cd "${CLAUDE_PROJECT_DIR:-.}" && pwd)"
 
 # Not an SDD instance, or pre-stamp: stay silent.
+# fail-open-ok: not a gate; outside an instance there is nothing to point at.
 [[ -f "$PROJ/.claude/sdd.json" ]] || exit 0
 # Bootstrap phase 1 may run before STATUS.md exists; nothing to point at yet.
+# fail-open-ok: not a gate; the pointer's target does not exist yet.
 [[ -f "$PROJ/specs/STATUS.md" ]] || exit 0
 
 # No jq: the pointer still ships, carrying the warning that the enforcement
 # layer is down. Fixed literal, so no escaping (and no jq) is needed.
 if ! command -v jq >/dev/null 2>&1; then
   printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"SDD re-grounding (the read budget, framework Part 2): before anything else, read specs/STATUS.md, then the active spec it names. WARNING: jq is not installed on this machine, so the three PreToolUse gates (scope, commit, close) are failing closed and will deny the writes, commits, and merges they govern until jq is present. Install jq (apt-get install jq, brew install jq, or the package manager for this system) before continuing."}}'
+  # fail-open-ok: not a pass; the pointer plus the jq warning was delivered.
   exit 0
 fi
 
@@ -46,4 +49,5 @@ esac
 
 printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":%s}}\n' \
   "$(printf '%s' "$MSG" | jq -Rs .)"
+# fail-open-ok: not a gate; the re-grounding pointer above is the output.
 exit 0

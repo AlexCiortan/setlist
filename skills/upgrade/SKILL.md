@@ -93,11 +93,22 @@ When the instance predates this plugin, also:
   Part 8c is explicit that a customized stamped copy is a fork to surface in
   the umbrella ADR, never a file to silently overwrite. On --apply the four
   hooks (scope-hook, commit-gate, close-gate, regrounding-hook) are copied byte
-  for byte and the plugin version is recorded in `.claude/sdd.json`. Wire them in
+  for byte and the plugin version is recorded in `.claude/sdd.json`.
+  **Exit code 3 means the refresh applied INCOMPLETELY**: the hook bytes and the
+  version record are current, but `.claude/settings.json` still needs an edit the
+  script named and deliberately did not make (that file carries the instance's own
+  permissions and model settings, so it is never machine-rewritten). Make the named
+  edits by hand and re-run until it exits 0. Do not report the upgrade as done on a
+  3: part of what the version promises is not in force, and the whole point of the
+  exit code is that it cannot be read past. Wire the hooks in
   `.claude/settings.json` exactly as
   `${CLAUDE_PLUGIN_ROOT}/templates/claude/settings.json.tmpl` shows (scope
-  hook on Write|Edit and commit gate and close gate on Bash, both PreToolUse;
-  regrounding hook on SessionStart, no matcher). The same template also shows
+  hook on Write|Edit|MultiEdit|NotebookEdit and commit gate and close gate on
+  Bash, both PreToolUse; regrounding hook on SessionStart, no matcher; every
+  hook entry carries an explicit `timeout`, since a timed-out hook is a
+  skipped gate). An instance whose settings still carry the pre-1.0.3 matcher
+  `Write|Edit` or hook entries with no timeout takes both updates as part of
+  the refresh. The same template also shows
   the `fallbackModel` chain (`["default"]`, v1.6); add the line when the
   instance's settings.json lacks it. Create
   `.claude/sdd.json` from its template if missing, BEFORE running the refresh

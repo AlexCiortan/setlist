@@ -26,7 +26,7 @@ AI coding agents are powerful but drift: across a long project they lose context
 
 ## Quickstart
 
-Install the plugin once, from inside Claude Code:
+Requires Claude Code 2.1.193 or later (the marketplace rename migration and the `fallbackModel` chain both need it; the deny mechanic is verified on 2.1.200+). Install the plugin once, from inside Claude Code:
 
 ```
 /plugin marketplace add AlexCiortan/setlist
@@ -147,14 +147,17 @@ The enforcement layer is four hooks running inside your Claude Code session, on 
 
 **Where the layer ends by design.** These are boundaries, not bugs. Setlist governs the session; it is not a server-side policy engine and does not try to be one.
 
-- **The Bash escape hatch.** The scope hook watches the Write and Edit tools, so a session that writes files through Bash instead (`cat >`, `sed -i`, a heredoc) does not trip it, and the commit gate checks what a commit contains rather than where the file lives. Prompted discipline and the close gate's structural checks cover it today; a location check is the natural extension.
+- **The Bash escape hatch.** The scope hook watches the file-writing tools (Write, Edit, MultiEdit, NotebookEdit), so a session that writes files through Bash instead (`cat >`, `sed -i`, a heredoc) does not trip it, and the commit gate checks what a commit contains rather than where the file lives. Prompted discipline and the close gate's structural checks cover it today; a location check is the natural extension.
 - **The remote-merge bypass.** The close gate intercepts a `git merge` run in the session. Merging through `gh pr merge`, a button in a forge's web UI, or a push of an already-merged trunk goes around it entirely, which matters the moment a project moves to a pull-request flow: the strongest gate is then out of band. Your forge is the right place to close that half. Protect the trunk and require status checks, so the merge button enforces what the local gate would have. Running the close checks themselves as a CI job is the obvious way to finish the loop, and is a candidate rather than a promise.
+- **Sideways routes to the trunk.** The close gate reads the merge command; content can still reach the trunk through commands it does not parse: `git cherry-pick` of spec-branch commits, `git pull <remote> spec/...` (a fetch-and-merge the gate does not intercept), and merges performed on a detached HEAD (no current branch, so the gate never sees a trunk target). These are named here rather than parsed because each is an unusual, deliberate spelling of "go around the gate", and the honest posture is a visible edge over a half-parser that would miss the next spelling.
 
 **Known gaps inside that scope.** These are ordinary rough edges in something that does work.
 
 - **The pathspec hole.** `git commit <file>` commits the working-tree copy of that file without staging it, so the staged-content scan has nothing to look at. The test suite asserts this hole deliberately rather than hiding it, so the day it closes, we find out.
 - **The secret scan is a first cut.** It matches token-shaped and connection-string-shaped values, which catches the common accidents. It will miss exotic formats and it can flag something innocent. Tuning comes from field reports, so send them.
 - **The gates need `jq`, and fail closed without it.** If `jq` is not installed, the hooks deny the operations they govern rather than allowing them unchecked, and the session tells you so at startup. Install `jq` and they behave normally. Failing closed is the deliberate choice: a gate that quietly stops working is worse than one that stops you.
+- **A timed-out hook is a skipped gate.** Claude Code cancels a hook that exceeds its timeout and lets the tool call proceed; that behavior belongs to the harness, not to the hook. The stamped settings therefore set explicit, generous timeouts (30 minutes for the close gate, which re-runs your full suite). If your suite outgrows that, raise the `timeout` in `.claude/settings.json` rather than letting the ceiling find you. Relatedly, hooks run in a non-interactive shell: version managers wired into your interactive profile (nvm, pyenv, asdf) may be off PATH there, which shows up as a gate command that fails in the hook while passing in your terminal. That is a false deny, not a false pass; fix the PATH in the gate command itself.
+- **The staged-content scans read every staged line.** The em-dash and secret scans do not know vendored third-party code, quoted external text, or test fixtures with dummy credentials from your own new writing. When one of those trips a deny, split the commit so the foreign content stages separately; do not edit third-party content to satisfy a style gate. Path-scoping the scans is a candidate for a future release.
 
 ## Repository contents
 

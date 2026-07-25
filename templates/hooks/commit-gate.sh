@@ -20,6 +20,8 @@ set -u
 deny() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' \
     "$(printf '%s' "$1" | jq -Rs .)"
+  # fail-open-ok: not a pass at all; exit 0 is how the hook protocol delivers
+  # the deny JSON emitted above.
   exit 0
 }
 
@@ -27,6 +29,7 @@ deny() {
 # escape one. The text must contain no double quotes, backslashes, or newlines.
 deny_literal() {
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
+  # fail-open-ok: not a pass at all; exit 0 delivers the deny JSON above.
   exit 0
 }
 
@@ -43,6 +46,9 @@ if ! command -v jq >/dev/null 2>&1; then
     *commit*)
       deny_literal "commit gate: jq is not installed, so this gate cannot read the command it is meant to check and would otherwise allow every commit unchecked. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
       ;;
+    # fail-open-ok: without jq the raw payload does not mention committing, so
+    # this is not a command the gate governs; gating every Bash call would
+    # block the very install command that fixes the missing jq.
     *) exit 0 ;;
   esac
 fi
@@ -60,6 +66,7 @@ CMD_NORM="$(printf '%s' "$CMD" | tr -s '[:space:]' ' ')"
 CMD_BARE="$(printf '%s' "$CMD_NORM" | sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g')"
 GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
 if ! printf '%s' "$CMD_BARE" | grep -qE "(^|[;&|(]| )([^ ]*/)?git${GIT_OPTS} +commit( |$)"; then
+  # fail-open-ok: not a commit; this gate governs commits only.
   exit 0
 fi
 
@@ -71,8 +78,8 @@ PROJ="${CLAUDE_PROJECT_DIR:-.}"
 # hold the content: every check would pass vacuously. Quoted strings are
 # stripped first so commit messages mentioning "git add" or "-a" do not
 # false-trip the scan.
-if printf '%s' "$CMD_BARE" | grep -qE 'git[[:space:]]+add([[:space:]]|$)'; then
-  deny "commit gate: this command stages and commits in one step, so the gate would scan an empty index and check nothing. Run git add as its own command first, then git commit separately; the gate scans the staged content and names any finding."
+if printf '%s' "$CMD_BARE" | grep -qE 'git[[:space:]]+(add|rm|mv)([[:space:]]|$)'; then
+  deny "commit gate: this command stages and commits in one step (git add, rm, and mv all write the index during command execution, after this gate scanned it), so the gate would scan a stale index and check nothing. Run the staging command on its own first, then git commit separately; the gate scans the staged content and names any finding."
 fi
 if printf '%s' "$CMD_BARE" | grep -qE 'git[[:space:]]+commit[[:space:]]' \
   && printf '%s' "$CMD_BARE" | grep -qE '(^|[[:space:]])-[a-zA-Z]*[ai][a-zA-Z]*([[:space:]]|$)|--all([[:space:]]|$)|--include([[:space:]]|$)|--interactive([[:space:]]|$)'; then
@@ -109,4 +116,6 @@ if printf '%s\n' "$SPEC_ADDED" | grep -qE '^\+Status:[[:space:]]*(QUEUED|ACTIVE|
   fi
 fi
 
+# fail-open-ok: every check above ran against the staged content and found
+# nothing to deny; this is the gate's green path.
 exit 0

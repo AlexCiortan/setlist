@@ -16,11 +16,12 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/scope-hook.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/scope-hook.sh",
+            "timeout": 120
           }
         ]
       },
@@ -29,11 +30,13 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/commit-gate.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/commit-gate.sh",
+            "timeout": 300
           },
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/close-gate.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/close-gate.sh",
+            "timeout": 1800
           }
         ]
       }
@@ -43,7 +46,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/regrounding-hook.sh"
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/regrounding-hook.sh",
+            "timeout": 60
           }
         ]
       }

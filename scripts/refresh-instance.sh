@@ -27,6 +27,18 @@
 # An instance that records no version at all is NOT a refusal: it was stamped
 # before the field existed, which is a move forward by definition, and refusing
 # would strand exactly the instances this release is meant to repair.
+#
+# Exit codes:
+#   0  the refresh reported, or applied completely
+#   1  a refusal (any of the conditions above); nothing was copied
+#   3  applied INCOMPLETELY (1.0.3): the hook bytes and the version record are
+#      current, but .claude/settings.json still needs a hand edit named in the
+#      output. This script does not rewrite that file, because it holds the
+#      instance's own permissions and model settings next to the hook block.
+#      Part of what the new version promises is not in force until the edit
+#      lands, and an incomplete refresh must not exit 0 and read as a finished
+#      one: that is the same "reports success, layer is weaker" shape the
+#      whole release exists to remove.
 
 set -u
 
@@ -106,11 +118,53 @@ for h in $STAMPED_HOOKS; do
   fi
 done
 
+# --- the settings wiring (1.0.3) ---------------------------------------------
+#
+# The hooks are only half the enforcement layer; the other half is how
+# .claude/settings.json WIRES them, and that half is not a stamped file this
+# script can copy: it carries the instance's own permissions and model
+# settings alongside the hook block. Two 1.0.3 fixes live entirely in that
+# wiring (the write-tool matcher set, and the explicit per-hook timeouts), so
+# a refresh that copied hook bytes and reported success would have installed
+# neither while saying the instance is on 1.0.3. That is the exact failure
+# this release exists to remove, so the wiring is checked, named, and allowed
+# to fail the refresh rather than being silently skipped.
+SETTINGS="$INSTANCE/.claude/settings.json"
+WIRING_GAPS=""
+if [[ ! -f "$SETTINGS" ]]; then
+  WIRING_GAPS="  .claude/settings.json is missing entirely; the hooks are stamped but nothing runs them."
+else
+  if ! grep -q 'NotebookEdit' "$SETTINGS"; then
+    WIRING_GAPS="$WIRING_GAPS
+  the scope hook's matcher does not cover NotebookEdit. Set it to
+    \"matcher\": \"Write|Edit|MultiEdit|NotebookEdit\"
+  or a notebook write reaches the trunk without tripping the scope rule."
+  fi
+  # grep -c PRINTS 0 and EXITS 1 when it matches nothing, so a `|| printf 0`
+  # fallback appends a second zero and the comparison below becomes a bash
+  # syntax error, which evaluates false and passes the check silently. That is
+  # this release's own defect class inside the check that hunts for it; the
+  # suite caught it. Take grep's output, and only default when it is empty.
+  HOOK_ENTRIES="$(grep -c '"type": *"command"' "$SETTINGS" 2>/dev/null || true)"
+  TIMEOUT_KEYS="$(grep -c '"timeout"' "$SETTINGS" 2>/dev/null || true)"
+  [[ -n "$HOOK_ENTRIES" ]] || HOOK_ENTRIES=0
+  [[ -n "$TIMEOUT_KEYS" ]] || TIMEOUT_KEYS=0
+  if [[ "$HOOK_ENTRIES" -gt 0 && "$TIMEOUT_KEYS" -lt "$HOOK_ENTRIES" ]]; then
+    WIRING_GAPS="$WIRING_GAPS
+  $HOOK_ENTRIES command hooks are wired but only $TIMEOUT_KEYS carry an explicit
+  \"timeout\". A hook the harness cancels is a gate that did not run; the close
+  gate re-runs the full suite and needs the most room (the template ships 1800)."
+  fi
+fi
+
 printf 'refresh-instance.sh: plugin %s -> instance recorded %s (%s)\n' "$PLUGIN_VERSION" "$FROM" "$DIRECTION"
 printf '%s\n' "$SKEW_OUT"
 [[ -n "$NEW" ]]     && printf '  missing, would be stamped:%s\n' "$NEW"
 [[ -n "$CHANGED" ]] && printf '  bytes differ, would be replaced:%s\n' "$CHANGED"
 [[ -n "$SAME" ]]    && printf '  already byte-identical:%s\n' "$SAME"
+if [[ -n "$WIRING_GAPS" ]]; then
+  printf 'settings wiring, NOT refreshed by this script (it holds your own permissions and model settings):%s\n' "$WIRING_GAPS"
+fi
 
 if [[ "$APPLY" != "yes" ]]; then
   if [[ -n "$CHANGED" ]]; then
@@ -137,3 +191,13 @@ mv "$TMP" "$SDD"
 
 printf 'refresh-instance.sh: refreshed the four stamped hooks and recorded plugin %s in %s\n' "$PLUGIN_VERSION" "$SDD"
 printf 'Hooks load at session start, so the refreshed gates bind from the NEXT session onward.\n'
+
+# An INCOMPLETE refresh must not read as a finished one. The hook bytes are
+# current and the version is recorded, but if the wiring above is stale then
+# part of what this version promises is not in force, and the operator has to
+# know that from the exit status, not from reading past a success line.
+if [[ -n "$WIRING_GAPS" ]]; then
+  printf '\nINCOMPLETE: the hooks are current but .claude/settings.json still needs the edit(s) named above.\n' >&2
+  printf 'Make them by hand (the file carries your own settings, so this script will not rewrite it), then re-run to confirm.\n' >&2
+  exit 3
+fi

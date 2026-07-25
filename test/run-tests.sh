@@ -422,8 +422,17 @@ spell_merge_deny "a fully qualified ref"        'git merge --no-ff refs/heads/sp
 spell_merge_deny "a remote-tracking ref"        'git merge --no-ff origin/spec/0001-thing'
 spell_merge_deny "quoting inside the compound form" 'git checkout main && git merge --no-ff "spec/0001-thing"'
 
+# DISPOSITION CHANGED IN 1.0.3 (IN-1). This case used to assert that a merge
+# naming a non-spec branch passed untouched, on the reasoning that the gate
+# only governs spec and chore closes. That reasoning was the loophole: only
+# spec/ and chore/ branches enter the trunk through the ceremony, so a merge
+# into the trunk naming anything else is either a mistake or a way around the
+# gate, and "some-other-branch" is indistinguishable from a shell variable
+# that expanded to one. The gate now denies it, and the neighbouring cases
+# above pin the boundary: merges into a NON-trunk target stay ungated, and
+# --continue/--abort stay exempt.
 run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git merge --no-ff some-other-branch')"
-expect_allow "spelling (merge): a merge of a non-spec branch is untouched"
+expect_deny "spelling (merge): a trunk merge naming a non-spec branch is denied" "literally"
 run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git status')"
 expect_allow "spelling (merge): a non-merge git command is untouched"
 
@@ -693,8 +702,9 @@ fi
 # carries a marker line, so "did the refresh copy anything?" is decidable by
 # looking rather than by trusting the exit code.
 MARKER="# instance marker, must survive every refusal"
-instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken>
-  local d="$1" rec="$2" h
+instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken> [wiring]
+  # wiring: current (default) | stale-matcher | no-timeouts | missing
+  local d="$1" rec="$2" wiring="${3:-current}" h
   rm -rf "$d"
   mkdir -p "$d/.claude/hooks"
   for h in scope-hook commit-gate close-gate regrounding-hook; do
@@ -707,6 +717,28 @@ instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken>
     *)      printf '{ "trunk": "main", "gate_command": "", "scaffolded": false, "plugin": { "version": "%s" } }\n' \
               "$rec" > "$d/.claude/sdd.json" ;;
   esac
+  # The settings wiring is the OTHER half of the enforcement layer, and the
+  # refresh checks it without rewriting it (1.0.3). Fixtures default to the
+  # current wiring so the direction cases below stay about direction.
+  local matcher='Write|Edit|MultiEdit|NotebookEdit' t1='"timeout": 120,' t2='"timeout": 300,' t3='"timeout": 1800,'
+  case "$wiring" in
+    stale-matcher) matcher='Write|Edit' ;;
+    no-timeouts)   t1='' ; t2='' ; t3='' ;;
+    missing)       return 0 ;;
+  esac
+  cat > "$d/.claude/settings.json" <<SETTINGS
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "$matcher",
+        "hooks": [ { "type": "command", $t1 "command": "x/scope-hook.sh" } ] },
+      { "matcher": "Bash",
+        "hooks": [ { "type": "command", $t2 "command": "x/commit-gate.sh" },
+                   { "type": "command", $t3 "command": "x/close-gate.sh" } ] }
+    ]
+  }
+}
+SETTINGS
 }
 
 marker_intact() { # marker_intact <dir>
@@ -923,6 +955,239 @@ elif [[ -z "$EM_HITS" ]]; then
   ok "hygiene aa: no literal em-dash byte across $EM_COUNT files in the shipped surface"
 else
   bad "hygiene aa: no literal em-dash byte in the shipped surface" "found in:$EM_HITS"
+fi
+
+# =============================================================================
+# 1.0.3: the refresh checks the settings WIRING it cannot copy. Two of this
+# release's fixes live in .claude/settings.json (the write-tool matcher set
+# and the per-hook timeouts), and that file holds the instance's own
+# permissions and model settings, so the script must not rewrite it. The
+# failure to avoid is a refresh that copies hook bytes, records the new
+# version, exits 0, and leaves two fixes inert while reporting success.
+# =============================================================================
+
+INST="$WORK/inst-wiring-matcher"
+instance_fixture "$INST" 1.0.0 stale-matcher
+run_script bash "$SCRIPTS/refresh-instance.sh" "$INST"
+expect_script "wiring a: a report names the stale matcher" 0 "NotebookEdit"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "wiring b: applying over a stale matcher exits INCOMPLETE, not 0" 3 "INCOMPLETE" "NotebookEdit"
+# The hooks must still have landed: incomplete is not the same as refused.
+if cmp -s "$HOOKS/close-gate.sh" "$INST/.claude/hooks/close-gate.sh"; then
+  ok "wiring c: an incomplete refresh still refreshed the hook bytes"
+else
+  bad "wiring c: an incomplete refresh still refreshed the hook bytes" "close-gate.sh was not copied"
+fi
+if [[ "$(jq -r '.plugin.version // empty' "$INST/.claude/sdd.json")" == "$PLUGIN_VERSION" ]]; then
+  ok "wiring d: an incomplete refresh still recorded the plugin version"
+else
+  bad "wiring d: an incomplete refresh still recorded the plugin version" "version not recorded"
+fi
+
+INST="$WORK/inst-wiring-timeouts"
+instance_fixture "$INST" 1.0.0 no-timeouts
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "wiring e: hook entries with no timeout exit INCOMPLETE" 3 "timeout"
+
+INST="$WORK/inst-wiring-missing"
+instance_fixture "$INST" 1.0.0 missing
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "wiring f: a missing settings.json exits INCOMPLETE" 3 "missing entirely"
+
+# And current wiring must NOT trip it: a check that fires on everything is a
+# check people learn to ignore.
+INST="$WORK/inst-wiring-ok"
+instance_fixture "$INST" 1.0.0 current
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "wiring g: current wiring refreshes completely and exits 0" 0 "refreshed the four stamped hooks"
+
+# =============================================================================
+# 1.0.3, IN-1: an indirectly named trunk merge DENIES instead of passing.
+# The 1.0.1 fix widened the ref parser; these cases pin the DISPOSITION: when
+# the target is the trunk and the command matched the merge grammar but no
+# spec/ or chore/ ref could be extracted, the gate refuses to guess. The
+# fixture is fully COMPLIANT, so any deny below comes from the extraction
+# refusal alone, not from a missing close artifact.
+# =============================================================================
+
+CL="$WORK/close-indirect"; close_fixture "$CL" yes yes answered yes no true
+
+for spelling in \
+  'B=spec/0001-thing; git merge --no-ff $B' \
+  'git merge -' \
+  'git merge @{-1}' \
+  'git merge FETCH_HEAD' \
+  'git merge --no-ff 1a2b3c4d'; do
+  run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$spelling")"
+  expect_deny "close-gate indirect: [$spelling] into the trunk is denied" "literally"
+done
+
+# --continue/--abort finish or cancel a merge that was gated on its way in;
+# blocking them would strand a conflicted close.
+run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git merge --continue')"
+expect_allow "close-gate indirect: git merge --continue is exempt from the extraction deny"
+run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git merge --abort')"
+expect_allow "close-gate indirect: git merge --abort is exempt from the extraction deny"
+
+# The deny is scoped to TRUNK targets: syncing the trunk INTO a feature branch
+# names no spec/chore ref either, and must stay ungated.
+git -C "$CL" checkout -q spec/0001-thing
+run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git merge main')"
+expect_allow "close-gate indirect: merging the trunk into a feature branch stays ungated"
+git -C "$CL" checkout -q main
+
+# And the literal compliant form still merges (the deny must not overreach).
+run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
+expect_allow "close-gate indirect: the literal compliant merge is still allowed"
+
+# =============================================================================
+# 1.0.3, IN-3: NotebookEdit reaches the trunk rule (notebook_path), and a
+# pathless write-tool event denies instead of slipping through.
+# =============================================================================
+
+NB="$WORK/scope-notebook"
+git_init "$NB"
+sdd_json "$NB"
+
+notebook_payload() { # notebook_payload <notebook_path>
+  jq -nc --arg p "$1" '{tool_name:"NotebookEdit", tool_input:{notebook_path:$p}}'
+}
+
+run_hook "$HOOKS/scope-hook.sh" "$NB" "$(notebook_payload "$NB/src/model.ipynb")"
+expect_deny "scope nb-a: NotebookEdit into src/ on the trunk is denied" "never lands"
+
+git -C "$NB" checkout -q -b spec/0002-notebooks
+run_hook "$HOOKS/scope-hook.sh" "$NB" "$(notebook_payload "$NB/src/model.ipynb")"
+expect_allow "scope nb-b: NotebookEdit into src/ on a spec branch is allowed"
+git -C "$NB" checkout -q main
+
+# A matched write tool that carries NEITHER path field is a harness-shape
+# change the gate cannot evaluate; it denies rather than guessing (this was
+# the exact silent path NotebookEdit used to take).
+run_hook "$HOOKS/scope-hook.sh" "$NB" "$(jq -nc '{tool_name:"Edit", tool_input:{}}')"
+expect_deny "scope nb-c: a pathless write-tool event on the trunk is denied" "neither file_path nor notebook_path"
+
+# Off the trunk the pathless event stays silent: the gate only guards the trunk.
+git -C "$NB" checkout -q spec/0002-notebooks
+run_hook "$HOOKS/scope-hook.sh" "$NB" "$(jq -nc '{tool_name:"Edit", tool_input:{}}')"
+expect_allow "scope nb-d: a pathless write-tool event off the trunk is allowed"
+git -C "$NB" checkout -q main
+
+# The template wires the full write-tool matcher set.
+if grep -q '"matcher": "Write|Edit|MultiEdit|NotebookEdit"' "$ROOT/templates/claude/settings.json.tmpl"; then
+  ok "scope nb-e: settings.json.tmpl wires the full write-tool matcher set"
+else
+  bad "scope nb-e: settings.json.tmpl wires the full write-tool matcher set" \
+      "the Write|Edit|MultiEdit|NotebookEdit matcher is missing from the template"
+fi
+
+# =============================================================================
+# 1.0.3, IN-2: every command hook in the template carries an explicit timeout.
+# A timed-out hook is cancelled by the harness and the tool call proceeds, so
+# a hook with no timeout key is a gate wearing the harness default as a
+# silent ceiling.
+# =============================================================================
+
+TYPE_COUNT="$(grep -c '"type": "command"' "$ROOT/templates/claude/settings.json.tmpl")"
+TIMEOUT_COUNT="$(grep -c '"timeout":' "$ROOT/templates/claude/settings.json.tmpl")"
+if [[ "$TYPE_COUNT" -eq 0 ]]; then
+  bad "timeout a: every command hook in the template carries a timeout" \
+      "found zero command hooks in the template; the check exercised nothing"
+elif [[ "$TYPE_COUNT" -eq "$TIMEOUT_COUNT" ]]; then
+  ok "timeout a: all $TYPE_COUNT command hooks in the template carry an explicit timeout"
+else
+  bad "timeout a: every command hook in the template carries a timeout" \
+      "$TYPE_COUNT command hooks but $TIMEOUT_COUNT timeout keys"
+fi
+
+# =============================================================================
+# 1.0.3, IN-4: git rm and git mv stage during command execution, after the
+# gate scanned the index; compounded with a commit they are the git-add hole
+# in different spelling.
+# =============================================================================
+
+RMV="$WORK/commit-rmv"
+git_init "$RMV"
+sdd_json "$RMV"
+
+run_hook "$HOOKS/commit-gate.sh" "$RMV" "$(bash_payload 'git rm seed.txt && git commit -m "drop seed"')"
+expect_deny "commit-gate rm: compound git rm plus commit is denied" "one step"
+run_hook "$HOOKS/commit-gate.sh" "$RMV" "$(bash_payload 'git mv seed.txt seed2.txt && git commit -m "rename seed"')"
+expect_deny "commit-gate mv: compound git mv plus commit is denied" "one step"
+# Refusals must leave the tree untouched (the deny fired before the command ran).
+if [[ -f "$RMV/seed.txt" && ! -e "$RMV/seed2.txt" ]]; then
+  ok "commit-gate rm/mv: the denied compounds touched nothing"
+else
+  bad "commit-gate rm/mv: the denied compounds touched nothing" "seed.txt moved or vanished"
+fi
+# A message merely MENTIONING git rm stays allowed (quote-strip guard).
+run_hook "$HOOKS/commit-gate.sh" "$RMV" "$(bash_payload 'git commit -m "docs: when to use git rm"')"
+expect_allow "commit-gate rm-msg: a message mentioning git rm is not a compound"
+
+# =============================================================================
+# 1.0.3, IN-9: every exit 0 in a stamped hook justifies itself. A silent pass
+# with no written reason is how IN-1 survived two releases: the reviewer
+# found it by reading for unannotated exits, so the suite now reads for them
+# forever. The annotation is `# fail-open-ok:` within the three lines above
+# the exit.
+# =============================================================================
+
+FOK_TOTAL=0
+for hook in scope-hook commit-gate close-gate regrounding-hook; do
+  HF="$HOOKS/$hook.sh"
+  UNANNOTATED="$(awk '
+    { lines[NR] = $0 }
+    /exit 0/ && $0 !~ /^[[:space:]]*#/ {
+      ok = 0
+      for (i = NR - 3; i < NR; i++) if (lines[i] ~ /fail-open-ok/) ok = 1
+      if (!ok) print NR": "$0
+    }' "$HF")"
+  ANNOTATED_N="$(grep -c 'fail-open-ok' "$HF")"
+  FOK_TOTAL=$((FOK_TOTAL + ANNOTATED_N))
+  if [[ -z "$UNANNOTATED" ]]; then
+    ok "fail-open audit: every exit 0 in $hook.sh is annotated ($ANNOTATED_N justifications)"
+  else
+    bad "fail-open audit: every exit 0 in $hook.sh is annotated" \
+        "unannotated silent passes: $UNANNOTATED"
+  fi
+done
+# The audit must have exercised something: four hooks with zero annotations
+# between them means the scan broke, not that the hooks are clean.
+if [[ "$FOK_TOTAL" -ge 10 ]]; then
+  ok "fail-open audit: the scan exercised $FOK_TOTAL annotations across the four hooks"
+else
+  bad "fail-open audit: the scan exercised the hooks" \
+      "only $FOK_TOTAL fail-open-ok annotations found; the audit covered almost nothing"
+fi
+
+# =============================================================================
+# Reference integrity (parked by the artifact-fidelity chore, riding 1.0.3):
+# every ${CLAUDE_PLUGIN_ROOT} path named in shipped skills and templates
+# resolves in this tree. The publish script runs the same sweep over the
+# staged export (gate 5f); this is the suite-side half, so a stale reference
+# fails CI on the push that creates it instead of at the next publish.
+# =============================================================================
+
+REF_MISS=""
+REF_N=0
+REFS="$(grep -rohE '\$\{CLAUDE_PLUGIN_ROOT\}/[A-Za-z0-9._/-]+' "$ROOT/skills" "$ROOT/templates" 2>/dev/null | sort -u || true)"
+while IFS= read -r ref; do
+  [[ -n "$ref" ]] || continue
+  p="${ref#\$\{CLAUDE_PLUGIN_ROOT\}/}"
+  p="${p%.}"
+  REF_N=$((REF_N + 1))
+  [[ -e "$ROOT/$p" ]] || REF_MISS="$REF_MISS $p"
+done <<EOF
+$REFS
+EOF
+if [[ "$REF_N" -eq 0 ]]; then
+  bad "reference integrity: plugin-root paths in skills/templates resolve" \
+      "extracted zero references; the tree is known to carry them, so the sweep is broken"
+elif [[ -z "$REF_MISS" ]]; then
+  ok "reference integrity: all $REF_N plugin-root paths named in skills/templates resolve"
+else
+  bad "reference integrity: plugin-root paths in skills/templates resolve" \
+      "stale references:$REF_MISS"
 fi
 
 # --- summary -----------------------------------------------------------------

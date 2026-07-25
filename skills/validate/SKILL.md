@@ -32,10 +32,14 @@ Checks:
 1. `.claude/settings.json` parses as JSON and still carries the permission
    rules (deny on .env reads; ask on push, hard reset, force push, rm -rf).
 2. The four stamped hooks are present in `.claude/hooks/` and wired in
-   settings.json: scope-hook on Write|Edit (PreToolUse), commit-gate and
-   close-gate on Bash (PreToolUse), regrounding-hook on SessionStart. A
-   disabled or missing hook is a finding, not an error: report it with the
-   settings line that would re-enable it.
+   settings.json: scope-hook on Write|Edit|MultiEdit|NotebookEdit
+   (PreToolUse), commit-gate and close-gate on Bash (PreToolUse),
+   regrounding-hook on SessionStart. A disabled or missing hook is a finding,
+   not an error: report it with the settings line that would re-enable it.
+   The pre-1.0.3 matcher `Write|Edit` is a finding (NotebookEdit writes files
+   past the trunk rule), as is any hook entry with no explicit `timeout` (a
+   timed-out hook is a skipped gate); both are fixed by re-wiring from the
+   current template.
 3. `.claude/sdd.json` parses, names the src and tests role paths (`roles.src`,
    `roles.tests`, each a string or a list of strings) and the `trunk`, and
    carries a non-empty `gate_command` once `scaffolded` is true. A role path
