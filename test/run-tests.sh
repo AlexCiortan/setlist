@@ -24,7 +24,23 @@ FAIL=0
 # produces fixture paths containing `//`. Those belong in explicit test cases
 # (see the path-spelling block), not silently in every other fixture's path.
 WORK="$(cd "$(mktemp -d "${TMPDIR:-/tmp}/setlist-tests.XXXXXX")" && pwd)"
-trap 'rm -rf "$WORK"' EXIT
+
+# The verdict is enforced on EXIT, not only by the summary block at the end.
+# A case added AFTER that block records its failure into FAIL and then the
+# script ends with the status of whatever ran last, so the failure is silent
+# and the suite reports success. That is the Phase 0 finding in the review
+# methodology, "a suite that reports failures but exits 0 is itself a
+# finding", and it was reproduced here by accident while attacking the
+# publish gate: a probe appended to the end of this file failed and the suite
+# still exited 0. Binding the verdict to EXIT makes the position of a case in
+# the file irrelevant.
+on_exit() {
+  local rc=$?
+  rm -rf "$WORK"
+  [[ "${FAIL:-0}" -eq 0 ]] || exit 1
+  exit "$rc"
+}
+trap on_exit EXIT
 
 # The em-dash is never typed literally in this repo (rule 1) and never built
 # with \x escapes, which are not POSIX and silently produce the literal text
@@ -1244,6 +1260,39 @@ for hook in scope-hook commit-gate close-gate regrounding-hook; do
   esac
 done
 
+# The same discipline, extended to scripts/ (1.0.5). The 1.0.3 wiring bug was
+# NOT in a hook, so the audit above could never have seen it: a `|| true`
+# swallowed grep's non-zero exit, the captured value made a numeric comparison
+# a silent syntax error, and the check passed on exactly the input it existed
+# to catch. `|| true` is the idiom that discards an error, so in scripts that
+# CHECK things it is the place a predicate goes unevaluated. Each site must
+# say why discarding the error is correct there.
+SCRIPT_FOK=0
+for s in "$SCRIPTS"/*.sh; do
+  [[ -f "$s" ]] || continue
+  sname="$(basename "$s")"
+  UNJUSTIFIED="$(awk '
+    { lines[NR] = $0 }
+    /\|\| true/ && $0 !~ /^[[:space:]]*#/ {
+      ok = 0
+      for (i = NR - 3; i <= NR; i++) if (lines[i] ~ /fail-open-ok/) ok = 1
+      if (!ok) print NR": "$0
+    }' "$s")"
+  if [[ -z "$UNJUSTIFIED" ]]; then
+    ok "fail-open audit (scripts): every error-discarding site in $sname is justified"
+  else
+    bad "fail-open audit (scripts): every error-discarding site in $sname is justified" \
+        "unjustified '|| true':$(printf '\n       %s' "$UNJUSTIFIED")"
+  fi
+  SCRIPT_FOK=$((SCRIPT_FOK + 1))
+done
+if [[ "$SCRIPT_FOK" -ge 3 ]]; then
+  ok "fail-open audit (scripts): $SCRIPT_FOK scripts were scanned"
+else
+  bad "fail-open audit (scripts): the scan found scripts to read" \
+      "only $SCRIPT_FOK scripts scanned; scripts/ should hold several"
+fi
+
 # The audit must have exercised something: four hooks with zero annotations
 # between them means the scan broke, not that the hooks are clean.
 if [[ "$FOK_TOTAL" -ge 10 ]]; then
@@ -1282,6 +1331,470 @@ else
   bad "reference integrity: plugin-root paths in skills/templates resolve" \
       "stale references:$REF_MISS"
 fi
+
+# =============================================================================
+# THE ATTACK CORPUS (1.0.5)
+#
+# Every example test in this file encodes something its author thought of, and
+# every bypass this project has shipped lived in what its author did not. Four
+# releases in a row were repaired by an outside reader running payloads nobody
+# here had written. That is not a discipline problem; it is what example-based
+# testing does to a PARSER, whose input space is combinatorial and whose
+# failures are adversarial.
+#
+# So the corpus is GENERATED, not enumerated. It crosses the generator classes
+# that have actually drawn blood in this codebase:
+#   - spelling variance   (the 1.0.1 class: whitespace, git options, quoting)
+#   - indirection         (the 1.0.3 IN-1 class: $VAR, -, @{-1}, FETCH_HEAD, SHA)
+#   - compounding         (the 1.0.4 class: && ; || and token donation between
+#                          segments)
+#   - content-as-code     (the 1.0.4 class: prose in -m containing the very
+#                          keyword the parser anchors on)
+# and asserts a single stated invariant:
+#
+#   If any segment of a command merges into the trunk and literally names a
+#   spec/ or chore/ branch, the close conditions for that branch MUST be
+#   evaluated. Nothing appended, prepended, or written in a message may
+#   discard it.
+#
+# The inverse corpus matters as much: a checker that denies everything is a
+# checker people rip out, so ordinary syncs must still pass.
+# =============================================================================
+
+CORP="$WORK/corpus"
+close_fixture "$CORP" no no answered no no true   # deliberately UNCLOSED: every gated merge must deny
+git -C "$CORP" branch -f tmp-alias spec/0001-thing
+git -C "$CORP" update-ref refs/remotes/origin/main "$(git -C "$CORP" rev-parse main)"
+git -C "$CORP" branch -f release/2.0 main
+
+corpus_verdict() { # corpus_verdict <command> -> echoes deny|allow
+  local out
+  out="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$CORP" bash "$HOOKS/close-gate.sh" 2>/dev/null)"
+  if [[ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)" == "deny" ]]; then
+    printf 'deny'
+  else
+    printf 'allow'
+  fi
+}
+
+# CONTROL FIRST (Phase 3 of the hostile-review protocol). A harness that has
+# not proven it can see a deny proves nothing with a pass. Five fake ALLOWs
+# were produced during the 1.0.4 strictness review by a fixture missing its
+# sdd.json; this is the guard against repeating that.
+if [[ "$(corpus_verdict 'git merge --no-ff spec/0001-thing')" == "deny" ]]; then
+  ok "corpus control a: the harness can observe a deny on the plain gated merge"
+else
+  bad "corpus control a: the harness can observe a deny on the plain gated merge" \
+      "the control did not deny, so every corpus result below is meaningless"
+fi
+if [[ "$(corpus_verdict 'git status')" == "allow" ]]; then
+  ok "corpus control b: the harness can observe an allow on an ungoverned command"
+else
+  bad "corpus control b: the harness can observe an allow on an ungoverned command" "git status was denied"
+fi
+
+# --- the MUST-DENY corpus ----------------------------------------------------
+CORPUS_DENY_N=0
+CORPUS_DENY_FAIL=""
+for pfx in '' 'git checkout main && '; do
+ for gopt in '' '-C . ' '--no-pager '; do
+  for flag in '' '--no-ff ' '--squash '; do
+   for ref in 'spec/0001-thing' '"spec/0001-thing"' 'origin/spec/0001-thing' 'refs/heads/spec/0001-thing'; do
+    for sfx in '' ' -m "close spec"' ' -m "improve merge of main"' ' && git merge main' ' ; git status' ' && echo done' ' -m "merge "'; do
+      cmd="${pfx}git ${gopt}merge ${flag}${ref}${sfx}"
+      CORPUS_DENY_N=$((CORPUS_DENY_N + 1))
+      [[ "$(corpus_verdict "$cmd")" == "deny" ]] || CORPUS_DENY_FAIL="$CORPUS_DENY_FAIL
+    $cmd"
+    done
+   done
+  done
+ done
+done
+if [[ "$CORPUS_DENY_N" -lt 100 ]]; then
+  bad "corpus deny: the generator produced a real corpus" \
+      "only $CORPUS_DENY_N commands were generated; the cross product is broken and this proves almost nothing"
+elif [[ -z "$CORPUS_DENY_FAIL" ]]; then
+  ok "corpus deny: all $CORPUS_DENY_N generated spec-merge spellings are denied"
+else
+  bad "corpus deny: every generated spec-merge spelling must be denied ($CORPUS_DENY_N generated)" \
+      "these reached the trunk with the close conditions unevaluated:$CORPUS_DENY_FAIL"
+fi
+
+# --- the MUST-ALLOW corpus ---------------------------------------------------
+CORPUS_ALLOW_N=0
+CORPUS_ALLOW_FAIL=""
+for cmd in \
+  'git merge origin/main' \
+  'git merge --no-ff release/2.0' \
+  'git merge main' \
+  'git pull origin main' \
+  'git status' \
+  'git log --oneline' \
+  'git merge --continue' \
+  'git merge --abort' \
+  'echo git merge spec/0001-thing' ; do
+  CORPUS_ALLOW_N=$((CORPUS_ALLOW_N + 1))
+  [[ "$(corpus_verdict "$cmd")" == "allow" ]] || CORPUS_ALLOW_FAIL="$CORPUS_ALLOW_FAIL
+    $cmd"
+done
+if [[ -z "$CORPUS_ALLOW_FAIL" ]]; then
+  ok "corpus allow: all $CORPUS_ALLOW_N ordinary operations still pass"
+else
+  bad "corpus allow: ordinary operations must not be denied" \
+      "a gate that denies these is one people disable:$CORPUS_ALLOW_FAIL"
+fi
+
+# --- THE HOLE LEDGER ---------------------------------------------------------
+#
+# Docs-tree lockstep, the honest version. Every entry in the public README's
+# "Known limitations" appears here EXACTLY ONCE, with one of two dispositions:
+#
+#   asserted:    a test below pins it, so the day the hole closes the suite
+#                fails and tells us the docs are now wrong.
+#   unassertable: it cannot be exercised from a bash suite, with the reason
+#                and the manual procedure that would check it. These become
+#                the human pre-release checklist rather than silently
+#                vanishing.
+#
+# publish-setlist.sh refuses to export when a README bullet is missing from
+# this ledger or a ledger line names no README bullet. Counting was the first
+# design and it was too crude: it could be satisfied by asserting the easy
+# holes twice while an unassertable one went unrecorded.
+#
+# LEDGER-BEGIN
+# hole: The Bash escape hatch. | asserted
+# hole: The remote-merge bypass. | unassertable | needs a forge; verify by opening a PR and merging it in the web UI, confirming the close gate never runs
+# hole: Sideways routes to the trunk. | asserted
+# hole: The pathspec hole. | asserted
+# hole: The secret scan is a first cut. | asserted
+# hole: The gates need `jq`, and fail closed without it. | asserted
+# hole: A timed-out hook is a skipped gate. | unassertable | harness behaviour, not hook behaviour; verified live 2026-07-25 with a sleeping hook under timeout 1 and 10, recorded in close-gate.sh's header
+# hole: The staged-content scans read every staged line. | asserted
+# LEDGER-END
+#
+# Each of these is a deliberate pass named in the README. They are asserted
+# rather than ignored so that the day one of them closes, this file says so
+# instead of nobody noticing.
+for hole_cmd in \
+  'git cherry-pick spec/0001-thing' \
+  'git rebase spec/0001-thing' \
+  'git reset --hard spec/0001-thing' \
+  'git checkout spec/0001-thing -- src/app.js' \
+  'git merge --no-ff tmp-alias' ; do
+  if [[ "$(corpus_verdict "$hole_cmd")" == "allow" ]]; then
+    ok "documented hole: [$hole_cmd] still passes, as Known limitations states"
+  else
+    bad "documented hole: [$hole_cmd] still passes" \
+        "this now DENIES. That is an improvement, but the README still lists it as a hole: update Known limitations and this assertion together"
+  fi
+done
+
+# The two remaining asserted holes are exercised elsewhere in this file and are
+# named here so the ledger's "asserted" claims are all traceable:
+#   - "The secret scan is a first cut."      -> commit-gate d (a shape it CATCHES)
+#     and the miss below (a shape it does not).
+#   - "The staged-content scans read every staged line." -> the vendored-content
+#     case below: foreign content in a staged diff is denied on style alone.
+SCAN="$WORK/scan-scope"
+git_init "$SCAN"
+sdd_json "$SCAN"
+mkdir -p "$SCAN/vendor"
+printf 'const x = 1; /* upstream file, not ours to restyle %s */\n' "$EMDASH" > "$SCAN/vendor/lib.js"
+git -C "$SCAN" add vendor/lib.js
+run_hook "$HOOKS/commit-gate.sh" "$SCAN" "$(bash_payload 'git commit -m "vendor: add upstream lib"')"
+expect_deny "documented hole: vendored content is style-scanned like our own writing" "em-dash"
+git -C "$SCAN" reset -q
+
+printf 'token = "%s"\n' 'ghp_ShortOne' > "$SCAN/cfg.txt"
+git -C "$SCAN" add cfg.txt
+run_hook "$HOOKS/commit-gate.sh" "$SCAN" "$(bash_payload 'git commit -m cfg')"
+expect_allow "documented hole: the secret scan misses values below its length threshold"
+git -C "$SCAN" reset -q
+
+# =============================================================================
+# THE COMMIT-GATE CORPUS (1.0.5)
+#
+# The close-gate corpus found 144 bypasses and an over-denial nobody had
+# reported. The commit gate parses a different grammar (a command line PLUS a
+# staged index) and had never been generated against, only exampled. This
+# pins what it does across the input space, so a future change to it, S1's
+# location check above all, is judged by a corpus that already exists rather
+# than by cases written to justify the change.
+#
+# Invariant: a command that stages AND commits in one line must deny, because
+# the gate reads the index BEFORE the command runs and would otherwise scan
+# content that is not there yet. Inverse: an ordinary commit, and prose that
+# merely mentions the staging verbs, must pass.
+# =============================================================================
+
+CGC="$WORK/commit-corpus"
+git_init "$CGC"
+sdd_json "$CGC"
+printf 'clean content with nothing to find\n' > "$CGC/ok.md"
+git -C "$CGC" add ok.md
+
+cg_verdict() { # cg_verdict <command>
+  local out
+  out="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$CGC" bash "$HOOKS/commit-gate.sh" 2>/dev/null)"
+  if [[ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)" == "deny" ]]; then
+    printf 'deny'; else printf 'allow'; fi
+}
+
+# CONTROL FIRST, both directions.
+if [[ "$(cg_verdict 'git add -A && git commit -m x')" == "deny" ]]; then
+  ok "commit corpus control a: the harness observes a deny on a known compound"
+else
+  bad "commit corpus control a: the harness observes a deny on a known compound" \
+      "the control did not deny; every result below is meaningless"
+fi
+if [[ "$(cg_verdict 'git commit -m x')" == "allow" ]]; then
+  ok "commit corpus control b: the harness observes an allow on a clean staged commit"
+else
+  bad "commit corpus control b: the harness observes an allow on a clean staged commit" \
+      "a plain commit with clean staged content was denied"
+fi
+
+# --- MUST DENY: every spelling of stage-and-commit ---------------------------
+CGD_N=0; CGD_FAIL=""
+for stage in 'git add -A' 'git add .' 'git add src/x' 'git rm f.txt' 'git mv a.txt b.txt'; do
+ for conn in ' && ' ' ; ' ' || '; do
+  for commit in 'git commit -m x' 'git  commit -m x' 'git -C . commit -m x' 'git --no-pager commit -m x' '/usr/bin/git commit -m x'; do
+    CGD_N=$((CGD_N + 1))
+    [[ "$(cg_verdict "${stage}${conn}${commit}")" == "deny" ]] || CGD_FAIL="$CGD_FAIL
+    ${stage}${conn}${commit}"
+  done
+ done
+done
+for auto in 'git commit -am x' 'git commit -a -m x' 'git commit --all -m x' 'git commit --include f -m x' 'git commit -ai -m x'; do
+  CGD_N=$((CGD_N + 1))
+  [[ "$(cg_verdict "$auto")" == "deny" ]] || CGD_FAIL="$CGD_FAIL
+    $auto"
+done
+if [[ "$CGD_N" -lt 50 ]]; then
+  bad "commit corpus deny: the generator produced a real corpus" "only $CGD_N commands generated"
+elif [[ -z "$CGD_FAIL" ]]; then
+  ok "commit corpus deny: all $CGD_N stage-and-commit spellings are denied"
+else
+  bad "commit corpus deny: every stage-and-commit spelling must be denied ($CGD_N generated)" \
+      "these would have scanned an index that does not hold the content yet:$CGD_FAIL"
+fi
+
+# --- MUST ALLOW: ordinary work, and prose that mentions the verbs ------------
+CGA_N=0; CGA_FAIL=""
+for cmd in \
+  'git commit -m x' \
+  'git commit -m "remember to git add the new file next time"' \
+  'git commit -m "this supersedes the git rm approach"' \
+  'git commit --amend --no-edit' \
+  'git status' \
+  'git log --oneline' \
+  'git add -A' \
+  'npm run build' \
+  'echo git add . && git commit -m x' ; do
+  CGA_N=$((CGA_N + 1))
+  [[ "$(cg_verdict "$cmd")" == "allow" ]] || CGA_FAIL="$CGA_FAIL
+    $cmd"
+done
+if [[ -z "$CGA_FAIL" ]]; then
+  ok "commit corpus allow: all $CGA_N ordinary commit-path operations pass"
+else
+  bad "commit corpus allow: ordinary operations must not be denied" \
+      "a gate that denies these is one people disable:$CGA_FAIL"
+fi
+
+# =============================================================================
+# THE TRUNK AUDIT (1.0.5, advisory)
+#
+# The hooks decide by parsing a command before it runs; this reads history
+# after the fact, which is decidable where the parser never can be. Covered
+# in both directions, and the fixtures mirror the shapes real history turned
+# out to have: a suffixed spec number (0005b), and a chore merge with no spec
+# at all. Both were false positives on the first run against a real repo.
+# =============================================================================
+
+audit_fixture() { # audit_fixture <dir> <mode: clean|direct|unclosed>
+  local d="$1" mode="$2"
+  rm -rf "$d"; mkdir -p "$d/src" "$d/specs"
+  git_init "$d"
+  sdd_json "$d"
+  git -C "$d" add .claude/sdd.json && git -C "$d" commit -qm "stamp"
+  # a compliant spec close, with a SUFFIXED number
+  git -C "$d" checkout -q -b spec/0005b-thing
+  mkdir -p "$d/src"
+  printf 'feature\n' > "$d/src/f.js"
+  {
+    printf '# Spec 0005b\n\nStatus: CLOSED\n\n## Closing report\n\n'
+    printf -- '- QA Pass 1 report (pasted verbatim):\n\ncriterion 1: PASS\n\n'
+    printf -- '- QA Pass 2 (human): done\n'
+  } > "$d/specs/0005b-thing.md"
+  printf '| Num | Title | Status |\n| --- | --- | --- |\n| 0005b | Thing | CLOSED |\n' > "$d/specs/STATUS.md"
+  git -C "$d" add -A && git -C "$d" commit -qm "spec 0005b"
+  if [[ "$mode" == "unclosed" ]]; then
+    printf '| Num | Title | Status |\n| --- | --- | --- |\n| 0005b | Thing | ACTIVE |\n' > "$d/specs/STATUS.md"
+    git -C "$d" add -A && git -C "$d" commit -qm "not closed after all"
+  fi
+  git -C "$d" checkout -q main
+  git -C "$d" merge -q --no-ff -m "Merge spec 0005b" spec/0005b-thing
+  # a chore merge carrying role-path changes and no spec: legitimate, and
+  # indistinguishable from an unspecced feature in history
+  git -C "$d" checkout -q -b chore/tidy
+  printf 'tidy\n' >> "$d/src/f.js"
+  git -C "$d" add -A && git -C "$d" commit -qm "chore work"
+  git -C "$d" checkout -q main
+  git -C "$d" merge -q --no-ff -m "Merge chore: tidy" chore/tidy
+  if [[ "$mode" == "direct" ]]; then
+    printf 'snuck in\n' >> "$d/src/f.js"
+    git -C "$d" add -A && git -C "$d" commit -qm "hotfix straight onto the trunk"
+  fi
+}
+
+AUD="$WORK/audit-clean"; audit_fixture "$AUD" clean
+run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
+expect_script "trunk audit a: a compliant trunk reports zero violations" 0 "0 violations"
+expect_script "trunk audit b: a suffixed spec number (0005b) is recognised, not flagged" 0 "0 violations"
+expect_script "trunk audit c: a chore merge is counted as unverifiable, not as a violation" 0 "chore merges"
+
+AUD="$WORK/audit-direct"; audit_fixture "$AUD" direct
+run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
+expect_script "trunk audit d: feature code committed straight to the trunk is a violation" 1 \
+  "feature code committed directly" "1 violations"
+
+AUD="$WORK/audit-unclosed"; audit_fixture "$AUD" unclosed
+run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
+expect_script "trunk audit e: a merge whose spec has no CLOSED row is a violation" 1 "no-CLOSED-row"
+
+# =============================================================================
+# GENERATOR 6: DEGRADED ENVIRONMENT (1.0.5)
+#
+# The gates are only ever exercised against a healthy repo in the cases above.
+# Real repos are detached, unborn, half-configured, and reformatted by the
+# harness itself. Every one of these is an input the gates must survive, and
+# the question for each is the one from Phase 4: when the check cannot
+# evaluate its predicate, does it deny or does it fall through?
+# =============================================================================
+
+DEG="$WORK/degraded"
+close_fixture "$DEG" no no answered no no true
+
+# DETACHED HEAD. `branch --show-current` returns empty, so no gate can tell
+# whether it is on the trunk. Documented as a sideways route; asserted here so
+# the day it closes we find out.
+DEG_HEAD="$(git -C "$DEG" rev-parse main)"
+git -C "$DEG" checkout -q --detach "$DEG_HEAD"
+run_hook "$HOOKS/close-gate.sh" "$DEG" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+expect_allow "degraded a: on a detached HEAD the close gate passes (documented sideways route)"
+run_hook "$HOOKS/scope-hook.sh" "$DEG" "$(jq -nc --arg p "$DEG/src/x.js" '{tool_name:"Edit", tool_input:{file_path:$p}}')"
+expect_allow "degraded b: on a detached HEAD the scope hook passes (same route)"
+git -C "$DEG" checkout -q main
+
+# UNPARSEABLE sdd.json. jq is present, the file is not readable as JSON. The
+# hooks read the trunk and role paths from it; with neither, they cannot tell
+# a trunk write from a branch write.
+DEG2="$WORK/degraded-badjson"
+close_fixture "$DEG2" no no answered no no true
+printf '{ "trunk": \n' > "$DEG2/.claude/sdd.json"
+run_hook "$HOOKS/scope-hook.sh" "$DEG2" "$(jq -nc --arg p "$DEG2/src/x.js" '{tool_name:"Write", tool_input:{file_path:$p}}')"
+expect_deny "degraded c: an unparseable sdd.json denies the write rather than guessing" "scope hook"
+run_hook "$HOOKS/close-gate.sh" "$DEG2" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+expect_deny "degraded d: an unparseable sdd.json denies the merge rather than guessing" "close gate"
+
+# MINIFIED sdd.json. Claude Code rewrites config files, and the 1.0.3 wiring
+# check was defeated by exactly this. The hooks read sdd.json with jq, which
+# is format-blind, so this must behave identically to the pretty form.
+DEG3="$WORK/degraded-minified"
+close_fixture "$DEG3" no no answered no no true
+jq -c . "$DEG3/.claude/sdd.json" > "$DEG3/t" && mv "$DEG3/t" "$DEG3/.claude/sdd.json"
+assert_true "degraded e0: the fixture really is minified" \
+  "the fixture is not one line, so case e proves nothing" \
+  test "$(wc -l < "$DEG3/.claude/sdd.json")" -le 1
+run_hook "$HOOKS/close-gate.sh" "$DEG3" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+expect_deny "degraded e: a minified sdd.json is read identically to a pretty one" "Closing report"
+
+# EMPTY role paths. A config that parses but records nothing usable.
+DEG4="$WORK/degraded-noroles"
+close_fixture "$DEG4" no no answered no no true
+jq '.roles = {}' "$DEG4/.claude/sdd.json" > "$DEG4/t" && mv "$DEG4/t" "$DEG4/.claude/sdd.json"
+run_hook "$HOOKS/scope-hook.sh" "$DEG4" "$(jq -nc --arg p "$DEG4/src/x.js" '{tool_name:"Write", tool_input:{file_path:$p}}')"
+expect_deny "degraded f: absent role paths fall back to src/tests rather than allowing everything" "never lands"
+
+# =============================================================================
+# GENERATOR 7: FOREIGN MATERIAL (1.0.5)
+#
+# A checker must judge what it owns and ignore what it does not. The 1.0.3
+# wiring check failed this in both directions at once. These put material the
+# gates do NOT own next to material they do.
+# =============================================================================
+
+FOR1="$WORK/foreign"
+close_fixture "$FOR1" yes yes answered yes no true
+# A file that LOOKS like a spec but is not in specs/, beside the real one.
+mkdir -p "$FOR1/vendor/specs"
+printf '# Spec 0001\n\nStatus: ACTIVE\n' > "$FOR1/vendor/specs/0001-decoy.md"
+git -C "$FOR1" add -A && git -C "$FOR1" commit -qm "vendored decoy that mimics a spec"
+run_hook "$HOOKS/close-gate.sh" "$FOR1" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+expect_allow "foreign a: a decoy spec outside specs/ does not confuse the close gate"
+
+# A branch whose NAME contains a spec-like string but is not a spec branch.
+git -C "$FOR1" branch -f feature/not-spec/0002-x main
+run_hook "$HOOKS/close-gate.sh" "$FOR1" "$(bash_payload 'git merge --no-ff feature/not-spec/0002-x')"
+expect_allow "foreign b: a branch whose name merely contains a spec-like path is not gated as a close"
+
+# Foreign paths in the staged diff beside owned ones: the scan judges content,
+# and this pins that it does not judge ownership (a documented limitation).
+FOR2="$WORK/foreign-staged"
+git_init "$FOR2"; sdd_json "$FOR2"
+mkdir -p "$FOR2/node_modules/pkg"
+printf 'const a = 1;\n' > "$FOR2/node_modules/pkg/index.js"
+printf 'ours\n' > "$FOR2/ours.md"
+git -C "$FOR2" add -A
+run_hook "$HOOKS/commit-gate.sh" "$FOR2" "$(bash_payload 'git commit -m "add dependency"')"
+expect_allow "foreign c: clean vendored content beside our own passes the content scans"
+
+# =============================================================================
+# GENERATOR 5: EQUIVALENT OPERATIONS (1.0.5)
+#
+# Every sibling command that achieves the governed effect is either gated, or
+# named in Known limitations AND asserted here so its closure is detected.
+# The close-gate siblings are asserted in the documented-hole block above;
+# these are the COMMIT-gate siblings, which create or stage content without
+# the word "commit" ever appearing at command position.
+# =============================================================================
+
+EQ="$WORK/equivalent"
+git_init "$EQ"; sdd_json "$EQ"
+printf 'x\n' > "$EQ/a.md"; git -C "$EQ" add -A; git -C "$EQ" commit -qm base
+for sib in 'git revert --no-edit HEAD' 'git stash pop' 'git apply /tmp/p.patch' 'git cherry-pick --no-commit HEAD' 'git commit --amend --no-edit'; do
+  run_hook "$HOOKS/commit-gate.sh" "$EQ" "$(bash_payload "$sib")"
+  case "$sib" in
+    *--amend*) expect_allow "equivalent: [$sib] reaches the content scans (clean here)" ;;
+    *) expect_allow "equivalent: [$sib] bypasses the content scans (documented gap, item 30)" ;;
+  esac
+done
+
+# =============================================================================
+# THE OPT-IN PRE-PUSH HOOK (1.0.5, Tier 3 Stage A's delivery half)
+# Both directions, plus the refusal that matters most: a check that cannot
+# find its own tool must NOT exit 0.
+# =============================================================================
+
+PP="$ROOT/templates/git-hooks/pre-push"
+PPD="$WORK/prepush-clean"; audit_fixture "$PPD" clean
+run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPD' && CLAUDE_PLUGIN_ROOT='$ROOT' bash '$PP'"
+expect_script "pre-push a: a compliant trunk is allowed to push" 0
+
+PPD="$WORK/prepush-dirty"; audit_fixture "$PPD" direct
+run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPD' && CLAUDE_PLUGIN_ROOT='$ROOT' bash '$PP'"
+expect_script "pre-push b: feature code straight on the trunk refuses the push" 1 "did not arrive through a"
+
+run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPD' && SETLIST_SKIP_TRUNK_AUDIT=1 CLAUDE_PLUGIN_ROOT='$ROOT' bash '$PP'"
+expect_script "pre-push c: the documented escape hatch works and says so" 0 "skipped by SETLIST_SKIP"
+
+run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPD' && bash '$PP'"
+expect_script "pre-push d: unable to find its own tool, it REFUSES rather than passing" 1 "has not passed"
+
+PPD="$WORK/prepush-noinstance"; rm -rf "$PPD"; mkdir -p "$PPD"; git_init "$PPD"
+run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPD' && CLAUDE_PLUGIN_ROOT='$ROOT' bash '$PP'"
+expect_script "pre-push e: a repo that is not a framework instance is untouched" 0
 
 # --- summary -----------------------------------------------------------------
 

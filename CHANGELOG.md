@@ -9,6 +9,54 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 1.0.5
+
+Edition unchanged (v1.6). A release about how releases are checked, and one
+substantial fix that its own new checking found at a scale no review had.
+
+**A merge into your trunk can no longer hide behind the shape of the command
+line.** 1.0.4 read the merge's arguments from the text after the LAST
+occurrence of the word `merge`. Two consequences, both live: a compound like
+`git merge --no-ff spec/0001-x && git merge main` discarded the first merge's
+arguments entirely and passed with no close condition checked, and any commit
+message containing the word, `-m "improve merge of main"`, displaced the real
+arguments and did the same. The second is the serious one, because it fires on
+ordinary usage with no intent at all.
+
+The gate now splits the command line on its connectors and judges each segment
+on its own, tracking which branch each segment runs on, and reads a merge's
+arguments from the FIRST merge token in its own segment. A generated corpus
+found 144 spellings of this class; all 144 now deny. The same change removed
+an over-denial nobody had reported: `echo git merge spec/0001-x` was denied
+though nothing merges. The commit gate received the same treatment, which
+fixed the same shape of over-denial there.
+
+**A trunk audit, advisory.** `scripts/trunk-audit.sh` reads your trunk's
+history and reports any commit that put code into it outside a closed spec.
+It answers a question no command parser can answer correctly, because a shell
+command can compute its own arguments while history simply is what it is. It
+catches by construction what a parser misses: chained merges, a branch renamed
+to hide it, cherry-picks, tags, the merge button on your forge. Nothing calls
+it automatically in this release, it gates nothing, and a finding blocks
+nothing; run it yourself when you want to know. It was validated against 148
+commits of real project history before shipping.
+
+**The trunk audit can run at push time, if you want it to.** A sample git
+`pre-push` hook ships alongside the audit. Copying it into `.git/hooks/` makes
+the audit run at the last moment your history is still private, which is also
+the only place a local hook can notice work that arrived through your forge's
+merge button. It refuses the push rather than passing if it cannot find its
+own tool, because a check that could not run has not passed. Nothing installs
+it for you, and it is not part of the protocol.
+
+**Generated tests, not just written ones.** The suite now generates its
+adversarial inputs rather than enumerating them, for both the close gate and
+the commit gate, and asserts the inverse in each case so a gate that denies
+ordinary work fails too. Every deliberate limitation in Known limitations is
+now either pinned by a test or recorded as unassertable with the manual
+procedure that would check it, and the release tooling refuses to publish when
+those two lists disagree.
+
 ## 1.0.4
 
 Edition unchanged (v1.6). Fixes two defects introduced by 1.0.3 itself, both

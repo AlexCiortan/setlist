@@ -43,7 +43,10 @@ if [[ ! -d "$TREE" ]]; then
 fi
 TREE="$(cd "$TREE" && pwd)"
 
+# fail-open-ok: an undeterminable version is checked immediately below and
+# reported as UNVERIFIED (exit 2), which callers must not treat as clean.
 CURRENT="$(bash "$VER_TOOL" "$TREE" 2>/dev/null || true)"
+# fail-open-ok: same, handled by the emptiness check below.
 NAME="$(bash "$VER_TOOL" --name "$TREE" 2>/dev/null || true)"
 if [[ -z "$CURRENT" || -z "$NAME" ]]; then
   printf 'Plugin name or version undeterminable at %s, so session skew cannot be evaluated. Say so before refreshing anything.\n' "$TREE"
@@ -66,8 +69,11 @@ for candidate in "$PARENT"/*; do
   [[ -f "$candidate/.claude-plugin/plugin.json" ]] || continue
   candidate="$(cd "$candidate" && pwd)"
   [[ "$candidate" == "$TREE" ]] && continue
+  # fail-open-ok: an unreadable neighbour cannot be shown to be a NEWER tree
+  # of this same plugin, and skipping it is the conservative reading.
   [[ "$(bash "$VER_TOOL" --name "$candidate" 2>/dev/null || true)" == "$NAME" ]] || continue
   EXAMINED=$((EXAMINED + 1))
+  # fail-open-ok: same; an unparseable candidate cannot outrank this tree.
   found="$(bash "$VER_TOOL" "$candidate" 2>/dev/null || true)"
   if [[ -z "$found" ]]; then
     UNREADABLE=$((UNREADABLE + 1))

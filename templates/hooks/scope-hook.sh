@@ -58,6 +58,19 @@ if ! command -v jq >/dev/null 2>&1; then
   deny_literal "scope hook: jq is not installed, so this gate cannot read .claude/sdd.json and cannot tell whether this write lands on the trunk; it would otherwise allow feature code straight onto the trunk unchallenged. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
 fi
 
+# The config must PARSE. jq being installed is not the same as sdd.json being
+# readable: a truncated or half-merged file makes every extraction below
+# return empty, so the scaffolded flag reads false, the trunk name reads
+# empty, and the hook exits 0 having checked nothing. That is total silent
+# disablement of the trunk rule from an ordinary accident (a bad merge, an
+# interrupted write, a hand edit), and it is exactly the failure this hook's
+# no-jq path was written to prevent, reached by a different road.
+# `refresh-instance.sh` has refused on this since 1.0.2; the hooks had not.
+# Found by the degraded-environment generator on its first run.
+if ! jq -e . "$SDD_JSON" >/dev/null 2>&1; then
+  deny_literal "scope hook: .claude/sdd.json does not parse as JSON, so this gate cannot read the trunk name or the role paths and cannot tell whether this write lands on the trunk. It would otherwise allow feature code straight onto the trunk unchallenged. Fix the file (jq . .claude/sdd.json will show the error), then retry. Gates fail closed by design."
+fi
+
 # Active only after /scaffold flips the flag, so the one-time bootstrap
 # scaffold on main is not blocked.
 # fail-open-ok: pre-scaffold, the trunk rule is deliberately not yet in force.

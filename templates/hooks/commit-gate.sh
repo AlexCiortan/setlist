@@ -65,8 +65,29 @@ CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
 CMD_NORM="$(printf '%s' "$CMD" | tr -s '[:space:]' ' ')"
 CMD_BARE="$(printf '%s' "$CMD_NORM" | sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g')"
 GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
-if ! printf '%s' "$CMD_BARE" | grep -qE "(^|[;&|(]| )([^ ]*/)?git${GIT_OPTS} +commit( |$)"; then
-  # fail-open-ok: not a commit; this gate governs commits only.
+# Segment-wise, for the same reason the close gate is (1.0.5). A command line
+# is not one command, and a whole-line grep cannot tell an operation from a
+# mention of one: `echo git add . && git commit -m x` was denied though the
+# only staging in it is a word being printed. The generated commit-gate corpus
+# found that on its first run. Each segment is judged at COMMAND POSITION.
+SEGMENTS="$(printf '%s\n' "$CMD_BARE" | awk '{ gsub(/&&|\|\||[;|()]/, "\n"); print }')"
+HAS_COMMIT=""
+HAS_STAGE=""
+while IFS= read -r seg; do
+  seg="$(printf '%s' "$seg" | sed -e 's/^ *//' -e 's/ *$//')"
+  [[ -n "$seg" ]] || continue
+  if printf '%s' "$seg" | grep -qE "^([^ ]*/)?git${GIT_OPTS} +commit( |$)"; then
+    HAS_COMMIT="$seg"
+  elif printf '%s' "$seg" | grep -qE "^([^ ]*/)?git${GIT_OPTS} +(add|rm|mv)( |$)"; then
+    HAS_STAGE="$seg"
+  fi
+done <<SEGEOF
+$SEGMENTS
+SEGEOF
+
+if [[ -z "$HAS_COMMIT" ]]; then
+  # fail-open-ok: no segment is a commit at command position; this gate
+  # governs commits only.
   exit 0
 fi
 
@@ -75,14 +96,13 @@ PROJ="${CLAUDE_PROJECT_DIR:-.}"
 # Check 0: compound stage-and-commit forms are denied outright (F4-1). This
 # hook runs BEFORE the command, so a command that both stages and commits
 # would have its staged-content checks below scan an index that does not yet
-# hold the content: every check would pass vacuously. Quoted strings are
-# stripped first so commit messages mentioning "git add" or "-a" do not
-# false-trip the scan.
-if printf '%s' "$CMD_BARE" | grep -qE 'git[[:space:]]+(add|rm|mv)([[:space:]]|$)'; then
+# hold the content: every check would pass vacuously.
+if [[ -n "$HAS_STAGE" ]]; then
   deny "commit gate: this command stages and commits in one step (git add, rm, and mv all write the index during command execution, after this gate scanned it), so the gate would scan a stale index and check nothing. Run the staging command on its own first, then git commit separately; the gate scans the staged content and names any finding."
 fi
-if printf '%s' "$CMD_BARE" | grep -qE 'git[[:space:]]+commit[[:space:]]' \
-  && printf '%s' "$CMD_BARE" | grep -qE '(^|[[:space:]])-[a-zA-Z]*[ai][a-zA-Z]*([[:space:]]|$)|--all([[:space:]]|$)|--include([[:space:]]|$)|--interactive([[:space:]]|$)'; then
+# Read the COMMIT segment's own flags, not the whole line: another command's
+# -a on the same line is not this commit's auto-staging flag.
+if printf '%s' "$HAS_COMMIT" | grep -qE '(^|[[:space:]])-[a-zA-Z]*[ai][a-zA-Z]*([[:space:]]|$)|--all([[:space:]]|$)|--include([[:space:]]|$)|--interactive([[:space:]]|$)'; then
   deny "commit gate: git commit with -a, -i, --all, or --include stages at commit time, so the gate would scan an empty index and check nothing. Stage the exact files with git add first, then run git commit without auto-staging flags."
 fi
 

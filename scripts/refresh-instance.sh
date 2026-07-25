@@ -79,6 +79,8 @@ if [[ -z "$RECORDED" ]]; then
   FROM="none recorded (stamped before the plugin version was recorded)"
 else
   FROM="$RECORDED"
+  # fail-open-ok: an empty CMP is handled by the *) branch below, which
+  # refuses. The error is discarded here so the refusal can name the value.
   CMP="$(bash "$SCRIPT_DIR/plugin-version.sh" --compare "$PLUGIN_VERSION" "$RECORDED" 2>/dev/null || true)"
   case "$CMP" in
     newer) DIRECTION=forward ;;
@@ -206,6 +208,8 @@ mkdir -p "$INSTANCE/.claude/hooks"
 for h in $STAMPED_HOOKS; do
   cp "$HOOKS/$h.sh" "$INSTANCE/.claude/hooks/$h.sh"
 done
+# fail-open-ok: cosmetic. A filesystem that refuses the mode bit does not
+# make the copied hook bytes wrong, and the hooks are invoked via bash.
 chmod +x "$INSTANCE/.claude/hooks/"*.sh 2>/dev/null || true
 
 # Record the stamping version. Written last, so a failed copy never leaves an

@@ -54,6 +54,8 @@ PLUGIN_VERSION="$(bash "$SCRIPT_DIR/plugin-version.sh" "$ROOT")" \
 
 get() { # get <key> [default]
   local line
+  # fail-open-ok: an absent answer is legitimate; callers below decide
+  # whether a missing value is fatal, and the required ones are validated.
   line="$(grep -E "^$1=" "$ANSWERS" | tail -n1 || true)"
   if [[ -n "$line" ]]; then printf '%s' "${line#*=}"; else printf '%s' "${2-}"; fi
 }
@@ -119,7 +121,10 @@ done
 # matches the branch /scaffold's git init creates later.
 TRUNK=""
 if git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  # fail-open-ok: no origin/HEAD is the normal case for a fresh repo; the
+  # next two lines fall back to the current branch, then to "main".
   TRUNK="$(git -C "$TARGET" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null | sed 's#^origin/##' || true)"
+  # fail-open-ok: an unborn HEAD yields empty; the "main" default follows.
   [[ -n "$TRUNK" ]] || TRUNK="$(git -C "$TARGET" branch --show-current 2>/dev/null || true)"
 fi
 [[ -n "$TRUNK" ]] || TRUNK="main"
@@ -158,6 +163,8 @@ stamp_tmpl() { # stamp_tmpl <abs-src> <abs-dest>
   if [[ "$OPUSPLAN" == "yes" ]]; then
     content="$(printf '%s\n' "$content" | sed 's/^{{IF:OPUSPLAN}}//')"
   else
+    # fail-open-ok: grep exits 1 when every line is filtered out, which is a
+    # legitimate result here (a template that is entirely conditional).
     content="$(printf '%s\n' "$content" | grep -v '^{{IF:OPUSPLAN}}' || true)"
   fi
   # Placeholders, replaced literally (bash replacement, no regex).
@@ -187,6 +194,7 @@ for entry in "${PLAN[@]}"; do
   fi
   STAMPED=$((STAMPED + 1))
 done
+# fail-open-ok: cosmetic, as in refresh-instance.sh; the hooks run via bash.
 chmod +x "$TARGET/.claude/hooks/"*.sh 2>/dev/null || true
 
 # specs/TEMPLATE.md: Appendix C extracted from the bundled edition at stamp

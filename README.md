@@ -141,6 +141,25 @@ QA Pass 2 (you): use the feature yourself; spot-check at least one criterion mar
 
 The mechanical layer additionally runs as an **automated suite** on every push, on Linux and macOS: fixture repositories built from scratch, every gate driven through the same payloads Claude Code sends it, and both contracts asserted on each denial (the machine-readable decision, and whether the message names the specific failure a person has to fix). That suite is a regression net for the hooks; it is not a substitute for the dogfood gate, which tests whether a stranger can actually use the thing.
 
+## The trunk audit (opt-in)
+
+The four hooks above decide by reading a command before it runs. `scripts/trunk-audit.sh` asks a different question, of your repository rather than of a command: does the trunk's history show every piece of feature code arriving through a closed spec? Because it reads history rather than guessing intent, it sees what a command-reading gate structurally cannot, including work that arrived through a chained merge, a renamed branch, a cherry-pick, or your forge's merge button.
+
+Run it whenever you want a second opinion:
+
+```
+bash "$CLAUDE_PLUGIN_ROOT/scripts/trunk-audit.sh" .
+```
+
+It reports three kinds of commit: clean, unverifiable (a chore branch carries no spec, and history cannot tell one from an unspecced feature), and violations. To have it run automatically at push, which is the last moment your history is still private, copy the sample git hook:
+
+```
+cp "$CLAUDE_PLUGIN_ROOT/templates/git-hooks/pre-push" .git/hooks/pre-push
+chmod +x .git/hooks/pre-push
+```
+
+That is opt-in on purpose. Nothing installs it for you, and it is not part of the protocol yet.
+
 ## Known limitations
 
 The enforcement layer is four hooks running inside your Claude Code session, on your machine. That is where it acts, and that is where it stops. Both halves are worth stating plainly: an enforcement layer whose edges you cannot see is one you cannot reason about.

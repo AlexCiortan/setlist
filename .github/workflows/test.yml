@@ -12,9 +12,25 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The macOS leg is not redundant: it runs bash 3.2 and the BSD
+        # One matrix, two bindings, because publish-setlist.sh copies .github wholesale
+        # and this file has to stay correct in BOTH repos.
+        #
+        # Public Setlist: standard runners are unmetered there, so both legs run
+        # GitHub-hosted. The macOS leg is not redundant: it runs bash 3.2 and the BSD
         # userland, which is where portability breaks show up first.
-        os: [ubuntu-latest, macos-latest]
+        #
+        # This private source repo: the Free allowance for private repos is spent, and
+        # macOS bills at roughly 10x, so the suite runs on the self-hosted runner and the
+        # macOS leg is left to public, which covers it at no cost.
+        #
+        # The expression lives here, in the matrix, and NOT in a job-level `if`: the
+        # matrix context is unavailable to `if`, so a condition on matrix.os there reads
+        # as empty and silently skips every leg, reporting green having run nothing.
+        # Do not hardcode self-hosted either. The public repo has no such runner, so the
+        # job would queue forever and hang the README badge.
+        os: ${{ github.repository == 'AlexCiortan/setlist'
+              && fromJSON('["ubuntu-latest","macos-latest"]')
+              || fromJSON('["self-hosted"]') }}
     steps:
       - uses: actions/checkout@v5
 

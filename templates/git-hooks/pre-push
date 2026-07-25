@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Setlist trunk audit as a git pre-push hook. OPT-IN: this file is NOT stamped
+# into an instance by /setlist:new or /setlist:upgrade, and nothing installs it
+# for you. Adopt it deliberately:
+#
+#   cp "$CLAUDE_PLUGIN_ROOT/templates/git-hooks/pre-push" .git/hooks/pre-push
+#   chmod +x .git/hooks/pre-push
+#
+# Why opt-in, and why a git hook rather than a Claude Code hook. The three
+# PreToolUse gates decide by parsing a shell command before it runs, and a
+# shell command can compute its own arguments, so no parser can be correct
+# about what a command will do. This asks a question that needs no parsing:
+# does the trunk's HISTORY show every piece of feature code arriving through a
+# closed spec? It therefore catches what the parsers miss by construction,
+# including work that reached the trunk through a chained merge, a renamed
+# branch, a cherry-pick, a tag, or your forge's merge button, which no local
+# Claude Code hook can see at all.
+#
+# It runs at push, which is the last moment the history is still private.
+#
+# This is the OPT-IN half of the mechanism. Making it part of the protocol,
+# stamped by default and described in Part 6, is edition work and waits for
+# the v1.7 cut (backlog item 28), because the framework does not put a new
+# enforcement surface in the edition text before field evidence exists.
+#
+# To bypass once, for a deliberate exception you are willing to own:
+#   SETLIST_SKIP_TRUNK_AUDIT=1 git push ...
+
+set -u
+
+if [[ "${SETLIST_SKIP_TRUNK_AUDIT:-}" == "1" ]]; then
+  printf 'setlist: trunk audit skipped by SETLIST_SKIP_TRUNK_AUDIT=1\n' >&2
+  exit 0
+fi
+
+REPO="$(git rev-parse --show-toplevel 2>/dev/null || printf '.')"
+[[ -f "$REPO/.claude/sdd.json" ]] || exit 0   # not a framework instance
+
+# The audit ships with the plugin. Resolve it from the plugin root when the
+# environment names one, else from a copy the project vendored next to its
+# hooks. If neither is present the hook says so and REFUSES, rather than
+# passing silently: a pre-push check that cannot find its own tool and exits 0
+# is the fail-open class this whole mechanism exists to remove.
+AUDIT=""
+for cand in \
+  "${CLAUDE_PLUGIN_ROOT:-}/scripts/trunk-audit.sh" \
+  "$REPO/.claude/hooks/trunk-audit.sh" ; do
+  [[ -n "$cand" && -f "$cand" ]] && { AUDIT="$cand"; break; }
+done
+if [[ -z "$AUDIT" ]]; then
+  printf 'setlist pre-push: cannot find trunk-audit.sh.\n' >&2
+  printf '  Set CLAUDE_PLUGIN_ROOT, or copy the script to .claude/hooks/trunk-audit.sh.\n' >&2
+  printf '  Refusing rather than passing: a check that cannot run has not passed.\n' >&2
+  exit 1
+fi
+
+if bash "$AUDIT" "$REPO"; then
+  exit 0
+fi
+RC=$?
+if [[ "$RC" -eq 2 ]]; then
+  printf '\nsetlist pre-push: the audit could not run (see above). Refusing the push.\n' >&2
+  exit 1
+fi
+printf '\nsetlist pre-push: the trunk carries work that did not arrive through a\n' >&2
+printf 'closed spec. Fix the history, or push with SETLIST_SKIP_TRUNK_AUDIT=1 if\n' >&2
+printf 'this is a deliberate exception you are willing to own.\n' >&2
+exit 1
