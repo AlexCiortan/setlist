@@ -112,14 +112,46 @@ TRUNK="$(jq -r '.trunk // "main"' "$SDD_JSON")"
 # counts only at COMMAND POSITION within its segment, which is what stops
 # `echo git merge spec/0001-x` from being read as a merge. Any segment that
 # denies denies the whole command.
+# Strip the ways a shell legitimately STARTS a git command before judging
+# whether a segment is one (1.0.6). The command-position test that removed the
+# `echo git merge ...` false positive introduced this false negative: a segment
+# is only judged when it starts with `git`, so `command git merge ...`,
+# `env git merge ...` and `nice git merge ...` were never judged at all.
+#
+# The allowlist is deliberately NOT a claim of completeness: `timeout`,
+# `setsid`, `ionice`, `sudo`, `xargs` and whatever comes next are not covered,
+# and no allowlist can be, because this is the shell-escape-hatch family. It
+# closes the forms a person or an agent actually types. The designed catch for
+# the whole family is the trunk audit, which reads the outcome in history and
+# does not care how the command was spelled.
+strip_wrappers() { # strip_wrappers <segment> -> echoes the segment, unwrapped
+  local seg="$1" prev=""
+  while [[ "$seg" != "$prev" ]]; do
+    prev="$seg"
+    # leading VAR=val assignments (FOO=bar git ...)
+    seg="$(printf '%s' "$seg" | sed -E 's/^[A-Za-z_][A-Za-z0-9_]*=[^ ]* *//')"
+    # a wrapper word, plus env/stdbuf style flags and assignments after it
+    seg="$(printf '%s' "$seg" | sed -E 's/^(command|exec|nice|nohup|time|stdbuf|env) +//')"
+    seg="$(printf '%s' "$seg" | sed -E 's/^(-[^ ]+ +)+//')"
+  done
+  printf '%s' "$seg"
+}
+
 SEGMENTS="$(printf '%s\n' "$CMD_NORM" | awk '{ gsub(/&&|\|\||[;|()]/, "\n"); print }')"
 
 CUR_BRANCH="$(git -C "$PROJ" branch --show-current 2>/dev/null || true)"
 MERGED_REFS=""
 UNNAMEABLE=""
+# A branch this gate could not establish. It must never compare equal to the
+# trunk (that would deny ordinary feature work) and must never be treated as
+# "some other branch" either (that is the bypass). It is checked explicitly.
+UNKNOWN_BRANCH=$'\x01unknown'
+UNRESOLVED_TARGET=""
 
 while IFS= read -r seg; do
   seg="$(printf '%s' "$seg" | sed -e 's/^ *//' -e 's/ *$//')"
+  [[ -n "$seg" ]] || continue
+  seg="$(strip_wrappers "$seg")"
   [[ -n "$seg" ]] || continue
 
   # A checkout or switch changes the branch every LATER segment runs on. This
@@ -127,7 +159,32 @@ while IFS= read -r seg; do
   # spec/X`) is still recognised, without letting the checkout donate its
   # argument to the merge.
   if printf '%s' "$seg" | grep -qE "^([^ ]*/)?git${GIT_OPTS} +(checkout|switch) +"; then
-    NEWB="$(printf '%s' "$seg" | awk '{ f=0; for (i=1;i<=NF;i++) { if (f && $i !~ /^-/) { print $i; exit } if ($i=="checkout" || $i=="switch") f=1 } }')"
+    # `-` and `@{-1}` mean "the branch I was on before", and they are ORGANIC:
+    # after `git checkout spec/NNNN` from the trunk, `git checkout -` is how a
+    # person and an agent both go back. The first cut of this took the first
+    # NON-DASH argument, so `-` was skipped entirely, the running branch stayed
+    # on the spec branch, and the following merge was judged as targeting a
+    # feature branch, which is an explicitly ALLOWED case. That is not a
+    # fall-through; it is the gate reaching a confident wrong answer.
+    #
+    # This hook runs BEFORE the command, so `@{-1}` still resolves to the
+    # pre-command previous branch, which is exactly what `-` is about to
+    # become. Resolve it. If it cannot be resolved the running branch is
+    # unknown, and an unknown branch must not read as "not the trunk": the
+    # sentinel below makes any later merge segment fail closed instead.
+    NEWB="$(printf '%s' "$seg" | awk '{
+      f = 0
+      for (i = 1; i <= NF; i++) {
+        if (f && ($i == "-" || $i !~ /^-/)) { print $i; exit }
+        if ($i == "checkout" || $i == "switch") f = 1
+      }
+    }')"
+    case "$NEWB" in
+      -|@\{-1\})
+        NEWB="$(git -C "$PROJ" rev-parse --abbrev-ref '@{-1}' 2>/dev/null || true)"
+        [[ -n "$NEWB" ]] || NEWB="$UNKNOWN_BRANCH"
+        ;;
+    esac
     [[ -n "$NEWB" ]] && CUR_BRANCH="$NEWB"
     continue
   fi
@@ -135,7 +192,12 @@ while IFS= read -r seg; do
   printf '%s' "$seg" | grep -qE "^([^ ]*/)?git${GIT_OPTS} +merge( |$)" || continue
 
   # This gate guards the trunk. A merge running on any other branch is not a
-  # close and never was.
+  # close and never was, EXCEPT when the branch could not be established at
+  # all, which is a question the gate cannot answer and so must not pass.
+  if [[ "$CUR_BRANCH" == "$UNKNOWN_BRANCH" ]]; then
+    UNRESOLVED_TARGET="$seg"
+    continue
+  fi
   [[ "$CUR_BRANCH" == "$TRUNK" ]] || continue
 
   # The merge's own arguments: everything after the FIRST merge token in THIS
@@ -191,6 +253,10 @@ SEGEOF
 # A trunk-targeting merge whose branch cannot be established at all: the close
 # conditions are about a specific branch's artifacts, so with no branch there
 # is nothing to check and the gate refuses rather than guessing.
+if [[ -n "$UNRESOLVED_TARGET" ]]; then
+  deny "close gate: this command switches branches by a shorthand this gate cannot resolve (git checkout - or @{-1} with no previous branch recorded), so it cannot establish which branch [$UNRESOLVED_TARGET] would run on, and cannot tell whether it merges into the trunk. Name the branch you are switching to."
+fi
+
 if [[ -n "$UNNAMEABLE" ]]; then
   deny "close gate: this merges into the trunk, but no argument of [$UNNAMEABLE] names a branch this gate can resolve. Indirect forms (a shell variable, -, @{-1}, FETCH_HEAD, a raw commit SHA) cannot be verified, so the close conditions cannot be checked at all. Name the branch literally: git merge --no-ff spec/NNNN-slug."
 fi

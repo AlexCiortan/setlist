@@ -9,6 +9,43 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 1.0.6
+
+Edition unchanged (v1.6). Two bypasses closed, both found by review of 1.0.5,
+one of which fired on an everyday command.
+
+**`git checkout -` no longer walks past the close gate.** The gate tracks
+which branch each part of a command line runs on, so that a compound like
+`git checkout main && git merge --no-ff spec/0001-x` is recognised as a close.
+It read the branch name as the first argument that was not a flag, and `-` is
+a flag as far as that reading goes, so it was skipped: the gate believed the
+merge was still running on the spec branch, which is a case it deliberately
+allows. `git checkout -` right after `git checkout spec/0001-x` is how a
+person and an agent both return to the trunk, so this was reachable without
+anyone trying. The gate now resolves `-` and `@{-1}` (it runs before your
+command, so the previous branch is still there to resolve), and if it cannot,
+it refuses rather than assuming the merge is harmless.
+
+**Wrapper prefixes no longer escape either gate.** `command git merge ...`,
+`env git merge ...`, `nice`, `nohup`, `exec`, and a leading `VAR=value`
+assignment all reached the trunk unchecked, and `command git commit -am x`
+walked past the commit gate the same way. Both gates now strip those prefixes
+before deciding whether a command is one they govern. That list is not a claim
+of completeness and cannot be one; the trunk audit is the designed catch for
+the wider family, because it reads what ended up in your history and does not
+care how the command was spelled.
+
+**The two layers are now documented as one story.** Known limitations
+previously described the Bash escape hatch as a file-writing route, without
+saying that running git through another interpreter (`sh -c '...'`, a
+backtick) is the same boundary, and the sideways-routes list did not mention
+merging a spec branch under a second name. Both are named now, each is
+cross-referenced to the trunk audit as the thing that catches it, and the test
+suite pins the pairing: the interpreter forms pass the gate AND their outcome
+is caught by the audit. The audit's opt-in status is stated plainly in the
+same place, because until you install it the hooks are the only enforcement
+running, and the hooks are the layer that can be spelled around.
+
 ## 1.0.5
 
 Edition unchanged (v1.6). A release about how releases are checked, and one

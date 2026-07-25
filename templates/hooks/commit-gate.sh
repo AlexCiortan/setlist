@@ -70,11 +70,38 @@ GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
 # mention of one: `echo git add . && git commit -m x` was denied though the
 # only staging in it is a word being printed. The generated commit-gate corpus
 # found that on its first run. Each segment is judged at COMMAND POSITION.
+# Strip the ways a shell legitimately STARTS a git command before judging
+# whether a segment is one (1.0.6). The command-position test that removed the
+# `echo git merge ...` false positive introduced this false negative: a segment
+# is only judged when it starts with `git`, so `command git merge ...`,
+# `env git merge ...` and `nice git merge ...` were never judged at all.
+#
+# The allowlist is deliberately NOT a claim of completeness: `timeout`,
+# `setsid`, `ionice`, `sudo`, `xargs` and whatever comes next are not covered,
+# and no allowlist can be, because this is the shell-escape-hatch family. It
+# closes the forms a person or an agent actually types. The designed catch for
+# the whole family is the trunk audit, which reads the outcome in history and
+# does not care how the command was spelled.
+strip_wrappers() { # strip_wrappers <segment> -> echoes the segment, unwrapped
+  local seg="$1" prev=""
+  while [[ "$seg" != "$prev" ]]; do
+    prev="$seg"
+    # leading VAR=val assignments (FOO=bar git ...)
+    seg="$(printf '%s' "$seg" | sed -E 's/^[A-Za-z_][A-Za-z0-9_]*=[^ ]* *//')"
+    # a wrapper word, plus env/stdbuf style flags and assignments after it
+    seg="$(printf '%s' "$seg" | sed -E 's/^(command|exec|nice|nohup|time|stdbuf|env) +//')"
+    seg="$(printf '%s' "$seg" | sed -E 's/^(-[^ ]+ +)+//')"
+  done
+  printf '%s' "$seg"
+}
+
 SEGMENTS="$(printf '%s\n' "$CMD_BARE" | awk '{ gsub(/&&|\|\||[;|()]/, "\n"); print }')"
 HAS_COMMIT=""
 HAS_STAGE=""
 while IFS= read -r seg; do
   seg="$(printf '%s' "$seg" | sed -e 's/^ *//' -e 's/ *$//')"
+  [[ -n "$seg" ]] || continue
+  seg="$(strip_wrappers "$seg")"
   [[ -n "$seg" ]] || continue
   if printf '%s' "$seg" | grep -qE "^([^ ]*/)?git${GIT_OPTS} +commit( |$)"; then
     HAS_COMMIT="$seg"

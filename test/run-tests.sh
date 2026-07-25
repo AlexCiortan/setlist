@@ -1420,6 +1420,61 @@ else
       "these reached the trunk with the close conditions unevaluated:$CORPUS_DENY_FAIL"
 fi
 
+# --- the WRAPPER axis (1.0.6) -----------------------------------------------
+# The command-position test that fixed `echo git merge ...` introduced its own
+# false negative: a segment is only judged if it STARTS with git, and wrappers
+# are how a shell legitimately starts git. The 504-spelling corpus had no
+# wrapper dimension, which is why this shipped. The dimension list is itself an
+# artifact written from what somebody thought of, and nothing reviews it.
+CORPUS_WRAP_N=0
+CORPUS_WRAP_FAIL=""
+for wrap in 'command ' 'exec ' 'nice ' 'nohup ' 'env ' 'env GIT_PAGER=cat ' 'GIT_PAGER=cat ' 'time '; do
+  for tail in 'git merge --no-ff spec/0001-thing' 'git merge spec/0001-thing -m "close"'; do
+    CORPUS_WRAP_N=$((CORPUS_WRAP_N + 1))
+    [[ "$(corpus_verdict "${wrap}${tail}")" == "deny" ]] || CORPUS_WRAP_FAIL="$CORPUS_WRAP_FAIL
+    ${wrap}${tail}"
+  done
+done
+if [[ -z "$CORPUS_WRAP_FAIL" ]]; then
+  ok "corpus wrappers: all $CORPUS_WRAP_N wrapper-prefixed spec merges are denied"
+else
+  bad "corpus wrappers: a wrapper prefix must not escape the gate ($CORPUS_WRAP_N generated)" \
+      "these reached the trunk unchecked:$CORPUS_WRAP_FAIL"
+fi
+
+# --- the CHECKOUT-TARGET axis (1.0.6) ---------------------------------------
+# `git checkout -` is organic shorthand, not attacker spelling: it is exactly
+# the state an agent is in after `git checkout spec/NNNN` from the trunk. The
+# branch tracker took the first NON-DASH argument, so `-` was skipped, the
+# running branch stayed on the spec branch, and the merge segment was judged
+# as targeting a feature branch, which is an explicitly ALLOWED case. Not a
+# fall-through: the gate reached a confident wrong answer.
+CORP_DASH="$WORK/corpus-dash"
+close_fixture "$CORP_DASH" no no answered no no true
+git -C "$CORP_DASH" checkout -q spec/0001-thing   # @{-1} is now the trunk, the organic state
+dash_verdict() {
+  local out
+  out="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$CORP_DASH" bash "$HOOKS/close-gate.sh" 2>/dev/null)"
+  if [[ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)" == "deny" ]]; then
+    printf 'deny'; else printf 'allow'; fi
+}
+assert_true "corpus dash0: the fixture really has the trunk as its previous branch" \
+  "@{-1} does not resolve to the trunk, so the cases below prove nothing" \
+  test "$(git -C "$CORP_DASH" rev-parse --abbrev-ref '@{-1}' 2>/dev/null)" = "main"
+CORP_DASH_FAIL=""
+for c in 'git checkout - && git merge --no-ff spec/0001-thing' \
+         'git switch - && git merge --no-ff spec/0001-thing' \
+         'git checkout @{-1} && git merge --no-ff spec/0001-thing'; do
+  [[ "$(dash_verdict "$c")" == "deny" ]] || CORP_DASH_FAIL="$CORP_DASH_FAIL
+    $c"
+done
+if [[ -z "$CORP_DASH_FAIL" ]]; then
+  ok "corpus dash: returning to the trunk by shorthand does not escape the gate"
+else
+  bad "corpus dash: 'checkout -' back to the trunk must not escape the gate" \
+      "these merged an unclosed spec into the trunk with no checks:$CORP_DASH_FAIL"
+fi
+
 # --- the MUST-ALLOW corpus ---------------------------------------------------
 CORPUS_ALLOW_N=0
 CORPUS_ALLOW_FAIL=""
@@ -1443,6 +1498,30 @@ else
   bad "corpus allow: ordinary operations must not be denied" \
       "a gate that denies these is one people disable:$CORPUS_ALLOW_FAIL"
 fi
+
+# --- interpreter forms: documented passes, PAIRED with the audit catch -------
+# The pathspec hole is asserted as a pass so its closure is detected. These go
+# one better, because a deliberate hole should be pinned together with the
+# thing that actually catches it: each interpreter form passes the gate AND its
+# outcome is caught by the trunk audit. That pairing is the two-layer claim the
+# README now makes, asserted rather than asserted-about.
+INTERP="$WORK/interpreter"
+close_fixture "$INTERP" no no answered no no true
+for form in 'sh -c "git merge --no-ff spec/0001-thing"' 'bash -c "git merge --no-ff spec/0001-thing"'; do
+  run_hook "$HOOKS/close-gate.sh" "$INTERP" "$(bash_payload "$form")"
+  expect_allow "interpreter: [$form] passes the gate, as Known limitations states"
+done
+# The branch must carry ROLE-PATH changes for the audit to have an opinion: a
+# docs-only merge is legitimately ignored, and the first cut of this case
+# merged a spec-file-only branch and then reported the audit broken. The
+# fixture has to look like the thing being claimed.
+git -C "$INTERP" checkout -q spec/0001-thing
+mkdir -p "$INTERP/src"; printf 'feature\n' > "$INTERP/src/f.js"
+git -C "$INTERP" add -A && git -C "$INTERP" commit -qm "feature code, spec still unclosed"
+git -C "$INTERP" checkout -q main
+git -C "$INTERP" merge -q --no-ff -m "merge as an interpreter form would leave it" spec/0001-thing
+run_script bash "$SCRIPTS/trunk-audit.sh" "$INTERP"
+expect_script "interpreter: the trunk audit CATCHES the outcome the gate let past" 1 "VIOLATION"
 
 # --- THE HOLE LEDGER ---------------------------------------------------------
 #
@@ -1577,6 +1656,22 @@ elif [[ -z "$CGD_FAIL" ]]; then
 else
   bad "commit corpus deny: every stage-and-commit spelling must be denied ($CGD_N generated)" \
       "these would have scanned an index that does not hold the content yet:$CGD_FAIL"
+fi
+
+# --- the WRAPPER axis, commit gate (1.0.6) ----------------------------------
+CGW_N=0; CGW_FAIL=""
+for wrap in 'command ' 'exec ' 'nice ' 'env ' 'GIT_PAGER=cat '; do
+  for tail in 'git commit -am x' 'git add -A && git commit -m x'; do
+    CGW_N=$((CGW_N + 1))
+    [[ "$(cg_verdict "${wrap}${tail}")" == "deny" ]] || CGW_FAIL="$CGW_FAIL
+    ${wrap}${tail}"
+  done
+done
+if [[ -z "$CGW_FAIL" ]]; then
+  ok "commit corpus wrappers: all $CGW_N wrapper-prefixed staging compounds are denied"
+else
+  bad "commit corpus wrappers: a wrapper prefix must not escape the commit gate" \
+      "these scanned a stale index unchecked:$CGW_FAIL"
 fi
 
 # --- MUST ALLOW: ordinary work, and prose that mentions the verbs ------------
