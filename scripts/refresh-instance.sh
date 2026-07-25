@@ -118,42 +118,70 @@ for h in $STAMPED_HOOKS; do
   fi
 done
 
-# --- the settings wiring (1.0.3) ---------------------------------------------
+# --- the settings wiring -------------------------------------------------------
 #
 # The hooks are only half the enforcement layer; the other half is how
 # .claude/settings.json WIRES them, and that half is not a stamped file this
-# script can copy: it carries the instance's own permissions and model
-# settings alongside the hook block. Two 1.0.3 fixes live entirely in that
-# wiring (the write-tool matcher set, and the explicit per-hook timeouts), so
-# a refresh that copied hook bytes and reported success would have installed
-# neither while saying the instance is on 1.0.3. That is the exact failure
-# this release exists to remove, so the wiring is checked, named, and allowed
-# to fail the refresh rather than being silently skipped.
+# script can copy: it carries the instance's own permissions, model settings,
+# and any hooks the project added for itself. Fixes can live entirely in that
+# wiring (1.0.3's write-tool matcher and per-hook timeouts both did), so a
+# refresh that copied hook bytes and reported success would install neither
+# while claiming the instance is current.
+#
+# READ THE STRUCTURE, NEVER THE TEXT (rewritten in 1.0.4). The 1.0.3 cut of
+# this block grepped the file, and grep cannot see JSON. Two defects, both
+# found in the field and both reproduced in the suite below:
+#   - It counted `grep -c` hits, which counts LINES, not occurrences. Against a
+#     minified settings.json (Claude Code rewrites this file when a user
+#     toggles config) four command entries carrying one timeout read as
+#     "1 and 1", the comparison balanced, and the refresh exited 0 over three
+#     untimed hooks. A check that cannot evaluate its predicate passing as
+#     clean is backlog item 19 verbatim, inside the block written to enforce it.
+#   - It counted EVERY command hook and matched `NotebookEdit` anywhere in the
+#     file. A project's own prettier hook with no timeout produced a permanent
+#     INCOMPLETE that no edit to Setlist's own wiring could clear, and a
+#     foreign hook merely MENTIONING NotebookEdit masked a stale scope matcher.
+# jq is guaranteed present here: this script has already refused without it.
+# So the checks below address the four entries this plugin owns, identified by
+# their command path, and ignore every hook the project added for itself.
 SETTINGS="$INSTANCE/.claude/settings.json"
 WIRING_GAPS=""
 if [[ ! -f "$SETTINGS" ]]; then
   WIRING_GAPS="  .claude/settings.json is missing entirely; the hooks are stamped but nothing runs them."
+elif ! jq -e . "$SETTINGS" >/dev/null 2>&1; then
+  WIRING_GAPS="  .claude/settings.json does not parse as JSON, so the wiring cannot be
+  read at all. Fix the file, then re-run: this check does not guess."
 else
-  if ! grep -q 'NotebookEdit' "$SETTINGS"; then
+  # Our own hook entries: the ones whose command points into .claude/hooks/.
+  OURS='[.hooks | to_entries[] | .value[]? | .hooks[]? | select((.command // "") | test("\\.claude/hooks/"))]'
+
+  # The scope hook is identified by its command, and only ITS matcher is read.
+  SCOPE_MATCHER="$(jq -r '[.hooks.PreToolUse[]?
+      | select(any(.hooks[]?; (.command // "") | test("scope-hook\\.sh")))
+      | .matcher // ""] | first // "<unwired>"' "$SETTINGS")"
+  if [[ "$SCOPE_MATCHER" == "<unwired>" ]]; then
     WIRING_GAPS="$WIRING_GAPS
-  the scope hook's matcher does not cover NotebookEdit. Set it to
-    \"matcher\": \"Write|Edit|MultiEdit|NotebookEdit\"
+  the scope hook is not wired in PreToolUse at all, so the trunk rule never runs."
+  elif [[ "$SCOPE_MATCHER" != *NotebookEdit* ]]; then
+    WIRING_GAPS="$WIRING_GAPS
+  the scope hook's matcher is \"$SCOPE_MATCHER\", which does not cover
+  NotebookEdit. Set that entry's matcher to
+    \"Write|Edit|MultiEdit|NotebookEdit\"
   or a notebook write reaches the trunk without tripping the scope rule."
   fi
-  # grep -c PRINTS 0 and EXITS 1 when it matches nothing, so a `|| printf 0`
-  # fallback appends a second zero and the comparison below becomes a bash
-  # syntax error, which evaluates false and passes the check silently. That is
-  # this release's own defect class inside the check that hunts for it; the
-  # suite caught it. Take grep's output, and only default when it is empty.
-  HOOK_ENTRIES="$(grep -c '"type": *"command"' "$SETTINGS" 2>/dev/null || true)"
-  TIMEOUT_KEYS="$(grep -c '"timeout"' "$SETTINGS" 2>/dev/null || true)"
-  [[ -n "$HOOK_ENTRIES" ]] || HOOK_ENTRIES=0
-  [[ -n "$TIMEOUT_KEYS" ]] || TIMEOUT_KEYS=0
-  if [[ "$HOOK_ENTRIES" -gt 0 && "$TIMEOUT_KEYS" -lt "$HOOK_ENTRIES" ]]; then
+
+  # Timeouts, on OUR entries only, and the message names each offender.
+  UNTIMED="$(jq -r "$OURS"' | map(select(.timeout == null))
+      | map((.command // "") | split("/") | last | sub("\"$"; ""))
+      | join(", ")' "$SETTINGS")"
+  if [[ -n "$UNTIMED" ]]; then
     WIRING_GAPS="$WIRING_GAPS
-  $HOOK_ENTRIES command hooks are wired but only $TIMEOUT_KEYS carry an explicit
-  \"timeout\". A hook the harness cancels is a gate that did not run; the close
-  gate re-runs the full suite and needs the most room (the template ships 1800)."
+  these Setlist hook entries carry no explicit \"timeout\": $UNTIMED
+  A hook the harness cancels is a gate that did not run, verified live on
+  Claude Code 2.1.x: a hook exceeding its timeout is dropped and the tool call
+  PROCEEDS. The value is in SECONDS. The template ships 120 for the scope
+  hook, 300 for the commit gate, 1800 for the close gate (it re-runs your full
+  suite), and 60 for the re-grounding hook."
   fi
 fi
 

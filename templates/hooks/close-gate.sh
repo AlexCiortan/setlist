@@ -12,6 +12,13 @@
 # ref via `git show <ref>:<path>`, never the working tree.
 # Deny mechanic verified live 2026-07-04 on Claude Code 2.1.200: JSON
 # permissionDecision output, exit 0; the reason reaches the agent verbatim.
+# Hook TIMEOUT verified live 2026-07-25 on Claude Code 2.1.x, both directions,
+# because this gate re-runs the project's whole suite and is the entry most
+# likely to run long. The unit is SECONDS, and the key is honoured: a hook
+# sleeping 3s under "timeout": 10 delivered its deny, and the same hook under
+# "timeout": 1 was CANCELLED and the tool call PROCEEDED. That second result is
+# the fail-open this gate's timeout exists to prevent, so it is measured here
+# rather than assumed. The template ships 1800 (30 minutes) for this entry.
 # Requires jq, and FAILS CLOSED without it: a missing jq used to make every
 # extraction below return empty, every check fall through, and the gate allow
 # every merge unchecked. Disable with a one-line edit: remove this hook's entry
@@ -101,8 +108,22 @@ fi
 # so MERGED_REF came back empty and the gate exited silently, waving through
 # exactly the merge it exists to check. Fully-qualified and remote-tracking
 # spellings of the same branch did the same.
+# Only the arguments AFTER the merge subcommand are the merge's arguments
+# (1.0.4). Scanning the whole command line let a compound form donate tokens
+# it does not own: `git checkout spec/0001-x && git merge main` had the spec
+# branch read off the CHECKOUT and gated as though it were being merged, and
+# the same donation would have handed the named-ref test below the trunk name
+# out of `git checkout main && git merge $B`, re-opening the hole this block
+# exists to close. Taking the text after the LAST " merge " survives a commit
+# message that happens to contain the word.
+MERGE_ARGS="$CMD_NORM"
+case "$CMD_NORM" in
+  *" merge "*) MERGE_ARGS="${CMD_NORM##* merge }" ;;
+  *" merge")   MERGE_ARGS="" ;;
+esac
+
 MERGED_REF=""
-for word in $CMD_NORM; do
+for word in $MERGE_ARGS; do
   word="${word#refs/heads/}"
   word="${word#refs/remotes/}"
   word="${word#origin/}"
@@ -126,7 +147,38 @@ if [[ -z "$MERGED_REF" ]]; then
     # no permitted way to finish or back out.
     exit 0
   fi
-  deny "close gate: this merges into the trunk, but the command names no spec/ or chore/ branch literally, and indirect forms (a shell variable, -, @{-1}, FETCH_HEAD, a raw SHA) cannot be verified. Name the branch literally: git merge --no-ff spec/NNNN-slug. To sync the trunk from its remote, use git pull."
+
+  # A ref that is NAMED but is not a spec or chore branch is not a close, and
+  # this gate has never governed it. 1.0.3 denied it anyway, which broke
+  # `git merge origin/main` (syncing your own trunk) and any release or
+  # upstream branch, while `git pull` achieved the identical result and passed
+  # untouched: friction with no safety, and the deny message pointed at the
+  # bypass. The 1.0.4 rule separates the two cases 1.0.3 conflated. A ref is
+  # NAMED when a post-merge argument resolves to a commit in this repository
+  # and is not one of the forms whose target cannot be read off the command:
+  # a shell variable, -, @{...}, a bare SHA, or a pseudo-ref like FETCH_HEAD.
+  # Requiring it to RESOLVE is what keeps the message words of
+  # `git merge -m "closing spec" $B` from posing as a branch name.
+  NAMED_REF=""
+  for word in $MERGE_ARGS; do
+    case "$word" in
+      -*|*'$'*|*'`'*|@*|'') continue ;;
+      HEAD|FETCH_HEAD|ORIG_HEAD|MERGE_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD) continue ;;
+    esac
+    printf '%s' "$word" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/-]*$' || continue
+    printf '%s' "$word" | grep -qE '^[0-9a-f]{7,40}$' && continue
+    if git -C "$PROJ" rev-parse --verify --quiet "${word}^{commit}" >/dev/null 2>&1; then
+      NAMED_REF="$word"; break
+    fi
+  done
+  if [[ -n "$NAMED_REF" ]]; then
+    # fail-open-ok: $NAMED_REF resolves and is not a spec or chore branch, so
+    # this is a sync or integration merge, not a close; the close conditions
+    # are about a spec branch's own artifacts and have nothing to say here.
+    exit 0
+  fi
+
+  deny "close gate: this merges into the trunk, but no post-merge argument names a branch this gate can resolve. Indirect forms (a shell variable, -, @{-1}, FETCH_HEAD, a raw commit SHA) cannot be verified, so the close conditions cannot be checked at all. Name the branch literally: git merge --no-ff spec/NNNN-slug."
 fi
 
 # The ref must resolve; every check below reads the merged ref's committed

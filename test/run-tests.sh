@@ -726,15 +726,21 @@ instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken> [wi
     no-timeouts)   t1='' ; t2='' ; t3='' ;;
     missing)       return 0 ;;
   esac
+  # The command paths must be the REAL ones. The wiring check identifies this
+  # plugin's own hook entries by their command pointing into .claude/hooks/,
+  # so a fixture using a made-up path is not an instance: it is a settings file
+  # with no Setlist hooks in it, and every check would vacuously pass. Found by
+  # the 1.0.4 rewrite, and it is the same lesson the upgrade-seam leg exists
+  # for: a fixture is only evidence to the extent it matches the real artifact.
   cat > "$d/.claude/settings.json" <<SETTINGS
 {
   "hooks": {
     "PreToolUse": [
       { "matcher": "$matcher",
-        "hooks": [ { "type": "command", $t1 "command": "x/scope-hook.sh" } ] },
+        "hooks": [ { "type": "command", $t1 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/scope-hook.sh" } ] },
       { "matcher": "Bash",
-        "hooks": [ { "type": "command", $t2 "command": "x/commit-gate.sh" },
-                   { "type": "command", $t3 "command": "x/close-gate.sh" } ] }
+        "hooks": [ { "type": "command", $t2 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/commit-gate.sh" },
+                   { "type": "command", $t3 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/close-gate.sh" } ] }
     ]
   }
 }
@@ -1002,6 +1008,78 @@ run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "wiring g: current wiring refreshes completely and exits 0" 0 "refreshed the four stamped hooks"
 
 # =============================================================================
+# 1.0.4: the wiring check reads STRUCTURE, not text. Both directions, from two
+# field reviews of the shipped 1.0.3: it must not fire on hooks the project
+# owns, and it must not be defeated by JSON formatting.
+# =============================================================================
+
+# A project's own hooks are none of this check's business. A prettier hook with
+# no timeout produced a permanent INCOMPLETE in 1.0.3 that no edit to Setlist's
+# wiring could clear, because the demanded fix was editing someone else's hook.
+INST="$WORK/inst-foreign-hook"
+instance_fixture "$INST" 1.0.0 current
+jq '.hooks.PostToolUse=[{matcher:"Write",hooks:[{type:"command",command:"npx prettier --write"}]}]' \
+  "$INST/.claude/settings.json" > "$INST/t" && mv "$INST/t" "$INST/.claude/settings.json"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "wiring h: a foreign hook with no timeout does NOT make the refresh incomplete" 0 "refreshed the four stamped hooks"
+
+# grep -c counts LINES. Against a minified settings.json (Claude Code rewrites
+# this file when a user toggles config) four entries carrying one timeout read
+# as "1 and 1" in 1.0.3, balanced, and the refresh exited 0 over three untimed
+# hooks: a check that could not evaluate its predicate passing as clean.
+INST="$WORK/inst-minified"
+instance_fixture "$INST" 1.0.0 current
+jq -c '(.hooks.PreToolUse[1].hooks[]|.timeout) |= null | del(.hooks.PreToolUse[1].hooks[].timeout)' \
+  "$INST/.claude/settings.json" > "$INST/t" && mv "$INST/t" "$INST/.claude/settings.json"
+assert_true "wiring i0: the fixture really is minified and really is short a timeout" \
+  "the fixture is not one line, or carries every timeout, so case i proves nothing" \
+  test "$(wc -l < "$INST/.claude/settings.json")" -le 1
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "wiring i: a minified settings.json short a timeout is still caught" 3 "timeout"
+expect_script "wiring i2: and the report NAMES the offending entries" 3 "commit-gate.sh"
+
+# A foreign hook that merely MENTIONS NotebookEdit must not mask a stale scope
+# matcher: 1.0.3 grepped the whole file for the token.
+INST="$WORK/inst-masked-matcher"
+instance_fixture "$INST" 1.0.0 stale-matcher
+jq '.hooks.PostToolUse=[{matcher:"NotebookEdit",hooks:[{type:"command",command:"echo x",timeout:5}]}]' \
+  "$INST/.claude/settings.json" > "$INST/t" && mv "$INST/t" "$INST/.claude/settings.json"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "wiring j: a foreign hook naming NotebookEdit does not mask a stale scope matcher" 3 "Write|Edit"
+
+# Unparseable settings cannot be evaluated, so they are named, never assumed.
+INST="$WORK/inst-badjson"
+instance_fixture "$INST" 1.0.0 current
+printf '{ "hooks": \n' > "$INST/.claude/settings.json"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "wiring k: settings.json that does not parse is reported, not guessed at" 3 "does not parse"
+
+# =============================================================================
+# 1.0.4: a trunk merge that NAMES a resolvable non-spec ref is not a close.
+# 1.0.3 denied these, which broke syncing your own trunk while `git pull`
+# achieved the same result untouched: friction with no safety.
+# =============================================================================
+
+CL="$WORK/close-namedref"; close_fixture "$CL" yes yes answered yes no true
+git -C "$CL" branch -f release/2.0 HEAD
+git -C "$CL" update-ref refs/remotes/origin/main HEAD
+for spelling in 'git merge origin/main' 'git merge --no-ff release/2.0' 'git merge main'; do
+  run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$spelling")"
+  expect_allow "close-gate named: [$spelling] is a sync, not a close, and is allowed"
+done
+# A ref that does NOT resolve cannot vouch for the merge: message words must
+# not pose as branch names.
+run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git merge -m "closing spec" $B')"
+expect_deny "close-gate named: message words do not count as a named ref" "cannot be verified"
+# A compound must not donate the checkout's argument to the merge.
+run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git checkout main && git merge $B')"
+expect_deny "close-gate named: the compound form does not donate 'main' to the merge" "cannot be verified"
+# And the merge of a spec branch is still fully gated (0001 has no CLOSED row
+# here only because close_fixture built it compliant; use the real close).
+run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
+expect_allow "close-gate named: the compliant spec close still merges"
+
+# =============================================================================
 # 1.0.3, IN-1: an indirectly named trunk merge DENIES instead of passing.
 # The 1.0.1 fix widened the ref parser; these cases pin the DISPOSITION: when
 # the target is the trunk and the command matched the merge grammar but no
@@ -1151,6 +1229,21 @@ for hook in scope-hook commit-gate close-gate regrounding-hook; do
         "unannotated silent passes: $UNANNOTATED"
   fi
 done
+# The audit greps for `exit 0`, so a hook that simply FALLS OFF THE END has no
+# literal exit to annotate and passes the scan reporting nothing (1.0.4: found
+# by review, latent rather than live, since all four hooks end explicitly
+# today). A hook that ends by falling through exits with whatever its last
+# command returned, which is a silent pass nobody wrote down. Require the last
+# effective line of every hook to be an explicit exit.
+for hook in scope-hook commit-gate close-gate regrounding-hook; do
+  LAST="$(grep -vE '^[[:space:]]*(#|$)' "$HOOKS/$hook.sh" | tail -n1)"
+  case "$LAST" in
+    exit\ [0-9]*) ok "fail-open audit: $hook.sh ends with an explicit exit" ;;
+    *) bad "fail-open audit: $hook.sh ends with an explicit exit" \
+           "ends with '$LAST', so it falls through with the previous command's status: a silent pass with no annotation to audit" ;;
+  esac
+done
+
 # The audit must have exercised something: four hooks with zero annotations
 # between them means the scan broke, not that the hooks are clean.
 if [[ "$FOK_TOTAL" -ge 10 ]]; then
