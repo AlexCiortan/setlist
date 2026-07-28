@@ -991,17 +991,27 @@ re-grounding hook (new in v1.6):
   specific failure so the agent can fix and retry: the em-dash scan, the secret scan
   (token-shaped, connection-string-shaped, password-shaped strings), and
   STATUS-in-the-same-commit when the staged diff transitions a spec's lifecycle state.
-  A command that stages and commits in one step (`git add ... && git commit`, or
-  `git commit` with an auto-staging flag such as `-a`) is denied outright: the hook
+  A command that writes the index and commits in one step (`git add ... && git commit`,
+  or `git commit` with an auto-staging flag such as `-a`) is denied outright: the hook
   decides before the command runs, so only content already staged is scannable. Stage
-  first, then commit; the split is what makes the scan real.
+  first, then commit; the split is what makes the scan real. "Writes the index" is the
+  full set, not just `add`: `stash pop`, `restore --staged`, `reset`, a pathspec
+  `checkout`, a `--no-commit` merge or cherry-pick and the plumbing verbs all leave an
+  index the scan did not see, and enumerating only `add`, `rm` and `mv` let every other
+  one through until 1.0.7.
 - **The close gate** (Bash, `git merge` into the trunk): independently verifies the
   close conditions before any merge from a `spec/` or `chore/` branch: a complete
   Closing report with the pasted QA Pass 1 block and the answered diagram field, the
   CLOSED inventory row in STATUS.md, and a fresh green run of the gate command from
   `sdd.json`. Every content check reads the branch being merged
   (`git show <ref>:specs/...`), never the working tree, so the Closing report and the
-  CLOSED row count only once committed on the branch. The merge target is derived from
+  CLOSED row count only once committed on the branch. Reading the branch settles what
+  the artifacts say but not who wrote them, so the gate also requires the branch to
+  have MODIFIED its own spec file relative to the merge base: a branch cut after spec
+  NNNN closed inherits that spec entire, and reusing a CLOSED number would otherwise
+  carry unreviewed work onto the trunk against somebody else's Closing report. Writing
+  the Closing report into the spec is what closing a spec IS, so an honest close always
+  satisfies this. The merge target is derived from
   the command plus repo state, so the compound `git checkout <trunk> && git merge ...`
   form is gated exactly like the split form.
 - **The re-grounding hook** (SessionStart, new in v1.6): injects the read-budget pointer

@@ -119,10 +119,76 @@ REL="$(printf '%s' "$FILE_PATH" | tr -s '/')"
 REL="${REL#"$PROJ"/}"
 REL="${REL#"$PROJ_GIVEN"/}"
 while [[ "$REL" == ./* ]]; do REL="${REL#./}"; done
+
+# Slash squeezing and prefix stripping are not enough, because two spellings of
+# the SAME file were reaching two different verdicts: `src/app.js` denied,
+# while `docs/../src/app.js` and `srclink/app.js` (a symlinked role directory)
+# landed on the trunk in silence. Neither needs an attacker: `..` is what a
+# tool composing paths emits, and symlinked source directories are ordinary.
+# So the path is resolved to what the filesystem says it IS, and that answer is
+# authoritative. Done in shell rather than with realpath or readlink -f, which
+# macOS does not ship in the form this needs (the suite's bash 3.2 leg exists
+# for exactly this class of assumption).
+#
+# The file usually does not exist yet, since this hook runs BEFORE the write,
+# so resolution walks up to the nearest existing ancestor and re-attaches the
+# missing tail.
+# Lexical normalisation runs FIRST and always, because the filesystem cannot
+# help when the directories do not exist yet: this hook fires BEFORE the write,
+# and `docs/../src/app.js` in a project whose docs/ has not been created yet
+# resolves to nothing at all. Found by this hook's own suite fixture, whose
+# trunk carries no src/ directory: the physical resolution below silently
+# degraded to the string comparison it was added to replace, and the case that
+# was supposed to prove the fix passed for the old reason.
+lex_norm() { # lex_norm <relative-path> -> the same path with . and .. collapsed
+  local p="$1" out="" seg
+  local IFS=/
+  for seg in $p; do
+    case "$seg" in
+      ''|.) continue ;;
+      ..)   [[ -n "$out" ]] && out="${out%/*}" ;;
+      *)    out="$out/$seg" ;;
+    esac
+  done
+  printf '%s' "${out#/}"
+}
+
+canon_rel() { # canon_rel <path> -> path relative to the real project root
+  local p="$1" d b missing="" real
+  case "$p" in /*) ;; *) p="$PROJ/$p" ;; esac
+  d="$(dirname "$p")"; b="$(basename "$p")"
+  while [[ ! -d "$d" && "$d" != "/" && "$d" != "." && -n "$d" ]]; do
+    missing="$(basename "$d")/$missing"; d="$(dirname "$d")"
+  done
+  real="$(cd "$d" 2>/dev/null && pwd -P)" || return 1
+  printf '%s/%s%s' "$real" "$missing" "$b"
+}
+# PROJ is canonicalised the same way or the prefix strip cannot match: on macOS
+# TMPDIR itself lives behind a symlink, so a resolved path and an unresolved
+# project root never share a prefix.
+PROJ_REAL="$(cd "$PROJ" 2>/dev/null && pwd -P || printf '%s' "$PROJ")" # fail-open-ok: an unreachable project dir falls back to the given path, and the string comparison below then behaves exactly as it did before canonicalisation existed rather than skipping the check
+REL="$(lex_norm "$REL")"
+
+# Physical resolution on top, for what lexical normalisation cannot see: a
+# SYMLINKED role directory is a different file from the one its name suggests,
+# and only the filesystem knows. Both answers are checked against the role
+# paths below, and either one matching denies, because a gate that has two
+# readings of a path must take the stricter one.
+REL_PHYS=""
+CANON="$(canon_rel "$FILE_PATH" 2>/dev/null || true)" # fail-open-ok: a path that cannot be resolved leaves this empty, and the lexically normalised REL above is still checked against every role path below
+if [[ -n "$CANON" ]]; then
+  case "$CANON" in
+    "$PROJ_REAL"/*) REL_PHYS="${CANON#"$PROJ_REAL"/}" ;;
+    # Resolves outside the project entirely. The trunk rule is about THIS
+    # repository's role paths, so there is nothing here to govern, and no
+    # verdict is invented from it.
+  esac
+fi
 while IFS= read -r ROLE; do
   [[ -n "$ROLE" && "$ROLE" != "." ]] || continue
   ROLE="${ROLE%/}"
-  if [[ "$REL" == "$ROLE"/* || "$REL" == "$ROLE" ]]; then
+  if [[ "$REL" == "$ROLE"/* || "$REL" == "$ROLE" ]] \
+     || [[ -n "$REL_PHYS" && ( "$REL_PHYS" == "$ROLE"/* || "$REL_PHYS" == "$ROLE" ) ]]; then
     deny "feature code never lands directly on $TRUNK; open a spec or chore branch via /setlist:checkpoint."
   fi
 done <<< "$ROLE_PATHS"

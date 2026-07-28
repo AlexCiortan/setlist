@@ -9,6 +9,86 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 1.0.7
+
+Edition unchanged (v1.6). Two more bypasses closed, both in code 1.0.6 added,
+both found by an independent review of the shipped release, and both reachable
+by typing something ordinary. If you are on 1.0.6, this is the upgrade to take.
+
+**Wrapper flags that take a separate value no longer strand it.** 1.0.6 taught
+both gates to look past a wrapper like `nice` or `env`. It stripped the wrapper
+word and then stripped flags one word at a time, which is fine for a flag that
+carries its own value (`stdbuf -o0`) and wrong for one that does not: in
+`nice -n 5 git merge --no-ff spec/0001-x`, the `5` was left sitting at the
+front of the command, the gate no longer recognised the line as starting with
+git, and it was never judged at all. `env -u VAR git merge ...` went the same
+way. A flag is now consumed together with the value that follows it, with one
+exception that matters: the command word itself is never swallowed, so
+`env -i git merge ...` keeps its git.
+
+**Discarding working-tree changes no longer looks like switching branches.**
+`git checkout` is two commands sharing a name. With a branch it switches; with
+a path it throws away local edits and switches nothing. The gate recorded the
+argument as a branch either way, so `git checkout -- . && git merge --no-ff
+spec/0001-x` concluded the merge would run on a branch named `.`, decided that
+was not your trunk, and skipped every check. Discarding changes before a merge
+is something people and agents do constantly, so nobody had to be trying. The
+gate now tells the two apart: a real branch is tracked, an existing path leaves
+the branch alone, anything after `--` is a path by definition, and an argument
+that is neither refuses rather than guessing. `git restore` was never affected
+and `git switch` needs none of this, because switch only ever takes a branch.
+
+Both classes are now generated corpus axes in the test suite rather than
+example cases, so they stay closed. The suite also checks that every shipped
+skill's frontmatter parses, after `design-surface` shipped from 1.0.0 through
+1.0.6 with an unquoted colon in its description: at runtime that skill loaded
+with all of its metadata silently dropped, and the release gate that was
+supposed to catch it had been pointed at the wrong manifest.
+
+**Staging is more than `git add`.** The commit gate refuses a command that
+writes the index and commits in one step, because it decides before the command
+runs and would otherwise scan an index that does not hold your content yet. It
+recognised `add`, `rm` and `mv`. Everything else that writes the index went
+through, so `git stash pop && git commit -m x` and
+`git restore --staged . && git commit -m x` committed content nothing had
+scanned. `git stage`, a plain synonym for `add`, was missing too. The full set
+is now recognised, and it is a generated corpus dimension checked against the
+gate's own list, so the next verb cannot go missing quietly.
+
+**A single `&` separates commands.** The gates split a command line on `&&`,
+`||`, `;`, `|` and newlines, but not on a lone `&`, which backgrounds what came
+before it and starts something new. So `echo hi & git merge --no-ff spec/0001-x`
+was read as one command beginning with `echo`, and the merge was never judged.
+`&&` is still one separator, not two, and an `&` inside a redirection such as
+`2>&1` still is not one.
+
+**A pathspec checkout is not a branch switch, even with a branch in front of
+it.** 1.0.7 already handled `git checkout -- .`. It did not handle
+`git checkout other-branch -- src/file`, which also restores files and switches
+nothing: the gate recorded a switch that never happens and judged the next merge
+against the wrong branch. The test is now the `--` separator itself, which is
+what git uses to tell its own two commands apart.
+
+**A closed spec's number cannot be reused to carry unreviewed work.** Every
+close check reads the spec file as it stands on the branch being merged, which
+settles what the artifacts say but not who wrote them. A branch cut from the
+trunk after spec 0001 closed inherits that spec, Closing report and all, so a
+branch named `spec/0001-anything` could merge arbitrary changes with no
+artifacts of its own and pass every check. The gate now requires the branch to
+have modified its own spec file. Writing the Closing report into the spec is
+what closing a spec is, so an honest close is unaffected, including the common
+case of planning a spec on the trunk and closing it on the branch.
+
+**Upgrades check that the gates are actually wired.** `refresh-instance.sh`
+verified your hook FILES were current and, separately, that the entries present
+in `.claude/settings.json` were well formed. It never checked the gates were
+there at all, so an instance with both gate entries deleted was reported as a
+complete refresh, exit 0, with a note that the refreshed gates would bind from
+the next session. They would never bind. It also claimed hooks it does not own:
+a hook of yours living in `.claude/hooks/` with no timeout was reported as a
+Setlist entry and produced an upgrade that could never be completed, because
+the fix it demanded was editing your own file. Ownership is now by name.
+
 ## 1.0.6
 
 Edition unchanged (v1.6). Two bypasses closed, both found by review of 1.0.5,

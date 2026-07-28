@@ -277,6 +277,13 @@ close_fixture() {
   sdd_json "$d" true main "$gate"
   git -C "$d" add .claude/sdd.json
   git -C "$d" commit -qm "sdd config"
+  # A SECOND spec branch, added 1.0.7. Several findings need a payload to NAME
+  # another spec branch, and until this existed such a payload named a branch
+  # that does not exist: the gate could not resolve it and denied for the wrong
+  # reason, so the assertion passed while testing nothing. A fixture that cannot
+  # express a finding must never be read as evidence against it.
+  git -C "$d" checkout -q -b spec/0002-other
+  git -C "$d" checkout -q main
   git -C "$d" checkout -q -b spec/0001-thing
   mkdir -p "$d/specs"
 
@@ -736,11 +743,13 @@ instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken> [wi
   # The settings wiring is the OTHER half of the enforcement layer, and the
   # refresh checks it without rewriting it (1.0.3). Fixtures default to the
   # current wiring so the direction cases below stay about direction.
-  local matcher='Write|Edit|MultiEdit|NotebookEdit' t1='"timeout": 120,' t2='"timeout": 300,' t3='"timeout": 1800,'
+  local matcher='Write|Edit|MultiEdit|NotebookEdit' t1='"timeout": 120,' t2='"timeout": 300,' t3='"timeout": 1800,' t4='"timeout": 60,'
+  local gates_block=1
   case "$wiring" in
     stale-matcher) matcher='Write|Edit' ;;
-    no-timeouts)   t1='' ; t2='' ; t3='' ;;
+    no-timeouts)   t1='' ; t2='' ; t3='' ; t4='' ;;
     missing)       return 0 ;;
+    no-gates)      gates_block=0 ;;
   esac
   # The command paths must be the REAL ones. The wiring check identifies this
   # plugin's own hook entries by their command pointing into .claude/hooks/,
@@ -748,19 +757,38 @@ instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken> [wi
   # with no Setlist hooks in it, and every check would vacuously pass. Found by
   # the 1.0.4 rewrite, and it is the same lesson the upgrade-seam leg exists
   # for: a fixture is only evidence to the extent it matches the real artifact.
+  #
+  # ALL FOUR hooks are wired, including the SessionStart re-grounding hook. Until
+  # 1.0.7 this fixture wired three and omitted SessionStart, so it was not an
+  # instance: it was an instance with a hook permanently disarmed, and every case
+  # built on it asserted against a shape no scaffold produces. It went unnoticed
+  # because nothing yet checked that a stamped hook was wired AT ALL, which is
+  # the same blind spot as the defect (B5) that made this check necessary. The
+  # fixture and the checker were incomplete in exactly the same place.
+  local gates=''
+  if [[ "$gates_block" -eq 1 ]]; then
+    gates=",
+      { \"matcher\": \"Bash\",
+        \"hooks\": [ { \"type\": \"command\", $t2 \"command\": \"\\\"\$CLAUDE_PROJECT_DIR\\\"/.claude/hooks/commit-gate.sh\" },
+                   { \"type\": \"command\", $t3 \"command\": \"\\\"\$CLAUDE_PROJECT_DIR\\\"/.claude/hooks/close-gate.sh\" } ] }"
+  fi
   cat > "$d/.claude/settings.json" <<SETTINGS
 {
   "hooks": {
     "PreToolUse": [
       { "matcher": "$matcher",
-        "hooks": [ { "type": "command", $t1 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/scope-hook.sh" } ] },
-      { "matcher": "Bash",
-        "hooks": [ { "type": "command", $t2 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/commit-gate.sh" },
-                   { "type": "command", $t3 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/close-gate.sh" } ] }
+        "hooks": [ { "type": "command", $t1 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/scope-hook.sh" } ] }$gates
+    ],
+    "SessionStart": [
+      { "hooks": [ { "type": "command", $t4 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/regrounding-hook.sh" } ] }
     ]
   }
 }
 SETTINGS
+  jq -e . "$d/.claude/settings.json" >/dev/null 2>&1 || {
+    printf 'instance_fixture: produced settings.json that does not parse (wiring=%s)\n' "$wiring" >&2
+    return 1
+  }
 }
 
 marker_intact() { # marker_intact <dir>
@@ -1038,6 +1066,68 @@ jq '.hooks.PostToolUse=[{matcher:"Write",hooks:[{type:"command",command:"npx pre
   "$INST/.claude/settings.json" > "$INST/t" && mv "$INST/t" "$INST/.claude/settings.json"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "wiring h: a foreign hook with no timeout does NOT make the refresh incomplete" 0 "refreshed the four stamped hooks"
+
+# THE SAME CASE IN ITS REAL SHAPE (1.0.7, F23). The fixture above puts the
+# foreign hook's command at `npx prettier --write`, which is not a path into
+# .claude/hooks/ at all, so it was excluded by the one condition 1.0.4's
+# selector actually tested. A project hook LIVING WHERE PROJECT HOOKS LIVE was
+# never tried, and that is the case that still failed: the selector matched the
+# directory, so .claude/hooks/prettier.sh counted as Setlist's, and its missing
+# timeout produced an exit 3 no edit to Setlist's wiring could clear.
+#
+# A fixture that cannot express a finding is not evidence against it. This case
+# carried the name of the defect for three releases while testing the one
+# spelling that already worked.
+INST="$WORK/inst-foreign-hook-in-dir"
+instance_fixture "$INST" 1.0.0 current
+printf '#!/usr/bin/env bash\nexit 0\n' > "$INST/.claude/hooks/prettier.sh"
+chmod +x "$INST/.claude/hooks/prettier.sh"
+jq '.hooks.PostToolUse=[{matcher:"Write",hooks:[{type:"command",command:"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prettier.sh"}]}]' \
+  "$INST/.claude/settings.json" > "$INST/t" && mv "$INST/t" "$INST/.claude/settings.json"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "wiring h2: a foreign hook INSIDE .claude/hooks/ is still not Setlist's" 0 "refreshed the four stamped hooks"
+if printf '%s' "$SCRIPT_OUT" | grep -q prettier; then
+  bad "wiring h2: the report must not name a hook the project owns" \
+      "prettier.sh was named as a Setlist entry: $SCRIPT_OUT"
+else
+  ok "wiring h2: the report does not name the project's own hook"
+fi
+
+# THE GATES MUST BE WIRED AT ALL (1.0.7, B5/F5). Every wiring case above finds
+# fault with an entry that is PRESENT: a stale matcher, a missing timeout, a
+# malformed file. Delete the two gate entries outright and there was nothing
+# left to object to, so the refresh reported a complete apply, exit 0, and told
+# the operator the refreshed gates would bind from the next session, of a pair
+# of gates that would never bind again.
+#
+# This is the seam that carried plugin 1.0.3's worst defect. An upgrade path
+# that certifies a disarmed instance is worse than no check at all: it turns
+# "verify this yourself" into "this was verified".
+INST="$WORK/inst-gates-unwired"
+instance_fixture "$INST" 1.0.0 no-gates
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "wiring m: both gates unwired exits INCOMPLETE and names them" 3 "commit-gate.sh" "close-gate.sh"
+
+# The hook FILES are current in that instance, which is the whole trap: byte
+# freshness and enforcement are different claims, and the first was being
+# reported as though it settled the second.
+if cmp -s "$HOOKS/commit-gate.sh" "$INST/.claude/hooks/commit-gate.sh"; then
+  ok "wiring m2: the unwired instance's hook bytes ARE current, so freshness is not enforcement"
+else
+  bad "wiring m2: the unwired instance's hook bytes should still have been refreshed" \
+      "an INCOMPLETE refresh still copies the files; only the wiring is outstanding"
+fi
+
+# And the inverse, so "names them" cannot be satisfied by naming them always.
+INST="$WORK/inst-gates-wired"
+instance_fixture "$INST" 1.0.0 current
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+if printf '%s' "$SCRIPT_OUT" | grep -q 'NOTHING IN'; then
+  bad "wiring m3: a fully wired instance must not be reported as unwired" \
+      "the unwired message fired on a complete instance: $SCRIPT_OUT"
+else
+  ok "wiring m3: a fully wired instance is not reported as unwired"
+fi
 
 # grep -c counts LINES. Against a minified settings.json (Claude Code rewrites
 # this file when a user toggles config) four entries carrying one timeout read
@@ -1420,6 +1510,82 @@ else
       "these reached the trunk with the close conditions unevaluated:$CORPUS_DENY_FAIL"
 fi
 
+# --- the SPEC-NUMBER-REUSE axis (1.0.7, B4) ---------------------------------
+# Every close-gate check reads the spec file as it stands on the branch, which
+# is right, and says nothing about WHO WROTE IT. A branch cut from the trunk
+# after spec NNNN closed inherits that spec, Closing report and all, so reusing
+# a CLOSED number as a branch name carries unreviewed work onto the trunk
+# against somebody else's evidence, and the trunk audit then calls it compliant
+# because it reads the same inherited artifacts.
+#
+# Reproduced by hand 2026-07-27. It was the one BLOCKER on the standing list
+# that had never been replayed, and three of eleven claims in an earlier intake
+# did not survive verification, so it got a repro before it got a fix.
+reuse_fixture() { # reuse_fixture <dir> <where-the-spec-is-written: branch|trunk|inherited>
+  local d="$1" mode="$2"
+  rm -rf "$d"; mkdir -p "$d/specs" "$d/.claude" "$d/src"
+  git_init "$d"
+  sdd_json "$d" true main true
+  printf 'x\n' > "$d/src/a.txt"
+  git -C "$d" add -A && git -C "$d" commit -qm init
+  git -C "$d" branch -M main
+
+  # A legitimate spec 0001, closed and merged the honest way.
+  git -C "$d" checkout -q -b spec/0001-thing
+  { printf '# Spec 0001 - thing\n\nStatus: CLOSED\n\n## Closing report\n\n'
+    printf -- '- QA Pass 1 report (pasted verbatim):\n\ncriterion 1: PASS\n\n'
+    printf -- '- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n'
+  } > "$d/specs/0001-thing.md"
+  { printf '# Spec inventory\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n'
+    printf '| 0001 | Thing | CLOSED | shipped |\n'
+  } > "$d/specs/STATUS.md"
+  git -C "$d" add -A && git -C "$d" commit -qm "spec 0001 closed"
+  git -C "$d" checkout -q main
+  git -C "$d" merge -q --no-ff spec/0001-thing -m "close 0001"
+
+  case "$mode" in
+    inherited)
+      # THE DEFECT: a new branch reusing number 0001, contributing code but no
+      # spec of its own. It inherits 0001-thing.md from the trunk.
+      git -C "$d" checkout -q -b spec/0001-sneaky
+      printf 'unreviewed\n' >> "$d/src/a.txt"
+      git -C "$d" add -A && git -C "$d" commit -qm "unspecified work on a reused number"
+      ;;
+    trunk)
+      # THE COMMON LEGITIMATE PATH, and the one a careless repair breaks: the
+      # spec file is created on the trunk during planning, and the BRANCH adds
+      # the Closing report to it. The blob exists at the merge base and differs
+      # at the tip, which is exactly what authorship looks like.
+      { printf '# Spec 0002 - planned\n\nStatus: ACTIVE\n'; } > "$d/specs/0002-planned.md"
+      git -C "$d" add -A && git -C "$d" commit -qm "spec 0002 planned on the trunk"
+      git -C "$d" checkout -q -b spec/0002-planned
+      { printf '# Spec 0002 - planned\n\nStatus: CLOSED\n\n## Closing report\n\n'
+        printf -- '- QA Pass 1 report (pasted verbatim):\n\ncriterion 1: PASS\n\n'
+        printf -- '- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n'
+      } > "$d/specs/0002-planned.md"
+      { printf '# Spec inventory\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n'
+        printf '| 0001 | Thing | CLOSED | shipped |\n| 0002 | Planned | CLOSED | shipped |\n'
+      } > "$d/specs/STATUS.md"
+      git -C "$d" add -A && git -C "$d" commit -qm "close 0002"
+      ;;
+  esac
+  git -C "$d" checkout -q main
+}
+
+CR="$WORK/close-reuse"; reuse_fixture "$CR" inherited
+assert_true "close-gate reuse0: the fixture really did close 0001 onto the trunk first" \
+  "0001-thing.md is not on the trunk, so the reused branch inherits nothing and this case proves nothing" \
+  git -C "$CR" cat-file -e "main:specs/0001-thing.md"
+assert_true "close-gate reuse0b: the reused branch really contributes no spec change" \
+  "the branch modifies its spec, so it is not the inherited-artifact case at all" \
+  test -z "$(git -C "$CR" diff --name-only main spec/0001-sneaky -- specs/)"
+run_hook "$HOOKS/close-gate.sh" "$CR" "$(bash_payload 'git merge --no-ff spec/0001-sneaky')"
+expect_deny "close-gate reuse a: a branch reusing a CLOSED spec number is denied" "does not modify"
+
+CR2="$WORK/close-reuse-ok"; reuse_fixture "$CR2" trunk
+run_hook "$HOOKS/close-gate.sh" "$CR2" "$(bash_payload 'git merge --no-ff spec/0002-planned')"
+expect_allow "close-gate reuse b: a spec planned on the trunk and CLOSED on the branch still passes"
+
 # --- the WRAPPER axis (1.0.6) -----------------------------------------------
 # The command-position test that fixed `echo git merge ...` introduced its own
 # false negative: a segment is only judged if it STARTS with git, and wrappers
@@ -1440,6 +1606,251 @@ if [[ -z "$CORPUS_WRAP_FAIL" ]]; then
 else
   bad "corpus wrappers: a wrapper prefix must not escape the gate ($CORPUS_WRAP_N generated)" \
       "these reached the trunk unchecked:$CORPUS_WRAP_FAIL"
+fi
+
+# --- the FLAG-VALUED WRAPPER axis (1.0.7) -----------------------------------
+# The 1.0.6 wrapper axis above covers wrappers that take no argument, and the
+# flag stripper it shipped with consumed dash flags one word at a time. A flag
+# that takes a SEPARATE value strands that value at the head of the segment:
+# `nice -n 5 git merge ...` strips `nice`, strips `-n`, and leaves `5 git merge
+# ...`, which fails the command-position test and is never judged at all.
+# `stdbuf -o0` survives only because its value is glued to the flag, which is
+# the accident that hid this. Found by an external review of the SHIPPED 1.0.6,
+# the second consecutive release whose bypass lived in a dimension the corpus
+# did not have.
+CORPUS_FLAGWRAP_N=0
+CORPUS_FLAGWRAP_FAIL=""
+# `timeout` is deliberately NOT here: it is not in either hook's wrapper
+# allowlist, which the hooks say plainly is not a claim of completeness, and it
+# is asserted below as a documented pass PAIRED with the trunk audit that
+# catches it. Demanding a deny here would have quietly expanded the allowlist
+# as a side effect of writing a regression test, which is a decision, not a fix.
+for wrap in 'nice -n 5 ' 'LANG=C nice -n 5 ' 'env -u FOO ' 'env -i ' 'nice -n 5 nohup ' \
+            'stdbuf -o0 ' 'stdbuf -o 0 ' 'time nice -n 5 '; do
+  for tail in 'git merge --no-ff spec/0001-thing' 'git merge spec/0001-thing -m "close"'; do
+    CORPUS_FLAGWRAP_N=$((CORPUS_FLAGWRAP_N + 1))
+    [[ "$(corpus_verdict "${wrap}${tail}")" == "deny" ]] || CORPUS_FLAGWRAP_FAIL="$CORPUS_FLAGWRAP_FAIL
+    ${wrap}${tail}"
+  done
+done
+if [[ -z "$CORPUS_FLAGWRAP_FAIL" ]]; then
+  ok "corpus flag-valued wrappers: all $CORPUS_FLAGWRAP_N spellings are denied"
+else
+  bad "corpus flag-valued wrappers: a wrapper flag with a separate value must not escape the gate ($CORPUS_FLAGWRAP_N generated)" \
+      "these reached the trunk unchecked:$CORPUS_FLAGWRAP_FAIL"
+fi
+
+# The false-positive direction, which matters as much (law 3): stripping a flag
+# and its value must not start eating the command itself.
+CORPUS_FLAGWRAP_ALLOW_FAIL=""
+for cmd in 'nice -n 5 git status' \
+           'env -u GIT_DIR git log --oneline' \
+           'nice -n 5 git merge origin/main' \
+           'LANG=C git merge origin/main' \
+           'env -i git fetch origin'; do
+  [[ "$(corpus_verdict "$cmd")" == "allow" ]] || CORPUS_FLAGWRAP_ALLOW_FAIL="$CORPUS_FLAGWRAP_ALLOW_FAIL
+    $cmd"
+done
+if [[ -z "$CORPUS_FLAGWRAP_ALLOW_FAIL" ]]; then
+  ok "corpus flag-valued wrappers: ordinary wrapped commands still pass"
+else
+  bad "corpus flag-valued wrappers: ordinary wrapped commands must still pass" \
+      "these were denied:$CORPUS_FLAGWRAP_ALLOW_FAIL"
+fi
+
+# --- the DASH-VALUED FLAG and OPTION TERMINATOR axes (1.0.7) ----------------
+# The axis above generates flag values two ways, non-dash (`nice -n 5`) and
+# glued (`stdbuf -o0`), and both are values that LOOK like values. Neither
+# spelling below appears anywhere in it:
+#
+#   nice -n -5 git merge ...     a flag value that begins with a dash
+#   env -- git merge ...         the bare option terminator
+#
+# Both were DENIED by the shipped v1.0.6 and ALLOWED by 1.0.7 until this axis
+# existed: the flag stripper consumed `-n`, stranded `-5`, and the command-position
+# test then found no git to judge. The terminator matched none of its branches
+# at all and sat at the head of the segment doing the same thing.
+#
+# This is the fourth consecutive release whose bypass lived in a corpus
+# dimension nobody had written down, and the first where the differential
+# strictness gate ALSO missed it, reporting "no undeclared relaxation" while two
+# of its own regressions were live underneath. A generated corpus only varies
+# what somebody listed; the list is the artifact that needs reviewing, and it is
+# the reason this block exists rather than two more literal cases.
+CORPUS_DASHVAL_N=0
+CORPUS_DASHVAL_FAIL=""
+# The NON-ALPHABETIC dash flag was added after a hostile run found it: the axis
+# above was written with alphabetic flags only (`nice -n -5`), so `nice -5`,
+# where the FLAG itself is not a letter, matched none of the stripper branches
+# and stayed stranded at the head of the segment. v1.0.6 denied it. The author of
+# the axis directly above missed it while writing a commit message about exactly
+# this failure mode, which is the most direct evidence available that a
+# dimension list written from imagination is not a dimension list.
+for wrap in 'nice -n -5 ' 'nice -n -5 nohup ' 'LANG=C nice -n -5 ' \
+            'nice -5 ' 'nice -5 nohup ' 'LANG=C nice -5 ' 'nice --5 ' \
+            'env -- ' 'command -- ' 'env -i -- ' 'env -u FOO -- ' \
+            'nice -n -5 env -- ' 'time nice -n -5 ' 'time nice -5 '; do
+  for tail in 'git merge --no-ff spec/0001-thing' 'git merge spec/0001-thing -m "close"'; do
+    CORPUS_DASHVAL_N=$((CORPUS_DASHVAL_N + 1))
+    [[ "$(corpus_verdict "${wrap}${tail}")" == "deny" ]] || CORPUS_DASHVAL_FAIL="$CORPUS_DASHVAL_FAIL
+    ${wrap}${tail}"
+  done
+done
+if [[ -z "$CORPUS_DASHVAL_FAIL" ]]; then
+  ok "corpus dash-valued flags and option terminators: all $CORPUS_DASHVAL_N spellings are denied"
+else
+  bad "corpus dash-valued flags and option terminators: these must not escape the gate ($CORPUS_DASHVAL_N generated)" \
+      "these reached the trunk unchecked:$CORPUS_DASHVAL_FAIL"
+fi
+
+# The false-positive direction. Stripping a dash-leading value must never eat
+# the command word itself, and `env -i git ...` is the case that makes this
+# delicate: git sits exactly where a value would.
+CORPUS_DASHVAL_ALLOW_FAIL=""
+for cmd in 'nice -n -5 git status' \
+           'nice -5 git status' \
+           'nice -5 git merge origin/main' \
+           'env -- git status' \
+           'env -i -- git log --oneline' \
+           'nice -n -5 git merge origin/main' \
+           'env -- git merge origin/main' \
+           'command -- git fetch origin'; do
+  [[ "$(corpus_verdict "$cmd")" == "allow" ]] || CORPUS_DASHVAL_ALLOW_FAIL="$CORPUS_DASHVAL_ALLOW_FAIL
+    $cmd"
+done
+if [[ -z "$CORPUS_DASHVAL_ALLOW_FAIL" ]]; then
+  ok "corpus dash-valued flags: ordinary commands behind them still pass"
+else
+  bad "corpus dash-valued flags: ordinary commands behind them must still pass" \
+      "these were denied:$CORPUS_DASHVAL_ALLOW_FAIL"
+fi
+
+# --- the NEWLINE-SEPARATOR axis (1.0.7) -------------------------------------
+# `tr -s '[:space:]' ' '` squeezes newlines into spaces before the segment
+# splitter runs, so a multi-line command collapses into ONE segment and only its
+# first command sits at command position. Everything after the first newline was
+# never judged by either gate. Found independently by two generators in the same
+# scoped run, which is what a dominant hole looks like.
+#
+# Pre-existing in v1.0.6, so it is a hole rather than a regression, and it is the
+# widest one on the list.
+# Built as explicit strings so the newline is unambiguous in the source.
+NL_PAYLOADS=(
+  "$(printf 'echo hi\ngit merge --no-ff spec/0001-thing')"
+  "$(printf 'set -e\ngit status --short\ngit merge --no-ff spec/0001-thing')"
+  "$(printf '# stage is ready\ngit merge spec/0001-thing -m "close"')"
+  "$(printf 'git status\n\ngit merge --no-ff spec/0001-thing')"
+)
+CORPUS_NL_N=0
+CORPUS_NL_FAIL=""
+for payload in "${NL_PAYLOADS[@]}"; do
+  CORPUS_NL_N=$((CORPUS_NL_N + 1))
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || CORPUS_NL_FAIL="$CORPUS_NL_FAIL
+    $(printf '%s' "$payload" | tr '\n' '~')"
+done
+if [[ -z "$CORPUS_NL_FAIL" ]]; then
+  ok "corpus newline separator: all $CORPUS_NL_N multi-line spellings are denied"
+else
+  bad "corpus newline separator: a git operation after a newline must not escape the gate ($CORPUS_NL_N generated)" \
+      "these reached the trunk unchecked (~ marks the newline):$CORPUS_NL_FAIL"
+fi
+
+# THE INVERSE, and it is the case that decides whether treating a newline as a
+# separator is safe at all: a newline INSIDE a quoted message must not split the
+# merge away from its branch argument. If it did, the fix for the case above
+# would hand back a bypass in exchange, which is the trade this repo has
+# accidentally made twice.
+NL_QUOTED_FAIL=""
+for payload in "$(printf 'git merge --no-ff -m "closes the spec\nnice work" spec/0001-thing')" \
+               "$(printf 'git merge --no-ff spec/0001-thing -m "line one\nline two"')"; do
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || NL_QUOTED_FAIL="$NL_QUOTED_FAIL
+    $(printf '%s' "$payload" | tr '\n' '~')"
+done
+if [[ -z "$NL_QUOTED_FAIL" ]]; then
+  ok "corpus newline separator: a newline inside a merge message does not split the merge from its branch"
+else
+  bad "corpus newline separator: a quoted newline must not turn a deny into a bypass" \
+      "these escaped (~ marks the newline):$NL_QUOTED_FAIL"
+fi
+
+
+
+# --- the AMPERSAND-SEPARATOR axis (1.0.7) -----------------------------------
+# The splitter handled &&, ||, ;, | and (since the axis above) newlines. A SINGLE
+# & backgrounds the preceding command and starts a new one, exactly as ; does,
+# and it was not a separator at all, so:
+#
+#     echo hi & git merge --no-ff spec/0001-thing
+#
+# collapsed into ONE segment whose command word was `echo`, and the merge was
+# never judged. Pre-existing in v1.0.6, found by the hostile leg as F8.
+AMP_N=0; AMP_FAIL=""
+for payload in \
+  'echo hi & git merge --no-ff spec/0001-thing' \
+  'sleep 1 & git merge --no-ff spec/0001-thing' \
+  'echo hi & git merge spec/0001-thing -m "close"' \
+  'git status & git merge --no-ff spec/0001-thing' \
+  'echo a & echo b & git merge --no-ff spec/0001-thing' \
+  'git merge --no-ff spec/0001-thing & echo done' \
+  ; do
+  AMP_N=$((AMP_N + 1))
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || AMP_FAIL="$AMP_FAIL
+    $payload"
+done
+if [[ -z "$AMP_FAIL" ]]; then
+  ok "corpus ampersand separator: all $AMP_N backgrounded spellings are denied"
+else
+  bad "corpus ampersand separator: a merge after a single & must not escape the gate" \
+      "these reached the trunk unchecked:$AMP_FAIL"
+fi
+
+# THE INVERSE, which the intake called out by name: && must not be split into
+# two & separators. POSIX ERE alternation is leftmost-longest so it is not, but
+# "the awk on the reviewer's machine" is the assumption the macOS leg exists to
+# doubt, and an && that silently became two separators would put an empty
+# segment between every pair of commands on every line this gate ever sees.
+AMP_PAIR="$(printf 'a && b & c\n' | awk '{ gsub(/&&|\|\||[;|()&]/, "\n"); print }' | grep -c .)"
+if [[ "$AMP_PAIR" -eq 3 ]]; then
+  ok "corpus ampersand separator: && is one separator, not two (a && b & c splits into 3, not 4)"
+else
+  bad "corpus ampersand separator: && must not split into two & separators" \
+      "'a && b & c' produced $AMP_PAIR non-empty segments, expected 3. This awk is not leftmost-longest."
+fi
+
+# And the ordinary && line must still behave, which is the assertion that would
+# catch the above turning into a bypass rather than merely into noise.
+AMP_AND_FAIL=""
+for payload in \
+  'git status && git merge --no-ff spec/0001-thing' \
+  'echo hi && git merge --no-ff spec/0001-thing' \
+  ; do
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || AMP_AND_FAIL="$AMP_AND_FAIL
+    $payload"
+done
+if [[ -z "$AMP_AND_FAIL" ]]; then
+  ok "corpus ampersand separator: && lines are unaffected by the & repair"
+else
+  bad "corpus ampersand separator: adding & as a separator must not break &&" \
+      "these stopped being denied:$AMP_AND_FAIL"
+fi
+
+# A redirection contains an ampersand that is NOT a separator. Splitting `2>&1`
+# yields the fragments `2>` and `1`, neither of which is a command, so the git
+# operation on the line must still be found and judged. This is the false-DENY
+# and false-ALLOW pair for the same character.
+AMP_REDIR_FAIL=""
+for payload in \
+  'git merge --no-ff spec/0001-thing 2>&1' \
+  'git merge --no-ff spec/0001-thing >/dev/null 2>&1' \
+  ; do
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || AMP_REDIR_FAIL="$AMP_REDIR_FAIL
+    $payload"
+done
+if [[ -z "$AMP_REDIR_FAIL" ]]; then
+  ok "corpus ampersand separator: an ampersand inside a redirection does not hide the merge"
+else
+  bad "corpus ampersand separator: 2>&1 must not split a merge away from command position" \
+      "these stopped being denied:$AMP_REDIR_FAIL"
 fi
 
 # --- the CHECKOUT-TARGET axis (1.0.6) ---------------------------------------
@@ -1475,6 +1886,183 @@ else
       "these merged an unclosed spec into the trunk with no checks:$CORP_DASH_FAIL"
 fi
 
+# --- the PATHSPEC-CHECKOUT axis (1.0.7) -------------------------------------
+# `git checkout -- .` and `git checkout .` do not switch branches at all: they
+# discard working-tree changes, which is something agents do constantly right
+# before merging. The tracker read the argument as a branch name, concluded the
+# merge would run on a branch called ".", and skipped it as non-trunk. That is
+# the `checkout -` defect class one door down: an argument that is not a branch
+# name recorded as one, producing a CONFIDENT WRONG ANSWER rather than a
+# fall-through. `git restore .` was always safe because restore never touches
+# the tracker. Found by an external review of the shipped 1.0.6; the file-path
+# spellings below were found while reproducing it, and widen the class beyond
+# the dot the report named.
+CORP_PATH="$WORK/corpus-pathspec"
+close_fixture "$CORP_PATH" no no answered no no true
+path_verdict() {
+  local out
+  out="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$CORP_PATH" bash "$HOOKS/close-gate.sh" 2>/dev/null)"
+  if [[ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)" == "deny" ]]; then
+    printf 'deny'; else printf 'allow'; fi
+}
+assert_true "corpus pathspec0: the fixture is standing on the trunk" \
+  "the fixture is not on main, so a merge segment would be skipped for the RIGHT reason and these cases would prove nothing" \
+  test "$(git -C "$CORP_PATH" branch --show-current)" = "main"
+CORP_PATH_FAIL=""
+for c in 'git checkout -- . && git merge --no-ff spec/0001-thing' \
+         'git checkout . && git merge --no-ff spec/0001-thing' \
+         'git checkout src/app.js && git merge --no-ff spec/0001-thing' \
+         'git checkout -- src/app.js && git merge --no-ff spec/0001-thing' \
+         'git checkout -f -- . && git merge --no-ff spec/0001-thing' \
+         'git checkout ./src && git merge --no-ff spec/0001-thing'; do
+  [[ "$(path_verdict "$c")" == "deny" ]] || CORP_PATH_FAIL="$CORP_PATH_FAIL
+    $c"
+done
+if [[ -z "$CORP_PATH_FAIL" ]]; then
+  ok "corpus pathspec: discarding working-tree changes does not move the tracked branch"
+else
+  bad "corpus pathspec: a pathspec checkout must not be read as a branch switch" \
+      "these merged an unclosed spec into the trunk with no checks:$CORP_PATH_FAIL"
+fi
+
+# The TREE-ISH pathspec form (1.0.7, B3). The cases above all have nothing
+# before the `--`, so no branch candidate was found and the tracker fell
+# through. Put a real branch in front of the separator and a candidate IS found:
+#
+#     git checkout spec/0002-other -- src/a.txt && git merge --no-ff spec/0001-thing
+#
+# switches nothing, but the tracker recorded a switch to spec/0002-other, judged
+# the merge as ordinary feature work, and skipped it. The branch has to EXIST for
+# this to reproduce, which is why the fixture below needs a second spec branch:
+# the first cut of the replay fixture had only one, so any payload naming a
+# second denied for the wrong reason and passed while testing nothing.
+assert_true "corpus pathspec-treeish0: the fixture has a second spec branch to name" \
+  "without a second EXISTING branch these payloads deny for the wrong reason and assert nothing" \
+  git -C "$CORP_PATH" rev-parse --verify --quiet spec/0002-other
+CORP_TI_FAIL=""
+for c in 'git checkout spec/0002-other -- src/a.txt && git merge --no-ff spec/0001-thing' \
+         'git checkout spec/0002-other -- . && git merge --no-ff spec/0001-thing' \
+         'git checkout main -- src/app.js && git merge --no-ff spec/0001-thing' \
+         'git checkout HEAD -- src/app.js && git merge --no-ff spec/0001-thing' \
+         'git checkout -f spec/0002-other -- src/a.txt && git merge --no-ff spec/0001-thing' \
+         'git checkout spec/0002-other -- src/a.txt src/b.txt && git merge spec/0001-thing -m close'; do
+  [[ "$(path_verdict "$c")" == "deny" ]] || CORP_TI_FAIL="$CORP_TI_FAIL
+    $c"
+done
+if [[ -z "$CORP_TI_FAIL" ]]; then
+  ok "corpus pathspec: a tree-ish before a -- pathspec does not move the tracked branch"
+else
+  bad "corpus pathspec: git checkout <tree-ish> -- <path> restores files and switches nothing" \
+      "these merged an unclosed spec into the trunk with no checks:$CORP_TI_FAIL"
+fi
+
+# The interaction the intake named. A bare `--` at the HEAD of a segment is an
+# option terminator that strip_wrappers removes; a `--` after the checkout verb
+# is a pathspec separator that this tracker reads. The two positions must not be
+# confused, so both are exercised on the same line.
+CORP_TI_MIX_FAIL=""
+for c in 'env -- git checkout spec/0002-other -- src/a.txt && git merge --no-ff spec/0001-thing' \
+         'env -- git merge --no-ff spec/0001-thing' \
+         'nice -n 5 git checkout spec/0002-other -- . && git merge --no-ff spec/0001-thing'; do
+  [[ "$(path_verdict "$c")" == "deny" ]] || CORP_TI_MIX_FAIL="$CORP_TI_MIX_FAIL
+    $c"
+done
+if [[ -z "$CORP_TI_MIX_FAIL" ]]; then
+  ok "corpus pathspec: the head -- option terminator and the pathspec -- do not confuse each other"
+else
+  bad "corpus pathspec: a wrapper's -- and a pathspec's -- occupy different positions and must stay distinct" \
+      "these escaped:$CORP_TI_MIX_FAIL"
+fi
+
+# The false-positive direction for the tree-ish form specifically: a REAL switch
+# to that same branch, with no separator, must still be tracked as a switch. If
+# the repair above had keyed on the branch name instead of the separator, this
+# is the assertion that would have caught it.
+if [[ "$(path_verdict 'git checkout spec/0002-other && git merge --no-ff main')" == "allow" ]]; then
+  ok "corpus pathspec: the same branch without a -- separator is still a real switch"
+else
+  bad "corpus pathspec: git checkout <branch> with no separator must still track the switch" \
+      "the repair keyed on something other than the separator and broke ordinary branch switching"
+fi
+
+# An argument that is NEITHER a branch nor an existing path cannot be
+# classified, and an unclassifiable branch must fail closed rather than read as
+# "some other branch". This is the sentinel the 1.0.6 fix introduced, reused.
+if [[ "$(path_verdict 'git checkout no-such-thing-at-all && git merge --no-ff spec/0001-thing')" == "deny" ]]; then
+  ok "corpus pathspec: an unresolvable checkout target fails closed on the sentinel"
+else
+  bad "corpus pathspec: an unresolvable checkout target must fail closed" \
+      "the gate decided it was on some other branch and skipped the merge"
+fi
+
+# The false-positive direction: a real branch switch must still be tracked, and
+# ordinary discarding on a feature branch must stay silent.
+CORP_PATH_ALLOW_FAIL=""
+for c in 'git checkout spec/0001-thing && git merge --no-ff main' \
+         'git checkout -- .' \
+         'git checkout . && git status'; do
+  [[ "$(path_verdict "$c")" == "allow" ]] || CORP_PATH_ALLOW_FAIL="$CORP_PATH_ALLOW_FAIL
+    $c"
+done
+if [[ -z "$CORP_PATH_ALLOW_FAIL" ]]; then
+  ok "corpus pathspec: real branch switches and plain discards still pass"
+else
+  bad "corpus pathspec: real branch switches and plain discards must still pass" \
+      "these were denied:$CORP_PATH_ALLOW_FAIL"
+fi
+
+# --- the RAW-OBJECT-NAME axis (1.0.7) ---------------------------------------
+# A raw commit name is an indirect form: it identifies the commit without
+# naming the branch, so the close conditions (which live in a branch's spec
+# file) cannot be checked. The gate knew that and skipped SHAs by SHAPE,
+# matching `[0-9a-f]{7,40}`. Every spelling outside that shape sailed through
+# instead: a 6-character abbreviation, the same oid uppercased, and in a
+# sha256 repository the 64-character oid. Shape was the wrong question. The
+# right one is whether git considers the word a REF, which is shape-free.
+CORP_OID="$WORK/corpus-oid"
+close_fixture "$CORP_OID" no no answered no no true
+OID="$(git -C "$CORP_OID" rev-parse spec/0001-thing)"
+oid_verdict() {
+  local out
+  out="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$CORP_OID" bash "$HOOKS/close-gate.sh" 2>/dev/null)"
+  if [[ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)" == "deny" ]]; then
+    printf 'deny'; else printf 'allow'; fi
+}
+assert_true "corpus oid0: the fixture resolves a real object name for the unclosed branch" \
+  "no oid, so every case below would be testing a word that resolves to nothing" \
+  test -n "$OID"
+CORP_OID_FAIL=""
+for spelling in "${OID:0:4}" "${OID:0:6}" "${OID:0:7}" "${OID:0:12}" "$OID" \
+                "$(printf '%s' "$OID" | tr 'a-f' 'A-F')" \
+                "$(printf '%s' "${OID:0:10}" | tr 'a-f' 'A-F')"; do
+  [[ "$(oid_verdict "git merge --no-ff $spelling")" == "deny" ]] || CORP_OID_FAIL="$CORP_OID_FAIL
+    git merge --no-ff $spelling"
+done
+if [[ -z "$CORP_OID_FAIL" ]]; then
+  ok "corpus raw object names: every spelling of a bare commit name is refused, not just the 7-to-40 lowercase shape"
+else
+  bad "corpus raw object names: a bare commit name must be refused whatever its shape" \
+      "these merged an unclosed spec into the trunk with the close conditions unevaluated:$CORP_OID_FAIL"
+fi
+# The false-positive direction: a real branch name that happens to look hexish
+# must still be treated as a branch, and ordinary syncs must still pass. The
+# remote ref has to EXIST for the sync case to mean anything: without it the
+# deny is the gate correctly refusing an unresolvable ref, which is a different
+# fact than the one under test.
+git -C "$CORP_OID" branch -f decade main
+git -C "$CORP_OID" update-ref refs/remotes/origin/main "$(git -C "$CORP_OID" rev-parse main)"
+CORP_OID_ALLOW_FAIL=""
+for c in 'git merge origin/main' 'git merge decade'; do
+  [[ "$(oid_verdict "$c")" == "allow" ]] || CORP_OID_ALLOW_FAIL="$CORP_OID_ALLOW_FAIL
+    $c"
+done
+if [[ -z "$CORP_OID_ALLOW_FAIL" ]]; then
+  ok "corpus raw object names: a branch whose name is hex-shaped is still a branch"
+else
+  bad "corpus raw object names: a hex-shaped BRANCH name must not be mistaken for an object name" \
+      "these were denied:$CORP_OID_ALLOW_FAIL"
+fi
+
 # --- the MUST-ALLOW corpus ---------------------------------------------------
 CORPUS_ALLOW_N=0
 CORPUS_ALLOW_FAIL=""
@@ -1507,7 +2095,8 @@ fi
 # README now makes, asserted rather than asserted-about.
 INTERP="$WORK/interpreter"
 close_fixture "$INTERP" no no answered no no true
-for form in 'sh -c "git merge --no-ff spec/0001-thing"' 'bash -c "git merge --no-ff spec/0001-thing"'; do
+for form in 'sh -c "git merge --no-ff spec/0001-thing"' 'bash -c "git merge --no-ff spec/0001-thing"' \
+            'timeout -s KILL 10 git merge --no-ff spec/0001-thing' 'sudo git merge --no-ff spec/0001-thing'; do
   run_hook "$HOOKS/close-gate.sh" "$INTERP" "$(bash_payload "$form")"
   expect_allow "interpreter: [$form] passes the gate, as Known limitations states"
 done
@@ -1549,6 +2138,7 @@ expect_script "interpreter: the trunk audit CATCHES the outcome the gate let pas
 # hole: The gates need `jq`, and fail closed without it. | asserted
 # hole: A timed-out hook is a skipped gate. | unassertable | harness behaviour, not hook behaviour; verified live 2026-07-25 with a sleeping hook under timeout 1 and 10, recorded in close-gate.sh's header
 # hole: The staged-content scans read every staged line. | asserted
+# hole: The scans read this project's own index. | asserted
 # LEDGER-END
 #
 # Each of these is a deliberate pass named in the README. They are asserted
@@ -1674,6 +2264,300 @@ else
       "these scanned a stale index unchecked:$CGW_FAIL"
 fi
 
+# --- the FLAG-VALUED WRAPPER axis, commit gate (1.0.7) ----------------------
+# The same stranded-value defect, same stripper, other gate. Asserted here
+# rather than assumed from the close-gate cases: the two hooks carry their own
+# copies of strip_wrappers, so a fix in one is not a fix in the other, and this
+# suite has already watched a repair land in one place and not the other.
+CGFW_N=0; CGFW_FAIL=""
+for wrap in 'nice -n 5 ' 'LANG=C nice -n 5 ' 'env -u FOO ' 'env -i ' 'stdbuf -o 0 '; do
+  for tail in 'git commit -am x' 'git add -A && git commit -m x'; do
+    CGFW_N=$((CGFW_N + 1))
+    [[ "$(cg_verdict "${wrap}${tail}")" == "deny" ]] || CGFW_FAIL="$CGFW_FAIL
+    ${wrap}${tail}"
+  done
+done
+if [[ -z "$CGFW_FAIL" ]]; then
+  ok "commit corpus flag-valued wrappers: all $CGFW_N spellings are denied"
+else
+  bad "commit corpus flag-valued wrappers: a wrapper flag with a separate value must not escape the commit gate" \
+      "these reached the index unchecked:$CGFW_FAIL"
+fi
+CGFW_ALLOW_FAIL=""
+for cmd in 'nice -n 5 git status' 'env -u GIT_DIR git log' 'env -i git fetch'; do
+  [[ "$(cg_verdict "$cmd")" == "allow" ]] || CGFW_ALLOW_FAIL="$CGFW_ALLOW_FAIL
+    $cmd"
+done
+if [[ -z "$CGFW_ALLOW_FAIL" ]]; then
+  ok "commit corpus flag-valued wrappers: ordinary wrapped commands still pass"
+else
+  bad "commit corpus flag-valued wrappers: ordinary wrapped commands must still pass" \
+      "these were denied:$CGFW_ALLOW_FAIL"
+fi
+
+
+# --- the INDEX-VERB axis, commit gate (1.0.7) -------------------------------
+# Check 0 enumerated add, rm and mv. Every OTHER verb that writes the index
+# could therefore be compounded with a commit, and the three staged-content
+# checks would scan an index nobody had judged:
+#
+#     git stash pop && git commit -m x
+#     git restore --staged . && git commit -m x
+#
+# Both were ALLOWED by v1.0.6 and by 1.0.7 until this axis. `git stage`, a plain
+# synonym for `add`, was missing for the same reason: nobody wrote it down.
+#
+# This list is the DIMENSION. It is written here independently of the hook's, and
+# the lockstep assertion below requires the two to be identical, so a verb added
+# to one without the other is a suite failure rather than a reviewer's catch.
+# That is the whole repair: the wrapper axis, the dash-valued flag axis and this
+# one were all the same defect, an enumeration that looked complete because
+# nobody had listed what completeness meant.
+CG_INDEX_VERBS='add stage rm mv restore reset stash checkout switch merge pull rebase cherry-pick revert am apply update-index read-tree sparse-checkout'
+
+CGIV_N=0; CGIV_FAIL=""
+for verb in $CG_INDEX_VERBS; do
+  for cmd in "git $verb x && git commit -m x" "git commit -m x && git $verb x"; do
+    CGIV_N=$((CGIV_N + 1))
+    [[ "$(cg_verdict "$cmd")" == "deny" ]] || CGIV_FAIL="$CGIV_FAIL
+    $cmd"
+  done
+done
+if [[ -z "$CGIV_FAIL" ]]; then
+  ok "commit corpus index verbs: all $CGIV_N index-writing compounds are denied"
+else
+  bad "commit corpus index verbs: a verb that writes the index must not compound with a commit" \
+      "these scanned a stale index unchecked:$CGIV_FAIL"
+fi
+
+# The real-world spellings from the hostile leg, with their actual flags rather
+# than the generated `git <verb> x` shape. A dimension only tests the form you
+# imagined, which is exactly how `nice -5` sailed through the dash-valued axis.
+CGIV_REAL_FAIL=""
+for cmd in \
+  'git stash pop && git commit -m x' \
+  'git stash apply && git commit -m x' \
+  'git restore --staged . && git commit -m x' \
+  'git stage -A && git commit -m x' \
+  'git reset HEAD~1 && git commit -m x' \
+  'git checkout HEAD -- src/a.txt && git commit -m x' \
+  'git cherry-pick -n abc123 && git commit -m x' \
+  'git revert --no-commit abc123 && git commit -m x' \
+  'git apply --index p.patch && git commit -m x' \
+  'git update-index --add src/a.txt && git commit -m x' \
+  'nice -n 5 git stash pop && git commit -m x' \
+  'git stash pop; git commit -m x' \
+  'git stash pop | git commit -m x' \
+  ; do
+  [[ "$(cg_verdict "$cmd")" == "deny" ]] || CGIV_REAL_FAIL="$CGIV_REAL_FAIL
+    $cmd"
+done
+if [[ -z "$CGIV_REAL_FAIL" ]]; then
+  ok "commit corpus index verbs: the leg's real spellings are denied, with their own flags and separators"
+else
+  bad "commit corpus index verbs: a real index-writing spelling escaped the gate" \
+      "these reached the index unchecked:$CGIV_REAL_FAIL"
+fi
+
+# The lockstep. The hook owns the pattern; this suite owns the dimension; they
+# must agree. Read out of the shipped hook rather than restated, so the failure
+# names the drift instead of hiding it.
+CG_HOOK_VERBS="$(grep -E "^INDEX_VERBS='" "$HOOKS/commit-gate.sh" | sed -E "s/^INDEX_VERBS='//; s/'$//" | tr '|' ' ')"
+CG_WANT="$(printf '%s\n' $CG_INDEX_VERBS | LC_ALL=C sort | tr '\n' ' ')"
+CG_GOT="$(printf '%s\n' $CG_HOOK_VERBS | LC_ALL=C sort | tr '\n' ' ')"
+if [[ "$CG_WANT" == "$CG_GOT" && -n "$CG_GOT" ]]; then
+  ok "commit corpus index verbs: the hook's enumeration and this corpus are identical"
+else
+  bad "commit corpus index verbs: the hook's INDEX_VERBS and this corpus have drifted" \
+      "corpus: $CG_WANT
+      hook  : $CG_GOT
+      Adding a verb to one without the other is how this dimension went missing in the first place."
+fi
+
+# The INVERSE, and it carries the weight here. A gate that denies everything
+# also denies every stale index, so a passing deny column proves nothing on its
+# own. These are verbs that do NOT write the index, and a read-only command
+# compounded with a commit must still pass.
+CGIV_ALLOW_FAIL=""
+for cmd in \
+  'git status && git commit -m x' \
+  'git log --oneline && git commit -m x' \
+  'git diff --cached && git commit -m x' \
+  'git fetch origin && git commit -m x' \
+  'git branch -a && git commit -m x' \
+  'echo git stash pop && git commit -m x' \
+  'git commit -m "after git stash pop"' \
+  ; do
+  [[ "$(cg_verdict "$cmd")" == "allow" ]] || CGIV_ALLOW_FAIL="$CGIV_ALLOW_FAIL
+    $cmd"
+done
+if [[ -z "$CGIV_ALLOW_FAIL" ]]; then
+  ok "commit corpus index verbs: read-only verbs and mere mentions still pass"
+else
+  bad "commit corpus index verbs: a command that does not write the index must still pass" \
+      "these were denied:$CGIV_ALLOW_FAIL"
+fi
+
+# --- the commit gate's AMPERSAND-SEPARATOR axis (1.0.7) ---------------------
+# Same character, same missing separator, other gate. Asserted here rather than
+# inferred from the close-gate cases: the two hooks carry their own copy of the
+# splitter line, and this suite has already watched a repair land in one and not
+# the other.
+CGAMP_N=0; CGAMP_FAIL=""
+for cmd in \
+  'git stash pop & git commit -m x' \
+  'git add -A & git commit -m x' \
+  'echo hi & git commit -am x' \
+  'git commit -m x & git add -A' \
+  ; do
+  CGAMP_N=$((CGAMP_N + 1))
+  [[ "$(cg_verdict "$cmd")" == "deny" ]] || CGAMP_FAIL="$CGAMP_FAIL
+    $cmd"
+done
+if [[ -z "$CGAMP_FAIL" ]]; then
+  ok "commit corpus ampersand separator: all $CGAMP_N backgrounded spellings are denied"
+else
+  bad "commit corpus ampersand separator: a staging verb after a single & must not escape the commit gate" \
+      "these scanned a stale index unchecked:$CGAMP_FAIL"
+fi
+
+CGAMP_ALLOW_FAIL=""
+for cmd in \
+  'git status & git commit -m x' \
+  'sleep 1 & git commit -m x' \
+  ; do
+  [[ "$(cg_verdict "$cmd")" == "allow" ]] || CGAMP_ALLOW_FAIL="$CGAMP_ALLOW_FAIL
+    $cmd"
+done
+if [[ -z "$CGAMP_ALLOW_FAIL" ]]; then
+  ok "commit corpus ampersand separator: a backgrounded read-only command still passes"
+else
+  bad "commit corpus ampersand separator: & must not turn read-only commands into denials" \
+      "these were denied:$CGAMP_ALLOW_FAIL"
+fi
+
+# --- the commit gate's NEWLINE-SEPARATOR axis (1.0.7) -----------------------
+# The same whitespace squeeze, the same collapse: a stage-and-commit split
+# across two lines became one segment, so Check 0 saw only the first command and
+# the three staged-content checks then read an index nobody had judged. Named by
+# a finder in the scoped run alongside the close-gate half, which is what a
+# shared normaliser defect looks like from two directions.
+CG_NL_FAIL=""
+CG_NL_N=0
+for payload in "$(printf 'git add .\ngit commit -m x')" \
+               "$(printf 'git status\ngit add -A\ngit commit -m x')" \
+               "$(printf '# ready\ngit add -A && git commit -m x')"; do
+  CG_NL_N=$((CG_NL_N + 1))
+  [[ "$(cg_verdict "$payload")" == "deny" ]] || CG_NL_FAIL="$CG_NL_FAIL
+    $(printf '%s' "$payload" | tr '\n' '~')"
+done
+if [[ -z "$CG_NL_FAIL" ]]; then
+  ok "commit corpus newline separator: all $CG_NL_N multi-line stage-and-commit spellings are denied"
+else
+  bad "commit corpus newline separator: a commit after a newline must not escape the gate ($CG_NL_N generated)" \
+      "these escaped (~ marks the newline):$CG_NL_FAIL"
+fi
+
+# The inverse: a newline in a commit MESSAGE is ordinary, and must not start
+# denying clean commits.
+CG_NL_ALLOW_FAIL=""
+for payload in "$(printf 'git commit -m "line one\nline two"')" \
+               "$(printf 'echo building\ngit status')"; do
+  [[ "$(cg_verdict "$payload")" == "allow" ]] || CG_NL_ALLOW_FAIL="$CG_NL_ALLOW_FAIL
+    $(printf '%s' "$payload" | tr '\n' '~')"
+done
+if [[ -z "$CG_NL_ALLOW_FAIL" ]]; then
+  ok "commit corpus newline separator: a newline inside a message does not deny a clean commit"
+else
+  bad "commit corpus newline separator: a newline inside a message must not deny a clean commit" \
+      "these were denied (~ marks the newline):$CG_NL_ALLOW_FAIL"
+fi
+
+# --- the LINE-CONTINUATION axis (1.0.7, found by the hostile leg) -----------
+# A backslash before a newline is a CONTINUATION, not a separator: the shell
+# joins the lines into one command. The 1.0.7 newline fix converted every
+# newline into a segment break, so `git commit \<newline> -am x` put -am in a
+# different segment from the commit and the auto-staging check never saw it.
+# v1.0.6 denied it. That is a regression introduced by a fix, which is this
+# repo's most-repeated defect class, and it was caught by the leg rather than
+# by the person who wrote it.
+CG_CONT_FAIL=""
+CG_CONT_N=0
+for payload in "$(printf 'git commit \\\n  -am "x"')" \
+               "$(printf 'git add -A \\\n  && git commit -m x')" \
+               "$(printf 'git \\\n  commit \\\n  -am x')"; do
+  CG_CONT_N=$((CG_CONT_N + 1))
+  [[ "$(cg_verdict "$payload")" == "deny" ]] || CG_CONT_FAIL="$CG_CONT_FAIL
+    $(printf '%s' "$payload" | tr '\n' '~')"
+done
+if [[ -z "$CG_CONT_FAIL" ]]; then
+  ok "commit corpus line continuation: all $CG_CONT_N continued spellings are denied"
+else
+  bad "commit corpus line continuation: a continued command is ONE command ($CG_CONT_N generated)" \
+      "these escaped (~ marks the newline):$CG_CONT_FAIL"
+fi
+
+# And the close gate, same joint.
+CORPUS_CONT_FAIL=""
+for payload in "$(printf 'git merge --no-ff \\\n  spec/0001-thing')" \
+               "$(printf 'git merge \\\n  --no-ff \\\n  spec/0001-thing')"; do
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || CORPUS_CONT_FAIL="$CORPUS_CONT_FAIL
+    $(printf '%s' "$payload" | tr '\n' '~')"
+done
+if [[ -z "$CORPUS_CONT_FAIL" ]]; then
+  ok "corpus line continuation: a continued merge is still one merge"
+else
+  bad "corpus line continuation: a continued merge must not escape the close gate" \
+      "these escaped (~ marks the newline):$CORPUS_CONT_FAIL"
+fi
+
+
+# --- the QUOTE-PAIRING axis (1.0.7) -----------------------------------------
+# The normaliser strips quoted spans so a message mentioning a staging verb
+# cannot trip the gate. It did that with two independent sed passes, singles
+# then doubles, which pairs quote characters ACROSS segments: an apostrophe in
+# ordinary English in one segment pairs with an apostrophe in a later one and
+# everything between them is deleted, including the governed token.
+#
+# Both spellings below must deny, and they are MIRRORS of each other. That is
+# the whole point of asserting both: singles-first defeats the first, doubles-
+# first defeats the second, and satisfying one by reordering the passes just
+# moves the hole. Only a left-to-right scan that respects whichever quote opened
+# first satisfies both at once.
+CG_QUOTE_FAIL=""
+CG_QUOTE_N=0
+for payload in 'echo "here'"'"'s why" && git add . && echo "let'"'"'s go" && git commit -m "wip"' \
+               'echo "it'"'"'s fine" && git add -A && git commit -m "don'"'"'t ship"' \
+               "echo 'a\"b' && git add -A && git commit -m 'c\"d'" \
+               "echo 'say \"go\"' && git add . && git commit -m 'ship \"it\"'"; do
+  CG_QUOTE_N=$((CG_QUOTE_N + 1))
+  [[ "$(cg_verdict "$payload")" == "deny" ]] || CG_QUOTE_FAIL="$CG_QUOTE_FAIL
+    $payload"
+done
+if [[ -z "$CG_QUOTE_FAIL" ]]; then
+  ok "commit corpus quote pairing: all $CG_QUOTE_N prose-punctuation spellings are denied"
+else
+  bad "commit corpus quote pairing: punctuation in prose must not erase the commit ($CG_QUOTE_N generated)" \
+      "these escaped:$CG_QUOTE_FAIL"
+fi
+
+# The inverse, and it is the reason the spans are stripped at all: a message
+# that merely MENTIONS a staging verb is not a staging command, and an ordinary
+# apostrophe must not start denying clean commits.
+CG_QUOTE_ALLOW_FAIL=""
+for payload in 'git commit -m "it'"'"'s fine"' \
+               'git commit -m "we should git add . later"'; do
+  [[ "$(cg_verdict "$payload")" == "allow" ]] || CG_QUOTE_ALLOW_FAIL="$CG_QUOTE_ALLOW_FAIL
+    $payload"
+done
+if [[ -z "$CG_QUOTE_ALLOW_FAIL" ]]; then
+  ok "commit corpus quote pairing: a clean commit whose message contains punctuation or a verb still passes"
+else
+  bad "commit corpus quote pairing: a clean commit must not be denied by its own message" \
+      "these were denied:$CG_QUOTE_ALLOW_FAIL"
+fi
+
+
 # --- MUST ALLOW: ordinary work, and prose that mentions the verbs ------------
 CGA_N=0; CGA_FAIL=""
 for cmd in \
@@ -1696,6 +2580,38 @@ else
   bad "commit corpus allow: ordinary operations must not be denied" \
       "a gate that denies these is one people disable:$CGA_FAIL"
 fi
+
+# --- THE INDEX THE SCANS READ: a documented hole (1.0.7) --------------------
+# The commit gate scans the index of CLAUDE_PROJECT_DIR, which is not
+# necessarily the index the commit will actually use: `git -C sub commit`
+# commits a nested repository's index, and GIT_INDEX_FILE names a different one
+# outright. Both were confirmed against the shipped tree.
+#
+# Documented rather than fixed, deliberately. Making the gate follow the index
+# would mean re-deriving the target repository from the command line for every
+# spelling, which is the parser-chasing this project has now been burned by
+# twice; and a nested repository is a different project, whose own instance
+# governs it if it has one. So the hole is named where users read and asserted
+# here, which is the standing bargain for every deliberate gap.
+CGIDX="$WORK/commit-index"
+git_init "$CGIDX"; sdd_json "$CGIDX"
+mkdir -p "$CGIDX/sub"
+git_init "$CGIDX/sub"
+printf 'a line with an %s in it\n' "$EMDASH" > "$CGIDX/sub/prose.md"
+git -C "$CGIDX/sub" add -A
+assert_true "commit index 0: the nested repo really has em-dash content staged" \
+  "the fixture does not carry the content whose escape is being asserted, so the pass below would prove nothing" \
+  test -n "$(git -C "$CGIDX/sub" diff --cached --name-only)"
+run_hook "$HOOKS/commit-gate.sh" "$CGIDX" "$(bash_payload 'git -C sub commit -m "add fixture"')"
+expect_allow "commit index a: a nested repo's commit is not scanned (documented hole)"
+run_hook "$HOOKS/commit-gate.sh" "$CGIDX" "$(bash_payload 'GIT_INDEX_FILE=alt.index git commit -m x')"
+expect_allow "commit index b: a commit against a named index file is not scanned (same hole)"
+# The pairing that makes the hole survivable: the project's OWN index is still
+# scanned, so the gap is about other repositories, not about this one.
+printf 'a line with an %s in it\n' "$EMDASH" > "$CGIDX/prose.md"
+git -C "$CGIDX" add -A
+run_hook "$HOOKS/commit-gate.sh" "$CGIDX" "$(bash_payload 'git commit -m "add fixture"')"
+expect_deny "commit index c: this project's own staged content is still scanned" "em-dash"
 
 # =============================================================================
 # THE TRUNK AUDIT (1.0.5, advisory)
@@ -1890,6 +2806,163 @@ expect_script "pre-push d: unable to find its own tool, it REFUSES rather than p
 PPD="$WORK/prepush-noinstance"; rm -rf "$PPD"; mkdir -p "$PPD"; git_init "$PPD"
 run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPD' && CLAUDE_PLUGIN_ROOT='$ROOT' bash '$PP'"
 expect_script "pre-push e: a repo that is not a framework instance is untouched" 0
+
+# =============================================================================
+# THE PATH-CANONICALISATION AXIS, scope hook (1.0.7)
+#
+# The scope hook compared the write path against the role paths as STRINGS,
+# after stripping the project prefix and squeezing slashes. Two spellings of
+# the same file therefore got two different answers: `src/app.js` denied, and
+# `docs/../src/app.js` and `srclink/app.js` (a symlinked directory) both landed
+# on the trunk in silence. `..` in a path is what a tool composing paths
+# produces, and symlinked source directories are ordinary in real repositories,
+# so neither needs an attacker. Same class as the pathspec checkout: a string
+# that LOOKS like it is not the governed thing.
+# =============================================================================
+
+CANON="$WORK/canonical"
+close_fixture "$CANON" no no answered no no true
+mkdir -p "$CANON/docs" "$CANON/src"
+# The symlink must point at a directory that EXISTS, or it is dangling and the
+# case tests nothing. The first cut of this fixture linked to a src/ the
+# fixture's trunk does not carry, the physical resolution had nothing to
+# resolve, and the case passed for the pre-fix reason.
+ln -s src "$CANON/srclink" 2>/dev/null
+canon_verdict() { # canon_verdict <path>
+  local out
+  out="$(printf '%s' "$(jq -nc --arg p "$1" '{tool_name:"Edit", tool_input:{file_path:$p}}')" \
+        | CLAUDE_PROJECT_DIR="$CANON" bash "$HOOKS/scope-hook.sh" 2>/dev/null)"
+  if [[ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)" == "deny" ]]; then
+    printf 'deny'; else printf 'allow'; fi
+}
+assert_true "canon0: the fixture is on the trunk" \
+  "not on the trunk, so every write would be legitimately allowed and these cases would prove nothing" \
+  test "$(git -C "$CANON" branch --show-current)" = "main"
+if [[ "$(canon_verdict "$CANON/src/app.js")" == "deny" ]]; then
+  ok "canon control: the plain spelling of a role path is denied on the trunk"
+else
+  bad "canon control: the plain spelling of a role path is denied on the trunk" \
+      "the harness cannot observe a deny, so every case below is meaningless"
+fi
+CANON_FAIL=""
+for p in "$CANON/docs/../src/app.js" \
+         "docs/../src/app.js" \
+         "$CANON/src/../src/app.js" \
+         "$CANON/./docs/../src/nested/../app.js"; do
+  [[ "$(canon_verdict "$p")" == "deny" ]] || CANON_FAIL="$CANON_FAIL
+    $p"
+done
+# A symlinked role directory only counts if the link really exists: on a
+# filesystem or a runner where it does not, asserting it would fail for a
+# reason that has nothing to do with the gate.
+if [[ -L "$CANON/srclink" ]]; then
+  [[ "$(canon_verdict "$CANON/srclink/app.js")" == "deny" ]] || CANON_FAIL="$CANON_FAIL
+    $CANON/srclink/app.js (symlinked role directory)"
+else
+  printf 'NOTE: symlinks unavailable here; the symlinked-role-directory case did not run.\n'
+fi
+if [[ -z "$CANON_FAIL" ]]; then
+  ok "canon: uncanonicalised spellings of a role path are denied like the plain one"
+else
+  bad "canon: every spelling of a role path must reach the same verdict" \
+      "these wrote feature code to the trunk in silence:$CANON_FAIL"
+fi
+CANON_ALLOW_FAIL=""
+for p in "$CANON/docs/notes.md" "docs/notes.md" "$CANON/README.md" "$CANON/src/../docs/notes.md"; do
+  [[ "$(canon_verdict "$p")" == "allow" ]] || CANON_ALLOW_FAIL="$CANON_ALLOW_FAIL
+    $p"
+done
+if [[ -z "$CANON_ALLOW_FAIL" ]]; then
+  ok "canon: docs-only trunk writes still pass, however they are spelled"
+else
+  bad "canon: docs-only trunk writes must still pass" \
+      "these were denied:$CANON_ALLOW_FAIL"
+fi
+
+# =============================================================================
+# EVERY SHIPPED SKILL'S FRONTMATTER PARSES (1.0.7)
+#
+# `design-surface` shipped from 1.0.0 through 1.0.6 with an unquoted
+# colon-space inside a plain YAML scalar, so its frontmatter did not parse and
+# the skill loaded at runtime with every field silently dropped: no name, no
+# description, no model. Nothing caught it for seven releases because the
+# publish gate ran `claude plugin validate` against the repo ROOT, where that
+# argument validates marketplace.json and nothing else.
+#
+# So the property is asserted HERE, in the suite, where it does not depend on
+# which argument someone passed to an external CLI. Deliberately parsed the
+# strict way rather than the forgiving way: this is the one field whose
+# breakage is invisible at runtime.
+# =============================================================================
+
+SKILL_BAD=""
+SKILL_N=0
+for sk in "$ROOT"/skills/*/SKILL.md; do
+  [[ -f "$sk" ]] || continue
+  SKILL_N=$((SKILL_N + 1))
+  name="$(basename "$(dirname "$sk")")"
+  # Frontmatter is the block between the first two --- lines.
+  FM="$(awk 'NR==1 && $0 != "---" { exit } NR>1 { if ($0 == "---") exit; print }' "$sk")"
+  if [[ -z "$FM" ]]; then
+    SKILL_BAD="$SKILL_BAD
+    $name: no YAML frontmatter block at all"
+    continue
+  fi
+  # Every line must be `key: value`, and an unquoted value may not itself
+  # contain a colon-space, which is what YAML reads as a nested mapping.
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    case "$line" in
+      [[:space:]]*) continue ;;   # continuation lines are the block-scalar form
+    esac
+    if ! printf '%s' "$line" | grep -qE '^[A-Za-z_-]+:[[:space:]]'; then
+      SKILL_BAD="$SKILL_BAD
+    $name: frontmatter line is not 'key: value': $line"
+      continue
+    fi
+    val="$(printf '%s' "$line" | sed -E 's/^[A-Za-z_-]+:[[:space:]]*//')"
+    case "$val" in
+      \"*\"|\'*\'|'>'*|'|'*|'['*|'') continue ;;   # quoted, block scalar, list, empty
+    esac
+    if printf '%s' "$val" | grep -q ': '; then
+      SKILL_BAD="$SKILL_BAD
+    $name: unquoted value contains a colon-space, so YAML reads it as a mapping and the whole block is dropped: $line"
+    fi
+  done <<EOF
+$FM
+EOF
+done
+if [[ "$SKILL_N" -lt 5 ]]; then
+  bad "skill frontmatter: the scan found the shipped skills" \
+      "only $SKILL_N SKILL.md files were read; the tree carries more, so this scan is broken rather than clean"
+elif [[ -z "$SKILL_BAD" ]]; then
+  ok "skill frontmatter: all $SKILL_N shipped skills carry frontmatter that parses"
+else
+  bad "skill frontmatter: every shipped skill's frontmatter must parse" \
+      "these load with all metadata silently dropped:$SKILL_BAD"
+fi
+
+# The scan is only worth anything if it can SEE the defect, so it is run
+# against a reconstruction of the exact line that shipped.
+FM_FIX="$WORK/fm-fixture"
+mkdir -p "$FM_FIX"
+printf -- '---\nname: x\ndescription: A surface (Part 5c): the routing test\n---\nbody\n' > "$FM_FIX/SKILL.md"
+FM_HIT=""
+FM="$(awk 'NR==1 && $0 != "---" { exit } NR>1 { if ($0 == "---") exit; print }' "$FM_FIX/SKILL.md")"
+while IFS= read -r line; do
+  [[ -n "$line" ]] || continue
+  val="$(printf '%s' "$line" | sed -E 's/^[A-Za-z_-]+:[[:space:]]*//')"
+  case "$val" in \"*\"|\'*\'|'>'*|'|'*|'['*|'') continue ;; esac
+  printf '%s' "$val" | grep -q ': ' && FM_HIT=1
+done <<EOF
+$FM
+EOF
+if [[ -n "$FM_HIT" ]]; then
+  ok "skill frontmatter control: the scan catches the exact line that shipped in 1.0.0 through 1.0.6"
+else
+  bad "skill frontmatter control: the scan catches the line that shipped" \
+      "it did not flag the design-surface description, so the clean result above means nothing"
+fi
 
 # --- summary -----------------------------------------------------------------
 

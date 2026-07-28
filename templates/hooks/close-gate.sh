@@ -66,7 +66,7 @@ CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
 # `git --no-pager merge` past untouched. Whitespace is squeezed, quotes are
 # removed (not their contents: the branch name is an argument this gate needs),
 # and git's global options are tolerated before the subcommand.
-CMD_NORM="$(printf '%s' "$CMD" | tr -s '[:space:]' ' ' | tr -d "\"'")"
+CMD_NORM="$(printf '%s' "$CMD" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' | tr '\n\r' ';;' | tr -s '[:space:]' ' ' | tr -d "\"'")"
 GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
 if ! printf '%s' "$CMD_NORM" | grep -qE "(^|[;&|(]| )([^ ]*/)?git${GIT_OPTS} +merge( |$)"; then
   # fail-open-ok: not a merge; this gate governs merges only.
@@ -132,12 +132,56 @@ strip_wrappers() { # strip_wrappers <segment> -> echoes the segment, unwrapped
     seg="$(printf '%s' "$seg" | sed -E 's/^[A-Za-z_][A-Za-z0-9_]*=[^ ]* *//')"
     # a wrapper word, plus env/stdbuf style flags and assignments after it
     seg="$(printf '%s' "$seg" | sed -E 's/^(command|exec|nice|nohup|time|stdbuf|env) +//')"
-    seg="$(printf '%s' "$seg" | sed -E 's/^(-[^ ]+ +)+//')"
+    # A wrapper flag may take its value as a SEPARATE word, and 1.0.6 consumed
+    # the flag alone: `nice -n 5 git merge ...` stripped `nice`, stripped `-n`,
+    # and left `5` at the head of the segment, which then failed the
+    # command-position test and was never judged at all. `stdbuf -o0` survived
+    # only because its value is glued to the flag, which is the accident that
+    # hid the class. So a flag is consumed together with one optional following
+    # non-dash value.
+    #
+    # The command word is never eaten as a value, which is why this is three
+    # branches and not one regex: `env -i git merge ...` has git sitting where
+    # a value would be, and consuming it would delete the very token the
+    # command-position test looks for. The loop runs to a fixed point, so
+    # handling one flag per pass costs nothing.
+    # The bare `--` option terminator is not a flag, not a value and not a
+    # command: it is punctuation that every branch below ignored, so it sat at
+    # the head of the segment and defeated the command-position test on its own.
+    # v1.0.6 DENIED `env -- git merge ...`; 1.0.7 allowed it until this line.
+    seg="$(printf '%s' "$seg" | sed -E 's/^-- +//')"
+    if printf '%s' "$seg" | grep -qE '^-{1,2}[^ ]* +([^ ]*/)?git( |$)'; then
+      seg="$(printf '%s' "$seg" | sed -E 's/^-{1,2}[^ ]* +//')"
+    elif printf '%s' "$seg" | grep -qE '^-{1,2}[^ ]* +-[^ ]* +'; then
+      # A flag value may itself begin with a dash: `nice -n -5 git ...` is an
+      # ordinary negative niceness. The value branch below requires a NON-dash
+      # value, so `-n` was consumed one word at a time and `-5` was stranded at
+      # the head, which is the same stranding the value branch was written to
+      # stop. v1.0.6 DENIED this; 1.0.7 allowed it until this branch.
+      #
+      # It sits AFTER the git branch on purpose. That branch has already taken
+      # any case where the command word follows the flag directly, so nothing
+      # here can eat git: a dash-leading word is never the command.
+      seg="$(printf '%s' "$seg" | sed -E 's/^-{1,2}[^ ]* +-[^ ]* +//')"
+    elif printf '%s' "$seg" | grep -qE '^-{1,2}[^ ]* +[^- ][^ ]* +'; then
+      seg="$(printf '%s' "$seg" | sed -E 's/^-{1,2}[^ ]* +[^- ][^ ]* +//')"
+    else
+      seg="$(printf '%s' "$seg" | sed -E 's/^(-{1,2}[^ ]* +)+//')"
+    fi
   done
   printf '%s' "$seg"
 }
 
-SEGMENTS="$(printf '%s\n' "$CMD_NORM" | awk '{ gsub(/&&|\|\||[;|()]/, "\n"); print }')"
+# The separator set. `&` is here as of 1.0.7: a SINGLE ampersand backgrounds the
+# preceding command and starts a new one, exactly as `;` does, and its absence
+# meant `echo hi & git merge --no-ff spec/0001-thing` collapsed to one segment
+# whose command word was `echo`, so the merge was never judged at all. Both gates
+# carry their own copy of this line, so this is fixed in both.
+#
+# `&&` must not become two separators. It does not: POSIX ERE alternation is
+# leftmost-LONGEST and the two-character alternative is listed first. Asserted in
+# the suite rather than trusted, in both directions.
+SEGMENTS="$(printf '%s\n' "$CMD_NORM" | awk '{ gsub(/&&|\|\||[;|()&]/, "\n"); print }')"
 
 CUR_BRANCH="$(git -C "$PROJ" branch --show-current 2>/dev/null || true)"
 MERGED_REFS=""
@@ -172,19 +216,115 @@ while IFS= read -r seg; do
     # become. Resolve it. If it cannot be resolved the running branch is
     # unknown, and an unknown branch must not read as "not the trunk": the
     # sentinel below makes any later merge segment fail closed instead.
-    NEWB="$(printf '%s' "$seg" | awk '{
-      f = 0
-      for (i = 1; i <= NF; i++) {
-        if (f && ($i == "-" || $i !~ /^-/)) { print $i; exit }
-        if ($i == "checkout" || $i == "switch") f = 1
-      }
+    # `git checkout` is TWO commands wearing one name. With a branch it
+    # switches; with a pathspec it discards working-tree changes and switches
+    # nothing, which is something agents do constantly right before merging.
+    # 1.0.6 recorded the argument as a branch either way, so `git checkout -- .
+    # && git merge --no-ff spec/0001-x` decided the merge would run on a branch
+    # called "." and skipped it as not-the-trunk. That is the same class as the
+    # `checkout -` defect it had just fixed: an argument that is not a branch
+    # name recorded as one, producing a CONFIDENT WRONG ANSWER rather than a
+    # fall-through. `git restore` was never affected because it does not touch
+    # this tracker, and `git switch` needs none of it because switch only ever
+    # takes a branch.
+    #
+    # So the argument is CLASSIFIED, and the classification has a disposition
+    # for every outcome including "cannot tell":
+    IS_SWITCH=0
+    printf '%s' "$seg" | grep -qE "^([^ ]*/)?git${GIT_OPTS} +switch +" && IS_SWITCH=1
+
+    # Everything after a bare `--` is pathspec by definition, never a branch.
+    SEG_HEAD="$seg"
+    HAS_PATHSPEC_SEP=0
+    if [[ "$IS_SWITCH" -eq 0 ]]; then
+      case "$seg" in
+        *" -- "*) SEG_HEAD="${seg%% -- *}"; HAS_PATHSPEC_SEP=1 ;;
+        *" --")   SEG_HEAD="${seg% --}";    HAS_PATHSPEC_SEP=1 ;;
+      esac
+    fi
+
+    # `git checkout [<tree-ish>] -- <pathspec>` RESTORES FILES AND SWITCHES
+    # NOTHING. git's own synopsis separates the two forms on exactly this
+    # punctuation, and the presence of the separator settles it: whatever sits
+    # before the `--` is a source to read blobs OUT of, not a branch to stand on.
+    #
+    # 1.0.7 handled only the case where nothing preceded the separator
+    # (`git checkout -- .`), by finding no branch candidate and falling through.
+    # With a tree-ish in front, a candidate WAS found and it was a real branch,
+    # so the tracker recorded a switch that never happens:
+    #
+    #     git checkout spec/0002-other -- src/a.txt && git merge --no-ff spec/0001-thing
+    #
+    # The merge was then judged against spec/0002-other, read as ordinary
+    # feature work, and skipped. Same class as `checkout -` and `checkout -- .`
+    # before it: an argument that is not a branch to stand on recorded as one,
+    # which produces a CONFIDENT WRONG ANSWER rather than a fall-through. This
+    # is the third time that class has been closed one spelling at a time, so
+    # the test is now the SEPARATOR rather than the shape of what surrounds it.
+    #
+    # MIND THE OTHER `--`. strip_wrappers removes a bare `--` at the HEAD of a
+    # segment, where it is an option terminator (`env -- git merge`), and that
+    # already ran above. The two positions never collide: the head strip is
+    # anchored at position 0 and every separator here follows the checkout verb.
+    if [[ "$HAS_PATHSPEC_SEP" -eq 1 ]]; then
+      continue
+    fi
+
+    # `-b`, `-B` and `--orphan` NAME a branch that is about to exist, so the
+    # word after them is a branch by construction and no lookup can confirm it
+    # (it does not exist yet). Without this, creating a branch would land in
+    # the unresolvable case below and fail closed on ordinary work.
+    NEWB="$(printf '%s' "$SEG_HEAD" | awk '{
+      for (i = 1; i < NF; i++)
+        if ($i == "-b" || $i == "-B" || $i == "--orphan") { print $(i + 1); exit }
     }')"
-    case "$NEWB" in
-      -|@\{-1\})
-        NEWB="$(git -C "$PROJ" rev-parse --abbrev-ref '@{-1}' 2>/dev/null || true)"
-        [[ -n "$NEWB" ]] || NEWB="$UNKNOWN_BRANCH"
-        ;;
-    esac
+
+    if [[ -z "$NEWB" ]]; then
+      NEWB="$(printf '%s' "$SEG_HEAD" | awk '{
+        f = 0
+        for (i = 1; i <= NF; i++) {
+          if (f && ($i == "-" || $i !~ /^-/)) { print $i; exit }
+          if ($i == "checkout" || $i == "switch") f = 1
+        }
+      }')"
+
+      # No candidate at all before the `--`: the pure pathspec form
+      # (`git checkout -- .`). Nothing switched, so the tracked branch is
+      # unchanged. Leaving it alone is the whole fix.
+      if [[ -z "$NEWB" ]]; then
+        continue
+      fi
+
+      case "$NEWB" in
+        -|@\{-1\})
+          # `-` and `@{-1}` mean "the branch I was on before", and they are
+          # ORGANIC: after `git checkout spec/NNNN` from the trunk, this is how
+          # a person and an agent both go back. This hook runs BEFORE the
+          # command, so `@{-1}` still resolves to the pre-command previous
+          # branch, which is exactly what `-` is about to become.
+          NEWB="$(git -C "$PROJ" rev-parse --abbrev-ref '@{-1}' 2>/dev/null || true)" # fail-open-ok: an unresolvable previous branch is converted to the UNKNOWN sentinel on the next line, which makes any later merge fail closed rather than read as "some other branch"
+          [[ -n "$NEWB" ]] || NEWB="$UNKNOWN_BRANCH"
+          ;;
+        *)
+          if [[ "$IS_SWITCH" -eq 0 ]]; then
+            if git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$NEWB" >/dev/null 2>&1; then
+              : # a real local branch: the switch is real, record it
+            elif [[ -e "$PROJ/$NEWB" || -e "$NEWB" ]]; then
+              # An existing path and not a branch: this discards changes and
+              # switches nothing. `.` lands here, and so does any file or
+              # directory an agent names.
+              continue
+            else
+              # Neither a branch nor a path. The gate cannot establish which
+              # branch a later segment would run on, and an unknown branch must
+              # never read as "not the trunk": the sentinel makes the merge
+              # fail closed.
+              NEWB="$UNKNOWN_BRANCH"
+            fi
+          fi
+          ;;
+      esac
+    fi
     [[ -n "$NEWB" ]] && CUR_BRANCH="$NEWB"
     continue
   fi
@@ -240,7 +380,19 @@ while IFS= read -r seg; do
       HEAD|FETCH_HEAD|ORIG_HEAD|MERGE_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD) continue ;;
     esac
     printf '%s' "$word" | grep -qE '^[A-Za-z0-9][A-Za-z0-9._/-]*$' || continue
-    printf '%s' "$word" | grep -qE '^[0-9a-f]{7,40}$' && continue
+    # A raw object name identifies the commit without NAMING the branch, and
+    # the close conditions live in a branch's spec file, so there is nothing to
+    # check: it belongs with the other indirect forms. 1.0.6 recognised one by
+    # its SHAPE, `[0-9a-f]{7,40}`, and every spelling outside that shape walked
+    # through instead: a 6-character abbreviation, the same oid uppercased, and
+    # in a sha256 repository the 64-character oid. Shape was the wrong
+    # question, and the right one is free of it: ask git whether the word NAMES
+    # anything. A ref has a symbolic full name; an object name does not, at any
+    # length or case. This also stops a branch that happens to be spelled in
+    # hex from being mistaken for an oid, which the shape test got wrong in the
+    # other direction.
+    SFN="$(git -C "$PROJ" rev-parse --symbolic-full-name "$word" 2>/dev/null)" # fail-open-ok: a word that is not a ref at all exits nonzero here, and the emptiness test below is what acts on it; the status carries no information the value does not
+    [[ -n "$SFN" ]] || continue
     if git -C "$PROJ" rev-parse --verify --quiet "${word}^{commit}" >/dev/null 2>&1; then
       NAMED_REF="$word"; break
     fi
@@ -296,6 +448,35 @@ for MERGED_REF in $MERGED_REFS; do
     fi
     SPEC_PATH="$(printf '%s\n' "$SPEC_PATHS" | head -n1)"
     SPEC_TEXT="$(git -C "$PROJ" show "${MERGED_REF}:${SPEC_PATH}" 2>/dev/null || true)"
+
+    # THE BRANCH MUST HAVE WRITTEN ITS OWN SPEC (1.0.7, B4). Every check below
+    # reads the spec file as it stands on the branch, which is right, but says
+    # nothing about who put it there. A branch cut from the trunk AFTER spec
+    # NNNN was closed inherits that spec, Closing report and all, so reusing a
+    # CLOSED number as a branch name carries unreviewed work onto the trunk
+    # against artifacts somebody else wrote:
+    #
+    #     spec/0001-thing closes legitimately and merges
+    #     spec/0001-sneaky is cut from the trunk, changes code, adds no spec
+    #     git merge --no-ff spec/0001-sneaky  <- every check passes, on 0001-thing's report
+    #
+    # The trunk audit then reports the merge as compliant, because it is reading
+    # the same inherited artifacts.
+    #
+    # The test is AUTHORSHIP, not staleness: if the spec file is byte-identical
+    # between the merge base and the branch tip, this branch contributed nothing
+    # to its own spec and the Closing report it is being judged on is not its
+    # own. A legitimate close always modifies its spec file, because writing the
+    # Closing report into it IS the close, so the honest path cannot trip this.
+    MERGE_BASE="$(git -C "$PROJ" merge-base "$TRUNK" "$MERGED_REF" 2>/dev/null || true)" # fail-open-ok: an empty base is refused immediately below rather than skipped
+    if [[ -z "$MERGE_BASE" ]]; then
+      deny "close gate: no merge base between $TRUNK and $MERGED_REF, so the gate cannot tell whether this branch wrote its own Closing report or inherited one from an earlier spec with the same number. Refusing rather than guessing."
+    fi
+    BASE_BLOB="$(git -C "$PROJ" rev-parse --quiet --verify "${MERGE_BASE}:${SPEC_PATH}" 2>/dev/null || true)" # fail-open-ok: an absent blob means the branch ADDED this spec, which is the legitimate case and is handled by the emptiness test below
+    TIP_BLOB="$(git -C "$PROJ" rev-parse --quiet --verify "${MERGED_REF}:${SPEC_PATH}" 2>/dev/null || true)" # fail-open-ok: the file was resolved from this same ref above, so an empty value here is a torn repository and denies on the comparison below
+    if [[ -n "$BASE_BLOB" && "$BASE_BLOB" == "$TIP_BLOB" ]]; then
+      deny "close gate: branch $MERGED_REF does not modify $SPEC_PATH, so the Closing report it would be judged on was written by earlier work on spec $SPEC_NUM and already sits on $TRUNK. Reusing a closed spec's number carries unreviewed changes onto the trunk against somebody else's evidence. Open a spec with a NEW number for this work, or commit this branch's own Closing report to $SPEC_PATH."
+    fi
 
     # The Closing report section exists (Appendix C: "## Closing report ...").
     if ! printf '%s\n' "$SPEC_TEXT" | grep -qE '^#+[[:space:]]*Closing report'; then

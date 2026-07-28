@@ -1,6 +1,6 @@
 ---
 name: design-surface
-description: The design surface for UI projects (Part 5c): the design-heavy routing test, locked redlines as spec contracts, the bundle rule, design QA on the branch, /insights at gates
+description: "The design surface for UI projects (Part 5c): the design-heavy routing test, locked redlines as spec contracts, the bundle rule, design QA on the branch, /insights at gates"
 ---
 
 Condensed binding of Part 5c of the edition committed in this repo. On any

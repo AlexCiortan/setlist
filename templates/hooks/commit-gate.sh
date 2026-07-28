@@ -62,9 +62,57 @@ CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty')"
 # is squeezed once, quoted strings are dropped so a message mentioning the word
 # cannot trip it, and git's own global options are tolerated between the binary
 # and the subcommand.
-CMD_NORM="$(printf '%s' "$CMD" | tr -s '[:space:]' ' ')"
-CMD_BARE="$(printf '%s' "$CMD_NORM" | sed -e "s/'[^']*'//g" -e 's/"[^"]*"//g')"
+CMD_NORM="$(printf '%s' "$CMD" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' | tr '\n\r' ';;' | tr -s '[:space:]' ' ')"
+# Quoted spans are removed by a LEFT-TO-RIGHT scan, not by two sed passes.
+#
+# The two passes paired quote characters across the whole line, and across
+# segments: `echo "it@s fine" && git commit -m "don@t ship"` (with @ an
+# apostrophe) has the apostrophe of the first message pair with the apostrophe
+# of the second, deleting everything between them including the `git commit`
+# this gate exists to see. Reordering the passes does not fix it, it mirrors it:
+# singles-first loses the case above, doubles-first loses `echo @a"b@ && git
+# commit -m @c"d@`. Both spellings are asserted in the suite for exactly that
+# reason.
+#
+# A scan has no such failure mode. Whichever quote opens first owns the span
+# until its own closing character, which is what a shell does.
+CMD_BARE="$(printf '%s' "$CMD_NORM" | awk '{
+  out = ""; q = ""
+  n = length($0)
+  for (i = 1; i <= n; i++) {
+    c = substr($0, i, 1)
+    if (q == "") {
+      if (c == "\"" || c == "\047") { q = c } else { out = out c }
+    } else if (c == q) { q = "" }
+  }
+  print out
+}')"
 GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
+
+# The verbs that WRITE THE INDEX, which is the whole population Check 0 has to
+# recognise. Until 1.0.7 this enumeration was `add|rm|mv`, so every other verb
+# that writes the index could be compounded with a commit and all three
+# staged-content checks below would read an index nobody had judged:
+#
+#     git stash pop && git commit -m x        <- allowed, index changed after the scan
+#     git restore --staged . && git commit -m x
+#
+# `stage` is here because it is a plain synonym for `add` and was simply never
+# written down. The rest are the verbs whose documented effect includes writing
+# the index, whether or not that is their headline purpose: a branch switch, a
+# merge with --no-commit, a half-applied cherry-pick and a plumbing read-tree
+# all leave an index the scan above did not see.
+#
+# THIS LIST IS A CORPUS DIMENSION, not a constant. test/run-tests.sh carries its
+# own copy, asserts every verb in it is denied when compounded with a commit,
+# and asserts the two lists are IDENTICAL, so a verb added here without a
+# corpus entry (or the reverse) fails the suite. That lockstep is the point: the
+# defect this list replaces was not a wrong pattern, it was a dimension nobody
+# had enumerated, and the repo has now shipped that same shape three times (the
+# wrapper axis, the dash-valued flag axis, this). An enumeration a reviewer must
+# remember to extend is the same defect waiting.
+INDEX_VERBS='add|stage|rm|mv|restore|reset|stash|checkout|switch|merge|pull|rebase|cherry-pick|revert|am|apply|update-index|read-tree|sparse-checkout'
+
 # Segment-wise, for the same reason the close gate is (1.0.5). A command line
 # is not one command, and a whole-line grep cannot tell an operation from a
 # mention of one: `echo git add . && git commit -m x` was denied though the
@@ -90,12 +138,53 @@ strip_wrappers() { # strip_wrappers <segment> -> echoes the segment, unwrapped
     seg="$(printf '%s' "$seg" | sed -E 's/^[A-Za-z_][A-Za-z0-9_]*=[^ ]* *//')"
     # a wrapper word, plus env/stdbuf style flags and assignments after it
     seg="$(printf '%s' "$seg" | sed -E 's/^(command|exec|nice|nohup|time|stdbuf|env) +//')"
-    seg="$(printf '%s' "$seg" | sed -E 's/^(-[^ ]+ +)+//')"
+    # A wrapper flag may take its value as a SEPARATE word (`nice -n 5 git
+    # commit -am x`), and consuming the flag alone strands the value at the
+    # head of the segment, where it defeats the command-position test. The
+    # command word is never eaten as a value: `env -i git commit ...` has git
+    # sitting exactly where a value would be. Same defect and same fix as
+    # close-gate.sh, repeated because the two hooks each carry their own copy
+    # and a repair in one is not a repair in the other.
+    # The bare `--` option terminator is not a flag, not a value and not a
+    # command: it is punctuation that every branch below ignored, so it sat at
+    # the head of the segment and defeated the command-position test on its own.
+    # v1.0.6 DENIED `env -- git merge ...`; 1.0.7 allowed it until this line.
+    seg="$(printf '%s' "$seg" | sed -E 's/^-- +//')"
+    if printf '%s' "$seg" | grep -qE '^-{1,2}[^ ]* +([^ ]*/)?git( |$)'; then
+      seg="$(printf '%s' "$seg" | sed -E 's/^-{1,2}[^ ]* +//')"
+    elif printf '%s' "$seg" | grep -qE '^-{1,2}[^ ]* +-[^ ]* +'; then
+      # A flag value may itself begin with a dash: `nice -n -5 git ...` is an
+      # ordinary negative niceness. The value branch below requires a NON-dash
+      # value, so `-n` was consumed one word at a time and `-5` was stranded at
+      # the head, which is the same stranding the value branch was written to
+      # stop. v1.0.6 DENIED this; 1.0.7 allowed it until this branch.
+      #
+      # It sits AFTER the git branch on purpose. That branch has already taken
+      # any case where the command word follows the flag directly, so nothing
+      # here can eat git: a dash-leading word is never the command.
+      seg="$(printf '%s' "$seg" | sed -E 's/^-{1,2}[^ ]* +-[^ ]* +//')"
+    elif printf '%s' "$seg" | grep -qE '^-{1,2}[^ ]* +[^- ][^ ]* +'; then
+      seg="$(printf '%s' "$seg" | sed -E 's/^-{1,2}[^ ]* +[^- ][^ ]* +//')"
+    else
+      seg="$(printf '%s' "$seg" | sed -E 's/^(-{1,2}[^ ]* +)+//')"
+    fi
   done
   printf '%s' "$seg"
 }
 
-SEGMENTS="$(printf '%s\n' "$CMD_BARE" | awk '{ gsub(/&&|\|\||[;|()]/, "\n"); print }')"
+# The separator set. `&` is here as of 1.0.7: a SINGLE ampersand backgrounds the
+# preceding command and starts a new one, exactly as `;` does, and its absence
+# meant `git stash pop & git commit -m x` collapsed to one unrecognised segment.
+# Both gates carry their own copy of this line, so this is fixed in both; a
+# repair in one has already failed to be a repair in the other more than once.
+#
+# `&&` must not become two separators. It does not: POSIX ERE alternation is
+# leftmost-LONGEST, the two-character alternative is listed first, and the
+# behaviour is asserted in the suite rather than trusted, because "the awk on
+# the reviewer's machine" is precisely the assumption the macOS leg exists to
+# doubt. Even if it did split, the empty middle segment is skipped below, so
+# this is belt and braces on a case that must not regress silently.
+SEGMENTS="$(printf '%s\n' "$CMD_BARE" | awk '{ gsub(/&&|\|\||[;|()&]/, "\n"); print }')"
 HAS_COMMIT=""
 HAS_STAGE=""
 while IFS= read -r seg; do
@@ -105,7 +194,7 @@ while IFS= read -r seg; do
   [[ -n "$seg" ]] || continue
   if printf '%s' "$seg" | grep -qE "^([^ ]*/)?git${GIT_OPTS} +commit( |$)"; then
     HAS_COMMIT="$seg"
-  elif printf '%s' "$seg" | grep -qE "^([^ ]*/)?git${GIT_OPTS} +(add|rm|mv)( |$)"; then
+  elif printf '%s' "$seg" | grep -qE "^([^ ]*/)?git${GIT_OPTS} +($INDEX_VERBS)( |$)"; then
     HAS_STAGE="$seg"
   fi
 done <<SEGEOF
@@ -125,7 +214,7 @@ PROJ="${CLAUDE_PROJECT_DIR:-.}"
 # would have its staged-content checks below scan an index that does not yet
 # hold the content: every check would pass vacuously.
 if [[ -n "$HAS_STAGE" ]]; then
-  deny "commit gate: this command stages and commits in one step (git add, rm, and mv all write the index during command execution, after this gate scanned it), so the gate would scan a stale index and check nothing. Run the staging command on its own first, then git commit separately; the gate scans the staged content and names any finding."
+  deny "commit gate: this command writes the index and commits in one step (git add, stage, rm, mv, restore, reset, stash, checkout, switch, merge, pull, rebase, cherry-pick, revert, am, apply, update-index, read-tree and sparse-checkout can all write the index during command execution, after this gate scanned it), so the gate would scan a stale index and check nothing. Run the index-writing command on its own first, then git commit separately; the gate scans the staged content and names any finding."
 fi
 # Read the COMMIT segment's own flags, not the whole line: another command's
 # -a on the same line is not this commit's auto-staging flag.

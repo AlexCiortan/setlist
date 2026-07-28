@@ -154,8 +154,61 @@ elif ! jq -e . "$SETTINGS" >/dev/null 2>&1; then
   WIRING_GAPS="  .claude/settings.json does not parse as JSON, so the wiring cannot be
   read at all. Fix the file, then re-run: this check does not guess."
 else
-  # Our own hook entries: the ones whose command points into .claude/hooks/.
-  OURS='[.hooks | to_entries[] | .value[]? | .hooks[]? | select((.command // "") | test("\\.claude/hooks/"))]'
+  # Our own hook entries, identified BY NAME (1.0.7). The 1.0.4 cut selected on
+  # the command path containing `.claude/hooks/`, which is the directory the
+  # instance keeps ALL of its hooks in, Setlist's four and its own alike. So a
+  # project hook living where it belongs was counted as ours: a prettier hook at
+  # .claude/hooks/prettier.sh with no timeout produced
+  #
+  #     these Setlist hook entries carry no explicit "timeout": prettier.sh
+  #
+  # and a permanent exit 3 that no edit to Setlist's wiring could clear, because
+  # Setlist's wiring was already correct. That is the same false positive 1.0.4
+  # believed it had fixed, moved one directory deeper: the selector went from
+  # "every command hook anywhere" to "every hook in our directory", and the
+  # second is still not "our four". Reproduced 2026-07-27 (F23).
+  #
+  # The four names are the ones this script stamps, so the list cannot drift
+  # from what is actually installed.
+  # `[.]sh`, not `\.sh`. A backslash here has to survive shell interpolation AND
+  # arrive as a valid JSON string escape inside the jq program, and `"\."` is not
+  # one: jq rejects the whole program, prints it to stderr, and the command
+  # substitution below yields the empty string. That reads as "no untimed
+  # entries" and the check passes while not running, which is backlog item 19
+  # verbatim, in the same block whose comment above describes item 19. Caught
+  # here only because the broken program was echoed where a test could see it.
+  # A character class needs no escape and cannot lose one.
+  OURS_RE="/($(printf '%s' "$STAMPED_HOOKS" | tr ' ' '|'))[.]sh"
+  OURS="[.hooks | to_entries[] | .value[]? | .hooks[]? | select((.command // \"\") | test(\"$OURS_RE\"))]"
+
+  # THE GATES MUST BE WIRED AT ALL, which nothing here checked until 1.0.7.
+  # The block below verified the scope hook's matcher and every entry's timeout,
+  # so it could only ever find fault with an entry that was PRESENT. Delete the
+  # commit gate and close gate entries outright and there was nothing left to
+  # object to: the refresh reported a complete apply, exit 0, and said the
+  # refreshed gates would bind from the next session, of a pair of gates that
+  # would never bind again. Reproduced 2026-07-27 (F5).
+  #
+  # This is the seam that carried plugin 1.0.3's worst defect, and an upgrade
+  # path that certifies a disarmed instance is worse than no check: it converts
+  # "you must verify this yourself" into "this was verified".
+  UNWIRED=""
+  for h in $STAMPED_HOOKS; do
+    if ! jq -e --arg h "$h" '[.hooks | to_entries[] | .value[]? | .hooks[]?
+        | select((.command // "") | test("/" + $h + "\\.sh"))] | length > 0' "$SETTINGS" >/dev/null 2>&1; then
+      UNWIRED="$UNWIRED $h.sh"
+    fi
+  done
+  if [[ -n "$UNWIRED" ]]; then
+    WIRING_GAPS="$WIRING_GAPS
+  these Setlist hooks are stamped into .claude/hooks/ but NOTHING IN
+  .claude/settings.json RUNS THEM:$UNWIRED
+  The files being current is not the same as the gates being in force. Restore
+  each entry from the plugin's templates/claude/settings.json.tmpl (the scope
+  hook on Write|Edit|MultiEdit|NotebookEdit, the commit and close gates on
+  Bash, the re-grounding hook on SessionStart), keeping this file's own
+  permissions and model settings."
+  fi
 
   # The scope hook is identified by its command, and only ITS matcher is read.
   SCOPE_MATCHER="$(jq -r '[.hooks.PreToolUse[]?
