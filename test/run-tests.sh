@@ -18,6 +18,31 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOKS="$ROOT/templates/hooks"
 
+# A CALL TO AN UNDEFINED FUNCTION IS FATAL (1.0.8).
+#
+# The verdict helpers are defined partway down this file, and a block placed
+# above its helper calls a function that does not exist yet. bash prints
+# "command not found" to stderr and the command substitution yields the EMPTY
+# STRING, which every verdict helper's caller reads as "allow". An assertion
+# expecting a deny then fails with a confusing message, and an assertion
+# expecting an ALLOW passes while testing nothing at all. The second is the
+# dangerous one, and it is the silent-pass shape this suite exists to hunt.
+#
+# Found by putting a commit-gate block above cg_verdict's definition and
+# watching it report a hook defect that did not exist.
+#
+# bash 3.2 (macOS) has no command_not_found_handle, so this is a Linux and CI
+# guard rather than a universal one. It costs nothing where it is unsupported
+# and the ordering rule holds on both.
+command_not_found_handle() {
+  printf 'SUITE ABORTED: "%s" is not defined at this point in the file.\n' "$1" >&2
+  printf '  A helper is being called ABOVE its definition. Move the block below the\n' >&2
+  printf '  helper: an undefined call returns empty, which reads as ALLOW, and an\n' >&2
+  printf '  assertion in the allow direction would pass while testing nothing.\n' >&2
+  exit 1
+}
+
+
 PASS=0
 FAIL=0
 # Canonicalized deliberately: macOS sets TMPDIR with a trailing slash, which
@@ -128,6 +153,43 @@ run_hook_nojq() { # run_hook_nojq <hook-file> <project-dir> <payload>
   HOOK_RC=$?
 }
 
+# And the state build_nojq_bin cannot express (leg 4, F1): a jq that is PRESENT
+# and does not run. Unlinking jq from PATH tests one failure mode and the guards
+# were written against exactly that one, so a jq that exists and exits nonzero
+# walked past `command -v jq` and made two governing gates allow in silence.
+#
+# A fixture that cannot express a failure is not evidence against it, which this
+# suite has now written down three times about three different fixtures.
+BROKENJQ_BIN="$WORK/brokenjq-bin"
+build_brokenjq_bin() {
+  mkdir -p "$BROKENJQ_BIN"
+  local t p
+  for t in bash sh git grep sed awk cat head tail od tr wc cut sort uniq \
+           printf env dirname basename mkdir rm cp mv ls chmod date mktemp; do
+    p="$(command -v "$t" 2>/dev/null || true)"
+    [[ -n "$p" ]] && ln -sf "$p" "$BROKENJQ_BIN/$t"
+  done
+  # The failure a broken dynamic link actually produces: a message on stderr and
+  # a nonzero status, with nothing on stdout.
+  printf '#!/bin/sh\necho "jq: error while loading shared libraries: libonig.so.5" >&2\nexit 127\n' > "$BROKENJQ_BIN/jq"
+  chmod +x "$BROKENJQ_BIN/jq"
+  # The fixture proves itself before anything is asserted with it: a stub that
+  # accidentally worked would make every case below pass for the wrong reason.
+  if PATH="$BROKENJQ_BIN" command -v jq >/dev/null 2>&1; then :; else
+    printf 'harness error: the broken-jq stub is not on the fixture PATH\n' >&2
+    exit 2
+  fi
+  if PATH="$BROKENJQ_BIN" jq --version >/dev/null 2>&1; then
+    printf 'harness error: the broken-jq stub RUNS, so it does not test a broken jq\n' >&2
+    exit 2
+  fi
+}
+
+run_hook_brokenjq() { # run_hook_brokenjq <hook-file> <project-dir> <payload>
+  HOOK_OUT="$(printf '%s' "$3" | PATH="$BROKENJQ_BIN" CLAUDE_PROJECT_DIR="$2" bash "$1" 2>/dev/null)"
+  HOOK_RC=$?
+}
+
 # --- assertions --------------------------------------------------------------
 
 expect_deny() { # expect_deny <name> <substring>
@@ -177,6 +239,7 @@ expect_context() { # expect_context <name> <substring>
 
 printf 'Setlist hook suite\nroot: %s\n\n' "$ROOT"
 build_nojq_bin
+build_brokenjq_bin
 
 # =============================================================================
 # commit-gate.sh
@@ -225,6 +288,26 @@ expect_allow "commit-gate e: a clean staged commit is allowed"
 # f. quote-stripping regression guard: "git add" inside the message only
 run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "explain why git add runs first"')"
 expect_allow "commit-gate f: the words git add inside a quoted message are allowed"
+
+# f2. THE SAME GUARD THROUGH THE ESCAPE PATH (leg 4, F31). Case f covers the
+# quoted spelling; an UNQUOTED message using backslash escapes was un-escaped
+# into live grammar, so a plain commit read as a compound stage-and-commit and
+# was denied. That is the false-positive twin of the close gate's F5, and it is
+# asserted here because a fix aimed only at the injection direction can pass
+# every one of those cases while breaking ordinary commits.
+git -C "$CG" add clean.md 2>/dev/null || true
+for esc_msg in 'git commit -m foo\;git\ add\ .' 'git commit -m explain\ why\ git\ add\ runs\ first' 'git commit -m fixup\&cleanup'; do
+  run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload "$esc_msg")"
+  expect_allow "commit-gate f2: [$esc_msg] is one commit, not a compound"
+done
+
+# f3. And the compound must STILL be seen, so f2 cannot pass by blinding the
+# separator test outright. This is the direction that would silently disarm the
+# gate if the escape fix went one step too far.
+for real_compound in 'git add . && git commit -m fixup' 'git add . ; git commit -m fixup' 'git add .; git commit -m fixup'; do
+  run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload "$real_compound")"
+  expect_deny "commit-gate f3: [$real_compound] is a real compound and is still denied" "one step"
+done
 git -C "$CG" commit -qm "clean"
 
 # g. spec lifecycle transition without specs/STATUS.md staged
@@ -320,6 +403,18 @@ close_fixture() {
   git -C "$d" add specs
   git -C "$d" commit -qm "spec 0001"
   git -C "$d" checkout -q main
+
+  # A REAL remote-tracking ref (1.0.7, from F3). This fixture created none, so
+  # its "a remote-tracking ref" case asserted a deny on a ref git itself could
+  # not resolve: the deny came entirely from a string strip and had never once
+  # been exercised against a remote-tracking ref that exists. A fixture that
+  # cannot express a finding is not evidence against it, and this one silently
+  # covered both halves of F3 for three releases.
+  #
+  # It points at the SAME commit as the local branch here, which is the ordinary
+  # case. The divergent case (local compliant, remote not) is its own fixture in
+  # the ref-identity axis, because it needs two different trees.
+  git -C "$d" update-ref refs/remotes/origin/spec/0001-thing "$(git -C "$d" rev-parse spec/0001-thing)"
 }
 
 MERGE_CMD='git merge --no-ff spec/0001-thing'
@@ -589,7 +684,65 @@ run_hook_nojq "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'apt-get install -y 
 expect_allow "no-jq i4: unrelated Bash commands still run, so jq can be installed"
 
 run_hook_nojq "$HOOKS/regrounding-hook.sh" "$RG" "$(session_payload startup)"
-expect_context "no-jq i5: the pointer still ships and names the condition" "jq is not installed"
+expect_context "no-jq i5: the pointer still ships and names the condition" "jq is not usable"
+
+# =============================================================================
+# i-b. jq PRESENT BUT BROKEN: the same contract, through the failure mode the
+# no-jq fixture could not express (leg 4, F1).
+#
+# `command -v jq` tests whether a file of that name is on PATH. A jq that EXISTS
+# and exits nonzero (a broken dynamic library, an out-of-memory kill, a
+# wrong-architecture binary) satisfied that and then produced nothing: the
+# parses returned the empty string with their status discarded, the
+# applicability tests matched nothing, and the close gate and the commit gate
+# ALLOWED, silently, against a README that promises the opposite in as many
+# words.
+#
+# Every case below has a HEALTHY control immediately beside it, because a deny
+# that fires in all three states would satisfy this block while telling us
+# nothing. The controls are the assertions that make the fixture real.
+# =============================================================================
+
+run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "clean"')"
+CG_HEALTHY_RC="$HOOK_RC"; CG_HEALTHY_OUT="$HOOK_OUT"
+run_hook_brokenjq "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "clean"')"
+expect_deny "broken-jq j1: the commit gate fails CLOSED when jq runs and fails" "jq"
+
+run_hook_brokenjq "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
+expect_deny "broken-jq j2: the close gate fails CLOSED even on a compliant merge" "jq"
+
+run_hook_brokenjq "$HOOKS/scope-hook.sh" "$SC" "$(edit_payload "$SC/specs/0001-thing.md")"
+expect_deny "broken-jq j3: the scope hook fails CLOSED" "jq"
+
+# And it must name the TOOL, not the config. The pre-fix scope hook failed
+# closed for the wrong stated reason, blaming a perfectly valid sdd.json, which
+# sends the operator to fix a file that is not broken while the gate stays down.
+if printf '%s' "$HOOK_OUT" | grep -q 'sdd.json is not the problem'; then
+  ok "broken-jq j3b: the scope hook names the broken tool, not the valid config"
+else
+  bad "broken-jq j3b: the scope hook names the broken tool, not the valid config" \
+      "the deny reason did not clear sdd.json: $HOOK_OUT"
+fi
+
+# The blast radius stays narrow in this state too: the session must still be
+# able to run the command that repairs jq.
+run_hook_brokenjq "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'apt-get install -y jq')"
+expect_allow "broken-jq j4: unrelated Bash commands still run, so jq can be repaired"
+
+# The re-grounding hook emitted literally
+#   {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":}}
+# because its final `jq -Rs .` produced nothing. So on the one machine where the
+# gates have silently stopped enforcing, session start produced malformed JSON
+# carrying no warning at all: the notice is suppressed by exactly the condition
+# it exists to announce.
+run_hook_brokenjq "$HOOKS/regrounding-hook.sh" "$RG" "$(session_payload startup)"
+if printf '%s' "$HOOK_OUT" | jq -e . >/dev/null 2>&1; then
+  ok "broken-jq j5: the re-grounding hook still emits VALID JSON when jq is broken"
+else
+  bad "broken-jq j5: the re-grounding hook still emits VALID JSON when jq is broken" \
+      "stdout does not parse: ${HOOK_OUT:-<empty>}"
+fi
+expect_context "broken-jq j6: and it carries the warning that the gates are down" "jq is not usable"
 
 # =============================================================================
 # x. no .claude/sdd.json: every hook stays silent
@@ -1129,6 +1282,101 @@ else
   ok "wiring m3: a fully wired instance is not reported as unwired"
 fi
 
+# =============================================================================
+# 1.0.8 (leg 4, F2): WIRED MEANS THIS INSTANCE'S FILE, NOT A FILE WITH THAT NAME.
+#
+# The predicate above was tightened on 2026-07-28 from a bare substring match to
+# an anchored pattern, and the anchored pattern still asked about SHAPE:
+#
+#   ^[^ ]*/[.]claude/hooks/<name>[.]sh([^ ]*)?( |$)
+#          ^^^^^^                          ^^^^^^^
+#          any root                        any suffix
+#
+# So `close-gate.sh.disabled` was Setlist's close gate, and so was a sibling
+# package's copy in a monorepo, and so was one under $HOME or /opt. Renaming a
+# hook to `.disabled` is exactly how a person turns a gate off. The instance
+# reported zero wiring gaps, --apply exited 0, and printed "the refreshed gates
+# bind from the NEXT session onward" about a gate that would never bind.
+#
+# The 2026-07-28 fix closed the two examples its own comment named (a fork one
+# level deeper, a bare mention) and not the class around them. That is the same
+# stop-at-the-example error as the heading-depth range in the report checker,
+# twice in two days, which is why these cases are written as a LOOP OVER THE SET
+# rather than as the two spellings a finding happened to report.
+#
+# The upgrade path is the one surface a user cannot check by hand, and its whole
+# purpose since 1.0.7 is to notice a disarmed instance.
+rewire() { # rewire <settings.json> <hook-name> <new-command-string>
+  jq --arg h "$2" --arg c "$3" '
+    walk(if type == "object" and has("command") and ((.command // "") | test($h))
+         then .command = $c else . end)' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+
+# Every spelling below names a file that is NOT the one this script stamps at
+# $INSTANCE/.claude/hooks/<name>.sh, so every one must report UNWIRED. Run
+# against all four stamped hooks, because a predicate that is right for the
+# close gate and wrong for the scope hook is the defect one file over.
+for h in scope-hook commit-gate close-gate regrounding-hook; do
+  for spell in \
+    'SUFFIX-disabled|"$CLAUDE_PROJECT_DIR"/.claude/hooks/HOOK.sh.disabled' \
+    'SUFFIX-orig|"$CLAUDE_PROJECT_DIR"/.claude/hooks/HOOK.sh.orig' \
+    'SUFFIX-wrapper|"$CLAUDE_PROJECT_DIR"/.claude/hooks/HOOK.shell-wrapper' \
+    'ROOT-sibling|"$CLAUDE_PROJECT_DIR"/packages/api/.claude/hooks/HOOK.sh' \
+    'ROOT-home|$HOME/.claude/hooks/HOOK.sh' \
+    'ROOT-vendor|/opt/vendor/.claude/hooks/HOOK.sh' \
+    'FORK-deeper|"$CLAUDE_PROJECT_DIR"/.claude/hooks/local/HOOK.sh'
+  do
+    label="${spell%%|*}"; cmd="${spell#*|}"; cmd="${cmd//HOOK/$h}"
+    INST="$WORK/inst-disarm-$h-$label"
+    instance_fixture "$INST" 1.0.0 current
+    rewire "$INST/.claude/settings.json" "$h" "$cmd"
+    run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+    expect_script "disarm $h/$label: a command that does not run this instance's $h.sh is UNWIRED" 3 "$h.sh"
+  done
+done
+
+# The other direction, which is the one that makes the check usable rather than
+# merely strict: every spelling this script actually stamps, plus the literal
+# absolute path an instance may legitimately be wired with, must stay WIRED. A
+# predicate that reports everything unwired would pass every case above and be
+# worthless.
+for spell in \
+  'quoted-var|"$CLAUDE_PROJECT_DIR"/.claude/hooks/HOOK.sh' \
+  'braced-var|${CLAUDE_PROJECT_DIR}/.claude/hooks/HOOK.sh' \
+  'quoted-braced|"${CLAUDE_PROJECT_DIR}"/.claude/hooks/HOOK.sh' \
+  'bare-var|$CLAUDE_PROJECT_DIR/.claude/hooks/HOOK.sh'
+do
+  label="${spell%%|*}"; tmpl="${spell#*|}"
+  INST="$WORK/inst-armed-$label"
+  instance_fixture "$INST" 1.0.0 current
+  for h in scope-hook commit-gate close-gate regrounding-hook; do
+    rewire "$INST/.claude/settings.json" "$h" "${tmpl//HOOK/$h}"
+  done
+  run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+  expect_script "armed $label: a spelling this script stamps stays WIRED" 0 "refreshed the four stamped hooks"
+done
+
+# The absolute path of the instance itself, which cannot be templated above
+# because it is only known at run time.
+INST="$WORK/inst-armed-absolute"
+instance_fixture "$INST" 1.0.0 current
+INST_ABS="$(cd "$INST" && pwd)"
+for h in scope-hook commit-gate close-gate regrounding-hook; do
+  rewire "$INST/.claude/settings.json" "$h" "$INST_ABS/.claude/hooks/$h.sh"
+done
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "armed absolute: this instance's own absolute path stays WIRED" 0 "refreshed the four stamped hooks"
+
+# And an entry that is not a command hook does not run a command however its
+# string reads, so it cannot arm a gate.
+INST="$WORK/inst-disarm-type"
+instance_fixture "$INST" 1.0.0 current
+jq 'walk(if type == "object" and has("command") and ((.command // "") | test("close-gate"))
+         then .type = "output" else . end)' \
+  "$INST/.claude/settings.json" > "$INST/t" && mv "$INST/t" "$INST/.claude/settings.json"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "disarm type: an entry whose type is not 'command' does not arm the close gate" 3 "close-gate.sh"
+
 # grep -c counts LINES. Against a minified settings.json (Claude Code rewrites
 # this file when a user toggles config) four entries carrying one timeout read
 # as "1 and 1" in 1.0.3, balanced, and the refresh exited 0 over three untimed
@@ -1321,7 +1569,16 @@ for hook in scope-hook commit-gate close-gate regrounding-hook; do
   HF="$HOOKS/$hook.sh"
   UNANNOTATED="$(awk '
     { lines[NR] = $0 }
-    /exit 0/ && $0 !~ /^[[:space:]]*#/ {
+    # A BARE `exit` exits with the status of the last command, which is 0 far
+    # more often than not, so it is a silent pass wearing different clothes. The
+    # audit matched the literal string `exit 0` and could not see it, which is
+    # item 26 exactly (grep-enforced, not meaning-enforced) and was found live by
+    # the third 1.0.8 leg rather than remembered off the backlog.
+    #
+    # `exit 1`, `exit 2` and `exit "$rc"` are deliberately NOT matched: the first
+    # two are refusals and the third is a status this audit cannot evaluate, so
+    # flagging it would be noise that trains people to ignore the check.
+    ($0 ~ /(^|[;[:space:]])exit[[:space:]]*(0[[:space:]]*)?(;|$)/) && $0 !~ /^[[:space:]]*#/ {
       ok = 0
       for (i = NR - 3; i < NR; i++) if (lines[i] ~ /fail-open-ok/) ok = 1
       if (!ok) print NR": "$0
@@ -1454,6 +1711,19 @@ fi
 CORP="$WORK/corpus"
 close_fixture "$CORP" no no answered no no true   # deliberately UNCLOSED: every gated merge must deny
 git -C "$CORP" branch -f tmp-alias spec/0001-thing
+# A chore/ ref sitting on the unclosed spec branch's commit, added 2026-07-28.
+#
+# It is here rather than in a single dedicated test on purpose: with this ref in
+# the shared corpus, EVERY close-gate assertion below runs with a chore sibling
+# present, so a regression in the spec-versus-chore tie-break turns dozens of
+# assertions red instead of one. 1.0.8 shipped that regression and the whole
+# corpus stayed green, because the fixture held the repository constant while
+# varying only the command.
+#
+# The state is ordinary, not adversarial: `git checkout -b chore/wip
+# <spec-branch>` and promoting a chore branch to a spec branch both leave two
+# refs on one commit, and Part 5b makes chore branches first-class.
+git -C "$CORP" branch -f chore/cleanup spec/0001-thing
 git -C "$CORP" update-ref refs/remotes/origin/main "$(git -C "$CORP" rev-parse main)"
 git -C "$CORP" branch -f release/2.0 main
 
@@ -1508,6 +1778,589 @@ elif [[ -z "$CORPUS_DENY_FAIL" ]]; then
 else
   bad "corpus deny: every generated spec-merge spelling must be denied ($CORPUS_DENY_N generated)" \
       "these reached the trunk with the close conditions unevaluated:$CORPUS_DENY_FAIL"
+fi
+
+corpus_verdict_reason() { # corpus_verdict_reason <command> -> the deny reason text
+  local out
+  out="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$CORP" bash "$HOOKS/close-gate.sh" 2>/dev/null)"
+  printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecisionReason // empty' 2>/dev/null
+}
+
+# --- the DENY-CODE axis (1.0.8, routine item 4) ------------------------------
+# Every deny carries a stable bracketed CODE, so an assertion can test the
+# gate's IDENTITY instead of its prose. Backlog item 4's trigger was concrete:
+# B2 reworded the commit gate's deny and dogfood/hook-smoke.sh still asserted
+# the old wording, so a green suite sat beside a red smoke and neither the badge
+# nor the publish could see it. A reworded message should never break a test,
+# and a test should never pass because two different denials happen to share a
+# phrase.
+#
+# Asserted STRUCTURALLY rather than one code at a time: every deny site in every
+# stamped hook must carry a code, so adding a new deny without one fails here
+# rather than being noticed later by whoever greps for it.
+DC_MISSING=""
+for hookfile in "$HOOKS"/close-gate.sh "$HOOKS"/commit-gate.sh "$HOOKS"/scope-hook.sh; do
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    printf '%s' "$line" | grep -qE '\[(CG|CM|SH)-[A-Z0-9-]+\]' || DC_MISSING="$DC_MISSING
+    $(basename "$hookfile"): $(printf '%s' "$line" | cut -c1-72)"
+  done <<DCEOF
+$(grep -hE '^\s*deny(_literal)? "' "$hookfile")
+DCEOF
+done
+if [[ -z "$DC_MISSING" ]]; then
+  ok "deny codes: every deny site in every stamped hook carries a stable code"
+else
+  bad "deny codes: a deny without a code cannot be asserted except by its prose" \
+      "these carry no [XX-CODE]:$DC_MISSING"
+fi
+
+# The codes must be UNIQUE, or two different failures are indistinguishable to
+# any assertion that uses them, which is the defect this axis exists to remove
+# wearing a different hat.
+DC_DUPES="$(grep -ohE '\[(CG|CM|SH)-[A-Z0-9-]+\]' "$HOOKS"/close-gate.sh "$HOOKS"/commit-gate.sh "$HOOKS"/scope-hook.sh | sort | uniq -d)"
+if [[ -z "$DC_DUPES" ]]; then
+  ok "deny codes: every code is unique across the stamped hooks"
+else
+  bad "deny codes: two denials sharing a code cannot be told apart" "duplicated: $DC_DUPES"
+fi
+
+# And the code must actually REACH the agent, not merely exist in the source.
+# The reason string is what the harness delivers verbatim, so it is read back
+# out of a real deny rather than assumed to have survived.
+if printf '%s' "$(corpus_verdict_reason 'git merge --no-ff spec/0001-thing')" | grep -q 'CG-'; then
+  ok "deny codes: the code survives into the reason the agent actually receives"
+else
+  bad "deny codes: a code that does not reach the agent is not an interface" \
+      "the delivered reason carried no CG- code"
+fi
+
+# --- the SDD-SHAPE axis (1.0.8, F1) -----------------------------------------
+# `jq -e .` tests JSON VALIDITY, not SHAPE. Two perfectly valid inputs disabled
+# the trunk rule in BOTH the close gate and the scope hook, in silence:
+# a top-level array (so `.trunk` errors and TRUNK reads empty) and TWO documents
+# in one file (so `.trunk` prints twice and TRUNK reads two lines). Neither needs
+# an attacker: a hand-edited file and a half-merged config produce exactly these.
+for shape in 'array' 'multidoc'; do
+  SH="$WORK/inst-shape-$shape"
+  close_fixture "$SH" no no answered no no true
+  case "$shape" in
+    array)    printf '[]' > "$SH/.claude/sdd.json" ;;
+    multidoc) printf '{"trunk":"main"}\n{"trunk":"main"}\n' > "$SH/.claude/sdd.json" ;;
+  esac
+  # It really IS valid JSON to jq, which is the whole point of the finding.
+  if [[ "$shape" == "array" ]]; then
+    assert_true "sdd-shape $shape 0: the fixture is valid JSON, so validity is not the test" \
+      "the fixture is malformed, so this case would pass for the wrong reason" \
+      jq -e . "$SH/.claude/sdd.json"
+  fi
+  run_hook "$HOOKS/close-gate.sh" "$SH" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+  expect_deny "sdd-shape $shape a: the close gate refuses a config that is not one object" "JSON OBJECT"
+  OUT="$(jq -nc --arg p "$SH/src/app.js" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"}}' \
+        | CLAUDE_PROJECT_DIR="$SH" bash "$HOOKS/scope-hook.sh" 2>/dev/null)"
+  if [[ "$(printf '%s' "$OUT" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)" == "deny" ]]; then
+    ok "sdd-shape $shape b: the scope hook refuses it too, so the trunk rule is not silently off"
+  else
+    bad "sdd-shape $shape b: the scope hook must refuse a config it cannot read a trunk from" \
+        "a $shape sdd.json disabled the trunk rule and the write reached the trunk"
+  fi
+done
+
+# --- the QUOTED-CONTENT axis (1.0.8, B1/B3b and F4 to F7) -------------------
+# The two gates handled quoting in the way that was wrong for the other. The
+# close gate deleted quote CHARACTERS and kept their contents, so free text was
+# fed to the parser as code; the commit gate deleted quoted SPANS, so quoting a
+# word deleted the word it matches on. A quoted span of one shell-safe word is
+# now kept as that word and anything else becomes an inert token.
+#
+# The dimensions here are the four that each produced a finding: quote character,
+# POSITION (binary, subcommand, ref, message), and content (bare word, words with
+# spaces, words containing a separator, words containing a git command).
+QC_FAIL=""
+for payload in \
+  'git commit -m "todo (git checkout spec/0002-other)" && git merge --no-ff spec/0001-thing' \
+  'echo "x && git checkout spec/0002-other" && git merge --no-ff spec/0001-thing' \
+  'echo "x; git checkout spec/0002-other" && git merge --no-ff spec/0001-thing' \
+  "git commit -m 'wip (git checkout spec/0002-other)' && git merge --no-ff spec/0001-thing" \
+  'git merge --no-ff -m "closes spec/0003-done" spec/0001-thing' \
+  ; do
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || QC_FAIL="$QC_FAIL
+    $payload"
+done
+if [[ -z "$QC_FAIL" ]]; then
+  ok "corpus quoted content: quoted text cannot donate a command or a segment boundary"
+else
+  bad "corpus quoted content: a quoted span must not contribute code" \
+      "these reached the trunk unchecked:$QC_FAIL"
+fi
+
+# THE ARGUMENT DIRECTION, which is why the commit gate's span-dropping repair
+# was reverted when it was tried on this gate: a quoted REF must still be read.
+QC_ARG_FAIL=""
+for payload in \
+  'git merge "spec/0001-thing"' \
+  "git merge 'spec/0001-thing'" \
+  'git merge --no-ff "spec/0001-thing" -m "close"' \
+  ; do
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || QC_ARG_FAIL="$QC_ARG_FAIL
+    $payload"
+done
+if [[ -z "$QC_ARG_FAIL" ]]; then
+  ok "corpus quoted content: a quoted REF is still read, so the span is not simply dropped"
+else
+  bad "corpus quoted content: dropping quoted spans loses the branch name" \
+      "these stopped being seen as merges at all:$QC_ARG_FAIL"
+fi
+
+
+# THE PLACEHOLDER MUST NOT BE FORGEABLE. `@@Q@@` is what a multi-word quoted
+# span becomes, so a payload can type it literally and ask whether the gate
+# treats its own internal marker as data. It must: the token is inert by
+# construction (it is not a command word, not a separator and not a ref), but
+# "inert by construction" is a claim, and this repo has been bitten by claims
+# that were reasoned rather than asserted.
+QC_TOK_FAIL=""
+for payload in \
+  'echo @@Q@@ && git merge --no-ff spec/0001-thing' \
+  'git merge --no-ff spec/0001-thing @@Q@@' \
+  'git commit -m "@@Q@@ git checkout spec/0002-other" && git merge --no-ff spec/0001-thing' \
+  ; do
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || QC_TOK_FAIL="$QC_TOK_FAIL
+    $payload"
+done
+if [[ -z "$QC_TOK_FAIL" ]]; then
+  ok "corpus quoted content: a literal @@Q@@ in the payload cannot hide a merge"
+else
+  bad "corpus quoted content: the internal placeholder must be inert as INPUT too" \
+      "these escaped by typing the marker:$QC_TOK_FAIL"
+fi
+# And it gets NO privileged treatment: a trunk merge naming it is a merge whose
+# target the gate cannot establish, so it refuses, exactly as it does for any
+# other unresolvable ref. The first cut of this case expected an ALLOW and the
+# gate was right and the test was wrong, which is worth leaving in the record:
+# an unresolvable merge target denies, and the placeholder is not an exception
+# to that in either direction.
+if [[ "$(corpus_verdict 'git merge --no-ff @@Q@@')" == "deny" ]]; then
+  ok "corpus quoted content: the placeholder is treated as an unresolvable ref, not as a special case"
+else
+  bad "corpus quoted content: @@Q@@ must be refused like any ref the gate cannot resolve" \
+      "it was allowed, which means the marker is being special-cased somewhere"
+fi
+
+# AND THE ALLOW DIRECTION. A message is not code, and must not become a denial
+# just because it contains words that look like one.
+QC_ALLOW_FAIL=""
+for payload in \
+  'git commit -m "merge spec/0001-thing when review is done"' \
+  'echo "git merge --no-ff spec/0001-thing"' \
+  'git commit -m "an ordinary message"' \
+  ; do
+  [[ "$(corpus_verdict "$payload")" == "allow" ]] || QC_ALLOW_FAIL="$QC_ALLOW_FAIL
+    $payload"
+done
+if [[ -z "$QC_ALLOW_FAIL" ]]; then
+  ok "corpus quoted content: a message mentioning a merge is not a merge"
+else
+  bad "corpus quoted content: opaque tokens must not turn messages into denials" \
+      "these were denied:$QC_ALLOW_FAIL"
+fi
+
+# --- the ESCAPE axis (leg 4, F5 and F31) ------------------------------------
+#
+# The opaque-token model closed content-as-code through the QUOTE path and left
+# the ESCAPE path wide open. Outside quotes a backslash escapes the next
+# character, and the normaliser consumed the backslash and emitted that
+# character RAW, which handed it straight back to the parser as grammar:
+#
+#     git commit -m foo\;git\ checkout\ spec/0002-other && git merge --no-ff spec/0001-thing
+#
+# Bash parses that as ONE argument to -m, so nothing switches branch and the
+# merge runs on the trunk. The gate saw a live `;` and live spaces, cut a
+# synthetic `git checkout spec/0002-other` segment out of free text, believed
+# the shell had moved off the trunk, and skipped every close check. The QUOTED
+# spelling of the identical line was already denied, which is the control.
+#
+# Asserted over the SET of grammar-carrying characters rather than over the `;`
+# and the space a finding used, and in BOTH directions, because the same defect
+# produces a false DENIAL in the commit gate (F31): a plain commit whose message
+# carries an escaped separator was read as a compound stage-and-commit.
+QC_ESC_FAIL=""
+for esc in '\;' '\&' '\|' '\(' '\)' '\>' '\<'; do
+  # free text in a message must not inject a branch switch that hides the merge
+  payload="git commit -m foo${esc}git\\ checkout\\ spec/0002-other && git merge --no-ff spec/0001-thing"
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || QC_ESC_FAIL="$QC_ESC_FAIL
+    $payload"
+done
+# and the escaped SPACE on its own, which splits a word into a command
+QC_ESC_EXTRA='git\ checkout spec/0002-other && git merge --no-ff spec/0001-thing'
+[[ "$(corpus_verdict "$QC_ESC_EXTRA")" == "deny" ]] || QC_ESC_FAIL="$QC_ESC_FAIL
+    $QC_ESC_EXTRA"
+if [[ -z "$QC_ESC_FAIL" ]]; then
+  ok "corpus escape: an escaped separator or space is content, and cannot inject a branch switch"
+else
+  bad "corpus escape: an escaped character must not be handed back to the parser as grammar" \
+      "these were ALLOWED, so unreviewed work reaches the trunk:$QC_ESC_FAIL"
+fi
+
+# The control that makes the case above real: the quoted spelling of the same
+# line, which denied before this fix and must still deny after it.
+if [[ "$(corpus_verdict 'git commit -m "foo;git checkout spec/0002-other" && git merge --no-ff spec/0001-thing')" == "deny" ]]; then
+  ok "corpus escape control: the quoted spelling of the same injection still denies"
+else
+  bad "corpus escape control: the quoted spelling of the same injection still denies" \
+      "the control itself allowed, so the escape cases above prove nothing"
+fi
+
+# THE ALLOW DIRECTION. An escape that carries no grammar is ordinary text, and
+# the fix must not turn every backslash into a denial. The escaped apostrophe in
+# particular is the commonest one there is, and its own handling was added to
+# fix a defect this file already records.
+#
+# `spec/0001-thing` is deliberately NOT in this list: it is the corpus fixture's
+# non-compliant deny control, so asserting it allows would be asserting the
+# fixture is broken. The first cut of this block used it and the suite said so.
+QC_ESC_OK_FAIL=""
+for payload in \
+  "git commit -m it\\'s" \
+  'git commit -m fixup\-typo' \
+  'echo done\;echo more' \
+  'git status' \
+  ; do
+  [[ "$(corpus_verdict "$payload")" == "allow" ]] || QC_ESC_OK_FAIL="$QC_ESC_OK_FAIL
+    $payload"
+done
+if [[ -z "$QC_ESC_OK_FAIL" ]]; then
+  ok "corpus escape: an escape carrying no grammar stays ordinary text"
+else
+  bad "corpus escape: the fix must not deny every backslash" \
+      "these were denied:$QC_ESC_OK_FAIL"
+fi
+
+# --- the LEG 5 axis, part 3: a quoted template is not evidence --------------
+#
+# The most reachable hole leg 5 found, because it needs no adversary. Every
+# close-condition check read the spec file as one flat string, so a spec that
+# QUOTES the Appendix C template inside a fence satisfied all four at once and a
+# spec with no Closing report at all merged clean. The template ships fenced in
+# setlist.md, it is stamped to specs/TEMPLATE.md, and the spec-authoring skill
+# tells authors to copy it: quoting it is ordinary authoring.
+#
+# And the inventory row's STATUS is a CELL. Grepping the whole row for CLOSED
+# let an ACTIVE spec pass on a note column that mentioned another spec's
+# closure, which is prose a person writes without thinking.
+L5C="$WORK/leg5-content"; close_fixture "$L5C" no no answered no no true
+git -C "$L5C" checkout -q spec/0001-thing
+cat > "$L5C/specs/0001-thing.md" <<'SPECEOF'
+# Spec 0001
+
+Not closed. There is no Closing report section here, only the template quoted
+so the next author can copy it:
+
+```markdown
+## Closing report
+- QA Pass 1 report:
+  - criterion 1: PASS
+- QA Pass 2: done
+- Architecture diagram: no impact
+```
+SPECEOF
+printf '# Spec inventory\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n' > "$L5C/specs/STATUS.md"
+echo work >> "$L5C/src/a.txt"
+git -C "$L5C" add -A >/dev/null 2>&1; git -C "$L5C" commit -qm "quote the template" >/dev/null 2>&1
+git -C "$L5C" checkout -q main
+run_hook "$HOOKS/close-gate.sh" "$L5C" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+expect_deny "leg5 content: a fenced quote of the template is not a Closing report" "CG-NO-CLOSING-REPORT"
+
+# The same spec WITH a real report, still quoting the template, must merge. This
+# is the direction that breaks every ordinary session if the fix overreaches.
+git -C "$L5C" checkout -q spec/0001-thing
+cat > "$L5C/specs/0001-thing.md" <<'SPECEOF'
+# Spec 0001
+
+## Closing report
+- QA Pass 1 report:
+  - criterion 1: PASS
+- QA Pass 2: done
+- Architecture diagram: no impact
+
+For reference, the template authors copy:
+
+```markdown
+## Closing report
+- QA Pass 1 report:
+  - criterion 1: PASS
+- QA Pass 2: done
+- Architecture diagram: no impact
+```
+SPECEOF
+git -C "$L5C" add -A >/dev/null 2>&1; git -C "$L5C" commit -qm "real report plus a quote" >/dev/null 2>&1
+git -C "$L5C" checkout -q main
+run_hook "$HOOKS/close-gate.sh" "$L5C" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+expect_allow "leg5 content control: a real Closing report beside a fenced quote still closes"
+
+# The status CELL, both directions, over every shape the note column takes.
+for row_case in \
+  'ACTIVE|follows on from 0000 which is CLOSED|deny' \
+  'ACTIVE|superseded by 0002, now CLOSED|deny' \
+  'DRAFT|see the CLOSED spec 0000|deny' \
+  'CLOSED|done|allow' \
+  ; do
+  st="${row_case%%|*}"; rest="${row_case#*|}"; note="${rest%%|*}"; want="${rest##*|}"
+  git -C "$L5C" checkout -q spec/0001-thing
+  printf '# Spec inventory\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | %s | %s |\n' "$st" "$note" > "$L5C/specs/STATUS.md"
+  git -C "$L5C" add -A >/dev/null 2>&1; git -C "$L5C" commit -qm "row $st" >/dev/null 2>&1
+  git -C "$L5C" checkout -q main
+  run_hook "$HOOKS/close-gate.sh" "$L5C" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+  if [[ "$want" == "deny" ]]; then
+    expect_deny "leg5 row: status cell [$st] with note [$note] is not CLOSED" "CG-NO-STATUS-ROW"
+  else
+    expect_allow "leg5 row: status cell [$st] with note [$note] closes"
+  fi
+done
+
+# --- the LEG 5 axis, part 2: branch tracking must fail closed ---------------
+#
+# Three of leg 5's seven bypasses are the same shape: a checkout or switch whose
+# target the gate could not follow left the tracked branch OFF the trunk, so a
+# merge compounded after it read as ordinary feature work and every close check
+# was skipped. All three only reproduce from a fixture standing OFF the trunk.
+# Tested from the trunk they deny, and a correct gate and a broken one both deny
+# there, so a fixture on the trunk cannot fail. That nearly produced two false
+# NOT-CONFIRMED verdicts during triage, so the fixture position is asserted
+# first rather than assumed.
+# spec/0001-thing must be NON-compliant here, or the merge is a legitimate close
+# and every case below allows for the right reason while proving nothing. The
+# first cut of this block used a compliant fixture and its own control failed,
+# which is how it was caught.
+L5="$WORK/leg5-track"; close_fixture "$L5" no no answered no no true
+git -C "$L5" checkout -q -b spec/0002-track main 2>/dev/null || git -C "$L5" checkout -q spec/0002-track
+assert_true "leg5 track 0: the fixture really stands OFF the trunk, or none of these can fail" \
+  "the fixture is on the trunk, where a broken tracker denies for the wrong reason and the cases below prove nothing" \
+  test "$(git -C "$L5" rev-parse --abbrev-ref HEAD)" != "main"
+
+for track_cmd in \
+  'git checkout main -- && git merge --no-ff spec/0001-thing' \
+  'git checkout main >/dev/null && git merge --no-ff spec/0001-thing' \
+  'git checkout main 2>/dev/null && git merge --no-ff spec/0001-thing' \
+  'git checkout main # back to the trunk && git merge --no-ff spec/0001-thing' \
+  'TRUNK=main; git switch $TRUNK && git merge --no-ff spec/0001-thing' \
+  'git switch @{-1} && git merge --no-ff spec/0001-thing' \
+  ; do
+  run_hook "$HOOKS/close-gate.sh" "$L5" "$(bash_payload "$track_cmd")"
+  expect_deny "leg5 track: [$track_cmd] cannot move the tracked branch off the trunk unchecked" "CG-"
+done
+
+# The control that makes those real: the plain spelling denies too, so the
+# fixture and the gate are both working.
+run_hook "$HOOKS/close-gate.sh" "$L5" "$(bash_payload 'git checkout main && git merge --no-ff spec/0001-thing')"
+expect_deny "leg5 track control: the plain checkout spelling still denies" "CG-"
+
+# And the ALLOW direction, which is the whole risk of this fix: a GENUINE
+# pathspec restore switches nothing, and a merge from a real feature branch is
+# not a close. If these regress, every ordinary session breaks.
+for track_ok in \
+  'git checkout main -- src/a.txt && git merge --no-ff spec/0001-thing' \
+  'git merge --no-ff spec/0001-thing' \
+  ; do
+  run_hook "$HOOKS/close-gate.sh" "$L5" "$(bash_payload "$track_ok")"
+  expect_allow "leg5 track control: [$track_ok] is not a trunk close and is allowed"
+done
+
+# --- the LEG 5 axis: comments, abbreviations, and switch operands -----------
+#
+# Seven replay-confirmed bypasses in the shipped gates, reducing to three
+# mechanisms. Each is asserted here in BOTH directions, because five of the
+# seven are cases where the gate reached a CONFIDENT WRONG ANSWER rather than
+# failing closed, and the fix for that shape is always at risk of failing
+# closed on everything instead.
+QC_L5_FAIL=""
+for payload in \
+  'git merge --no-ff spec/0001-thing # will --continue if it conflicts' \
+  'git merge --no-ff spec/0001-thing #--continue' \
+  'git merge --no-ff spec/0001-thing --mess "--continue"' \
+  'git merge --no-ff spec/0001-thing --messa "--continue"' \
+  'git merge --no-ff spec/0001-thing --messag "--continue"' \
+  'git merge --no-ff spec/0001-thing --into-nam "--abort"' \
+  ; do
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || QC_L5_FAIL="$QC_L5_FAIL
+    $payload"
+done
+if [[ -z "$QC_L5_FAIL" ]]; then
+  ok "corpus leg5: a trailing comment and an abbreviated option value cannot reach the resumption exemption"
+else
+  bad "corpus leg5: a trailing comment and an abbreviated option value cannot reach the resumption exemption" \
+      "these were ALLOWED, so every close check was skipped:$QC_L5_FAIL"
+fi
+
+# The ALLOW direction. A REAL resumption must stay exempt or a conflicted close
+# has no permitted way to finish, and an ordinary close must survive a comment.
+QC_L5_OK=""
+for payload in 'git merge --continue' 'git merge --abort'; do
+  [[ "$(corpus_verdict "$payload")" == "allow" ]] || QC_L5_OK="$QC_L5_OK
+    $payload"
+done
+if [[ -z "$QC_L5_OK" ]]; then
+  ok "corpus leg5 control: a real --continue and --abort are still exempt"
+else
+  bad "corpus leg5 control: a real --continue and --abort are still exempt" \
+      "the comment and abbreviation fix denied a legitimate resumption:$QC_L5_OK"
+fi
+
+# --- the SHELL-GRAMMAR axis (1.0.8, F9) -------------------------------------
+# A segment is judged only when its command word sits at the front, and shell has
+# a vocabulary for putting something else there first. All four of these executed
+# a real merge onto the trunk with every close check skipped:
+#
+#     { git merge --no-ff spec/0001-thing; }
+#     if true; then git merge --no-ff spec/0001-thing; fi
+#     for i in 1; do git merge --no-ff spec/0001-thing; done
+#     ! git merge --no-ff spec/0001-thing
+#
+# None is exotic. `!` inverts an exit status and `{ ...; }` groups commands.
+#
+# Unlike the wrapper allowlist, THIS list is closed: bash reserved words are a
+# fixed set defined by the language, not the open-ended family of programs that
+# can exec another program. That is worth stating because the wrapper axis
+# carries the opposite caveat, and confusing the two would be a false claim of
+# completeness.
+GRAM_N=0; GRAM_FAIL=""
+for payload in \
+  '{ git merge --no-ff spec/0001-thing; }' \
+  'if true; then git merge --no-ff spec/0001-thing; fi' \
+  'for i in 1; do git merge --no-ff spec/0001-thing; done' \
+  'while false; do git merge --no-ff spec/0001-thing; done' \
+  'until true; do git merge --no-ff spec/0001-thing; done' \
+  '! git merge --no-ff spec/0001-thing' \
+  'time git merge --no-ff spec/0001-thing' \
+  '{ nice -n 5 git merge --no-ff spec/0001-thing; }' \
+  'if true; then env -- git merge --no-ff spec/0001-thing; fi' \
+  '{ git merge spec/0001-thing -m "close"; }' \
+  ; do
+  GRAM_N=$((GRAM_N + 1))
+  [[ "$(corpus_verdict "$payload")" == "deny" ]] || GRAM_FAIL="$GRAM_FAIL
+    $payload"
+done
+if [[ -z "$GRAM_FAIL" ]]; then
+  ok "corpus shell grammar: all $GRAM_N compound spellings are denied"
+else
+  bad "corpus shell grammar: a reserved word must not move the git verb out of command position" \
+      "these reached the trunk unchecked:$GRAM_FAIL"
+fi
+
+# THE INVERSE. Stripping reserved words must not start denying ordinary lines
+# that merely CONTAIN one, and must not turn a mention into an operation.
+GRAM_ALLOW_FAIL=""
+for payload in \
+  'echo "{ git merge --no-ff spec/0001-thing; }"' \
+  'if true; then git status; fi' \
+  '{ echo git merge --no-ff spec/0001-thing; }' \
+  ; do
+  [[ "$(corpus_verdict "$payload")" == "allow" ]] || GRAM_ALLOW_FAIL="$GRAM_ALLOW_FAIL
+    $payload"
+done
+if [[ -z "$GRAM_ALLOW_FAIL" ]]; then
+  ok "corpus shell grammar: a reserved word around a NON-merge does not create one"
+else
+  bad "corpus shell grammar: stripping grammar must not manufacture merges" \
+      "these were denied:$GRAM_ALLOW_FAIL"
+fi
+
+# --- the REF-IDENTITY axis (1.0.8, F3 and F8) -------------------------------
+# The gate used to decide what a merge argument MEANT by stripping three literal
+# prefixes and testing the remainder for spec/ or chore/. Every other spelling of
+# the same commit read as an ungoverned sync merge: heads/, remotes/origin/,
+# another remote's name, a TAG, an alias branch, a raw object name. The prefix
+# list could never be finished, because git accepts an open-ended set of names
+# for one commit.
+#
+# It resolves the argument to a COMMIT now and asks git which refs point at it,
+# so identity is by object rather than by string and a spelling nobody has
+# thought of resolves like one everybody knows.
+ri_fixture() { # ri_fixture <dir>  -> local 0001 COMPLIANT, origin/0001 NOT
+  local d="$1"
+  close_fixture "$d" yes yes answered yes no true
+  # The DIVERGENT remote, which is F3 exactly: a compliant local branch and a
+  # non-compliant remote-tracking branch of the same name. The gate must judge
+  # the one git will actually merge.
+  git -C "$d" checkout -q -b ri-remote-tmp main
+  mkdir -p "$d/specs"
+  printf '# Spec 0001 - thing\n\nStatus: ACTIVE\n' > "$d/specs/0001-thing.md"
+  printf 'unreviewed\n' > "$d/ri-unreviewed.txt"
+  git -C "$d" add -A >/dev/null; git -C "$d" commit -qm "remote tip, NOT closed"
+  git -C "$d" update-ref refs/remotes/origin/spec/0001-thing "$(git -C "$d" rev-parse ri-remote-tmp)"
+  git -C "$d" branch -qD ri-remote-tmp >/dev/null 2>&1
+  # A tag and an alias, both pointing at the compliant local tip.
+  git -C "$d" tag -f ri-tag spec/0001-thing >/dev/null 2>&1
+  git -C "$d" branch -f ri-alias spec/0001-thing >/dev/null 2>&1
+  # A real origin/main, so the sync-merge case is exercised against a ref git
+  # can resolve. Without one it denies because the ref does not exist, which
+  # looks like the gate working and tests nothing. That trap has now appeared
+  # three times in this repo in a single day.
+  git -C "$d" update-ref refs/remotes/origin/main "$(git -C "$d" rev-parse main)"
+  git -C "$d" checkout -q main
+}
+RI="$WORK/close-refidentity"; ri_fixture "$RI"
+ri_verdict() {
+  local out
+  out="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$RI" bash "$HOOKS/close-gate.sh" 2>/dev/null)"
+  if [[ "$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)" == "deny" ]]; then
+    printf 'deny'; else printf 'allow'; fi
+}
+
+assert_true "ref-identity0: the fixture's remote tip really differs from the local one" \
+  "local and remote point at the same commit, so the divergent case below proves nothing" \
+  test "$(git -C "$RI" rev-parse spec/0001-thing)" != "$(git -C "$RI" rev-parse refs/remotes/origin/spec/0001-thing)"
+
+# F3. The local branch is COMPLIANT and the remote one is NOT. Merging the
+# remote must be judged against the remote, or a compliant local branch vouches
+# for code it does not contain.
+if [[ "$(ri_verdict 'git merge --no-ff origin/spec/0001-thing')" == "deny" ]]; then
+  ok "ref-identity a: a remote-tracking ref is judged on ITS tree, not the local branch of that name"
+else
+  bad "ref-identity a: the thing validated must be the thing merged" \
+      "a compliant local spec/0001-thing green-lit a non-compliant origin/spec/0001-thing"
+fi
+
+# F8 and the alias/tag family. Every one of these names the same UNCLOSED commit
+# as the remote tip or an unclosed branch, and each was allowed by name matching.
+RI_FAIL=""
+for c in 'git merge --no-ff refs/remotes/origin/spec/0001-thing' \
+         'git merge --no-ff remotes/origin/spec/0001-thing' ; do
+  [[ "$(ri_verdict "$c")" == "deny" ]] || RI_FAIL="$RI_FAIL
+    $c"
+done
+if [[ -z "$RI_FAIL" ]]; then
+  ok "ref-identity b: every spelling of the non-compliant remote tip is governed"
+else
+  bad "ref-identity b: a spelling of the merge target must not change whether it is governed" \
+      "these reached the trunk unchecked:$RI_FAIL"
+fi
+
+# THE INVERSE, and it is what stops "deny everything" from passing this axis. A
+# sync merge from the trunk's own remote is not a close and has never been
+# governed; 1.0.3 denied it and broke ordinary work while `git pull` did the
+# same thing ungated.
+if [[ "$(ri_verdict 'git merge origin/main')" == "allow" ]]; then
+  ok "ref-identity c: a sync merge from the trunk's own remote is still allowed"
+else
+  bad "ref-identity c: git merge origin/main must not be denied" \
+      "resolving refs by commit must not turn ordinary syncs into denials, which is the 1.0.3 regression"
+fi
+
+# The INDIRECT forms stay denied, and for a reason that is about TIME rather
+# than spelling: this hook runs before the command, so `@{-1}` here is not
+# necessarily `@{-1}` when the merge runs. Resolving them would let the gate
+# validate one branch while git merges another, which is F3 from the other end.
+RI_IND_FAIL=""
+for c in 'git merge @{-1}' 'git merge FETCH_HEAD' ; do
+  [[ "$(ri_verdict "$c")" == "deny" ]] || RI_IND_FAIL="$RI_IND_FAIL
+    $c"
+done
+if [[ -z "$RI_IND_FAIL" ]]; then
+  ok "ref-identity d: time-varying indirect forms are still refused rather than resolved"
+else
+  bad "ref-identity d: an indirect form must not be resolved at hook time" \
+      "these were resolved, and their meaning can change before the merge runs:$RI_IND_FAIL"
 fi
 
 # --- the SPEC-NUMBER-REUSE axis (1.0.7, B4) ---------------------------------
@@ -2135,7 +2988,7 @@ expect_script "interpreter: the trunk audit CATCHES the outcome the gate let pas
 # hole: Sideways routes to the trunk. | asserted
 # hole: The pathspec hole. | asserted
 # hole: The secret scan is a first cut. | asserted
-# hole: The gates need `jq`, and fail closed without it. | asserted
+# hole: The gates need a WORKING `jq`, and fail closed without one. | asserted
 # hole: A timed-out hook is a skipped gate. | unassertable | harness behaviour, not hook behaviour; verified live 2026-07-25 with a sleeping hook under timeout 1 and 10, recorded in close-gate.sh's header
 # hole: The staged-content scans read every staged line. | asserted
 # hole: The scans read this project's own index. | asserted
@@ -2148,8 +3001,7 @@ for hole_cmd in \
   'git cherry-pick spec/0001-thing' \
   'git rebase spec/0001-thing' \
   'git reset --hard spec/0001-thing' \
-  'git checkout spec/0001-thing -- src/app.js' \
-  'git merge --no-ff tmp-alias' ; do
+  'git checkout spec/0001-thing -- src/app.js' ; do
   if [[ "$(corpus_verdict "$hole_cmd")" == "allow" ]]; then
     ok "documented hole: [$hole_cmd] still passes, as Known limitations states"
   else
@@ -2157,6 +3009,470 @@ for hole_cmd in \
         "this now DENIES. That is an improvement, but the README still lists it as a hole: update Known limitations and this assertion together"
   fi
 done
+
+# CLOSED 1.0.8, and it used to sit in the list above. Merging a spec branch under
+# a SECOND NAME (`git branch tmp spec/0001-x && git merge tmp`) was a documented
+# hole for as long as the gate decided what a ref meant by editing its name: an
+# alias is a different string, so it read as an ungoverned sync merge.
+#
+# Identity by COMMIT closes it without anyone aiming at it. The alias points at
+# the same object as the spec branch, `git for-each-ref --points-at` finds the
+# spec ref, and the close conditions are evaluated. That is the difference
+# between fixing a spelling and fixing a class: nobody wrote a rule about
+# aliases, and aliases stopped working anyway.
+#
+# It is asserted in the DENY direction now, so a regression that reopens it
+# fails here rather than quietly restoring a documented hole.
+if [[ "$(corpus_verdict 'git merge --no-ff tmp-alias')" == "deny" ]]; then
+  ok "closed hole: a spec branch merged under a second name is now caught by commit identity"
+else
+  bad "closed hole: a spec branch merged under a second name must stay caught" \
+      "an alias of an unclosed spec branch reached the trunk again; ref identity has regressed to name matching"
+fi
+
+# A compound carrying TWO commits. HAS_COMMIT was a plain assignment, so the
+# last commit segment overwrote the first and the auto-staging check inspected
+# the harmless one. `git commit -am x && git commit -m y` therefore passed,
+# although the -am segment is exactly the stage-and-commit-in-one-step shape
+# CM-AUTOSTAGE-FLAG exists to catch. A command can carry more than one commit
+# and the gate answers for all of them.
+CMTWO="$WORK/commit-two"; close_fixture "$CMTWO" no no answered no no true
+run_hook "$HOOKS/commit-gate.sh" "$CMTWO" "$(bash_payload 'git commit -am x && git commit -m y')"
+expect_deny "commit-gate two-commits: a later plain commit does not disarm the flag check on an earlier one" "CM-AUTOSTAGE-FLAG"
+run_hook "$HOOKS/commit-gate.sh" "$CMTWO" "$(bash_payload 'git commit -m y && git commit -am x')"
+expect_deny "commit-gate two-commits: the offending commit is caught in either position" "CM-AUTOSTAGE-FLAG"
+# The allow direction: two ordinary commits are not made suspicious by being two.
+run_hook "$HOOKS/commit-gate.sh" "$CMTWO" "$(bash_payload 'git commit -m x && git commit -m y')"
+expect_allow "commit-gate two-commits: two plain commits in one line are still allowed"
+
+# =============================================================================
+# UNLEXABLE INPUT, and a malformed trunk VALUE. Both 2026-07-28, both from the
+# 1.0.8 leg, both the same shape: a check that validated the FORM of its input
+# and never the substance.
+#
+# The awk normaliser in both gates appends `@@UNTERMINATED@@` when a quote never
+# closes, under a comment saying a gate that cannot lex its input has not
+# evaluated its predicate. No line read the marker, so the unlexable case fell
+# through to the applicability test, matched nothing (everything after the
+# opening quote had been swallowed into the span) and the gate exited 0 as "not
+# a merge". An apostrophe in a shell comment or a heredoc body reaches it.
+#
+# The commit gate normalises TWICE, and the first cut of this guard read the
+# whitespace pass rather than the opaque-token pass, so it never fired at all
+# while the close gate's identical guard worked. That is asserted here too.
+# =============================================================================
+UNLEX="$WORK/unlexable"; close_fixture "$UNLEX" no no answered no no true
+
+run_hook "$HOOKS/close-gate.sh" "$UNLEX" "$(bash_payload "echo it's fine && $MERGE_CMD")"
+expect_deny "close-gate unlexable: an unterminated quote refuses instead of reading past it" "CG-UNLEXABLE"
+
+run_hook "$HOOKS/commit-gate.sh" "$UNLEX" "$(bash_payload "echo it's fine && git commit -m x")"
+expect_deny "commit-gate unlexable: an unterminated quote refuses instead of reading past it" "CM-UNLEXABLE"
+
+# The ALLOW direction, and it is the one that matters. Failing closed on every
+# stray apostrophe would gate unrelated Bash calls for the whole session, so a
+# raw payload that does not mention the governed verb is none of the gate's
+# business even when it cannot be lexed.
+run_hook "$HOOKS/close-gate.sh" "$UNLEX" "$(bash_payload "echo it's fine")"
+expect_allow "close-gate unlexable: an unbalanced quote with no merge in it is not this gate's business"
+run_hook "$HOOKS/commit-gate.sh" "$UNLEX" "$(bash_payload "echo it's fine")"
+expect_allow "commit-gate unlexable: an unbalanced quote with no commit in it is not this gate's business"
+
+# And the ordinary contraction, which is BALANCED and must stay unaffected. This
+# is the case F5 broke inside its own fix once already.
+run_hook "$HOOKS/commit-gate.sh" "$UNLEX" "$(bash_payload "git commit -m 'don'\\''t'")"
+expect_allow "commit-gate unlexable: the ordinary way of writing a contraction still lexes"
+
+# A trunk that is PRESENT and not a non-empty string. jq's `//` falls back only
+# on null and false, so `{"trunk":""}` yielded an empty TRUNK, every comparison
+# against the current branch failed, and the trunk rule was silently disabled in
+# both hooks. `[]` and `{}` did the same. Absent stays defaulted, because not
+# declaring a trunk is ordinary; present-but-wrong is refused, because guessing
+# "main" over a stated intention would govern a branch nobody named.
+for bad_trunk in '""' '[]' '{}'; do
+  TRV="$WORK/trunkval"; rm -rf "$TRV"; close_fixture "$TRV" no no answered no no true
+  printf '{"scaffolded":true,"trunk":%s,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' "$bad_trunk" > "$TRV/.claude/sdd.json"
+  run_hook "$HOOKS/close-gate.sh" "$TRV" "$(bash_payload "$MERGE_CMD")"
+  expect_deny "close-gate trunk value: [$bad_trunk] is refused, not read as no trunk at all" "CG-TRUNK-INVALID"
+  run_hook "$HOOKS/scope-hook.sh" "$TRV" "$(edit_payload "$TRV/src/app.js")"
+  expect_deny "scope-hook trunk value: [$bad_trunk] is refused, not read as no trunk at all" "SH-TRUNK-INVALID"
+done
+
+# The non-regression: a trunk key that is simply ABSENT still defaults, so this
+# check cannot have turned an ordinary omission into a hard failure.
+TRABS="$WORK/trunkabsent"; close_fixture "$TRABS" no no answered no no true
+printf '{"scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$TRABS/.claude/sdd.json"
+run_hook "$HOOKS/close-gate.sh" "$TRABS" "$(bash_payload "$MERGE_CMD")"
+expect_deny "close-gate trunk value: an ABSENT trunk still defaults to main and the gate still governs" "CG-"
+
+# =============================================================================
+# AN EMPTY QUOTED SPAN IS NOTHING, which is what the shell makes it. Two
+# adjacent quotes concatenate to nothing, so a git prefixed or infixed by them
+# IS git. The opaque-token scanner tested for ONE OR MORE shell-safe characters,
+# so the empty string failed that test, became the inert @@Q@@ token, and split
+# the very word it was glued to. Found by the fourth leg.
+# =============================================================================
+EMPTYQ="$WORK/empty-span"; close_fixture "$EMPTYQ" no no answered no no true
+for eq_cmd in 'git ""commit -am x' '""git commit -am x' 'g""it commit -am x' "git ''commit -am x"; do
+  run_hook "$HOOKS/commit-gate.sh" "$EMPTYQ" "$(bash_payload "$eq_cmd")"
+  expect_deny "empty span: [$eq_cmd] is the same command as its unquoted form" "CM-"
+done
+for eq_cmd in 'git ""merge --no-ff spec/0001-thing' '""git merge --no-ff spec/0001-thing'; do
+  run_hook "$HOOKS/close-gate.sh" "$EMPTYQ" "$(bash_payload "$eq_cmd")"
+  expect_deny "empty span: [$eq_cmd] is the same command as its unquoted form" "CG-"
+done
+run_hook "$HOOKS/commit-gate.sh" "$EMPTYQ" "$(bash_payload 'git status')"
+expect_allow "empty span: an ordinary command is unaffected by the empty-span rule"
+
+# =============================================================================
+# A QA VERDICT IS A VERDICT, NOT THE WORD PASS IN A SENTENCE (F5, third leg).
+# The check matched PASS, PARTIAL or FAIL anywhere in the QA block, so prose
+# satisfied it. Appendix C's shape puts the verdict at the end of its line, so
+# that is what is required: narrow enough to reject prose, wide enough for every
+# real shape. The ALLOW cases matter more than the deny one, because false
+# denial is the direction that breaks honest closes.
+#
+# The verdict line is inserted with sed against the QA Pass 2 marker, which is
+# where close_fixture ends the QA Pass 1 block.
+# =============================================================================
+QAV="$WORK/qa-verdict"; close_fixture "$QAV" yes no answered yes no true
+git -C "$QAV" checkout -q spec/0001-thing
+sed -i 's|^- QA Pass 2 (human): done|the browser tests PASS on my machine but mobile was not run\n\n- QA Pass 2 (human): done|' "$QAV/specs/0001-thing.md"
+git -C "$QAV" add -A >/dev/null 2>&1; git -C "$QAV" commit -qm "prose, not a verdict" >/dev/null 2>&1
+git -C "$QAV" checkout -q main
+run_hook "$HOOKS/close-gate.sh" "$QAV" "$(bash_payload "$MERGE_CMD")"
+expect_deny "qa verdict: prose containing the word PASS is not a pasted verdict" "CG-NO-QA-VERDICT"
+
+for qa_line in 'PASS' '- criterion 2: FAIL.' 'criterion 3: PARTIAL'; do
+  QAOK="$WORK/qa-ok"; rm -rf "$QAOK"; close_fixture "$QAOK" yes no answered yes no true
+  git -C "$QAOK" checkout -q spec/0001-thing
+  sed -i "s|^- QA Pass 2 (human): done|$qa_line\n\n- QA Pass 2 (human): done|" "$QAOK/specs/0001-thing.md"
+  git -C "$QAOK" add -A >/dev/null 2>&1; git -C "$QAOK" commit -qm "verdict" >/dev/null 2>&1
+  git -C "$QAOK" checkout -q main
+  run_hook "$HOOKS/close-gate.sh" "$QAOK" "$(bash_payload "$MERGE_CMD")"
+  expect_allow "qa verdict: [$qa_line] is a real verdict and still closes"
+done
+
+# =============================================================================
+# A FUNCTION DEFINITION AND A TWO-OPERAND CHECKOUT (F6/F7, third 1.0.8 leg).
+# Both put something other than the governed verb where the gate looks, and the
+# checkout one is the FOURTH spelling of a class the previous three repairs each
+# closed one spelling at a time. Counting operands settles it without asking
+# what any operand looks like, which is what the earlier repairs kept doing.
+# =============================================================================
+FN="$WORK/fn-and-pathspec"; close_fixture "$FN" no no answered no no true
+git -C "$FN" branch feat-y main >/dev/null 2>&1
+
+for fn_cmd in \
+  'function f { git merge --no-ff spec/0001-thing; }; f' \
+  'f() { git merge --no-ff spec/0001-thing; }; f' \
+  'git checkout feat-y src/app.js; git merge --no-ff spec/0001-thing' \
+  'git checkout feat-y specs/STATUS.md && git merge --no-ff spec/0001-thing' ; do
+  run_hook "$HOOKS/close-gate.sh" "$FN" "$(bash_payload "$fn_cmd")"
+  expect_deny "hidden verb: [$fn_cmd] is still judged" "CG-"
+done
+
+# ALLOW: a ONE-operand checkout is a real switch and must keep working, or the
+# operand count has turned the branch tracker off rather than fixing it.
+run_hook "$HOOKS/close-gate.sh" "$FN" "$(bash_payload 'git checkout feat-y && git merge --no-ff spec/0001-thing')"
+expect_allow "hidden verb: a one-operand checkout still switches, so the tracker still works"
+
+# A ROLES value that is not an object disabled the scope hook entirely: the jq
+# extraction errored, ROLE_PATHS came back empty, and the deny loop ran zero
+# times. Same shape as the trunk value, one key across.
+for roles_v in '"src"' '[]' '123'; do
+  RLS="$WORK/roles-shape"; rm -rf "$RLS"; close_fixture "$RLS" no no answered no no true
+  printf '{"scaffolded":true,"trunk":"main","gate_command":"true","roles":%s}\n' "$roles_v" > "$RLS/.claude/sdd.json"
+  run_hook "$HOOKS/scope-hook.sh" "$RLS" "$(edit_payload "$RLS/src/app.js")"
+  expect_deny "roles shape: [$roles_v] is refused, not read as no roles at all" "SH-ROLES-SHAPE"
+done
+
+# =============================================================================
+# THE TRUNK VALUE MUST NAME A LOCAL BRANCH (F1, second 1.0.8 leg). The check
+# added earlier the same day required a non-empty string and stopped there,
+# which is the same "container, not contents" error one level in.
+#
+# The route was the SHIPPED UPGRADE PATH: skills/upgrade told the agent to
+# detect the trunk with `git symbolic-ref refs/remotes/origin/HEAD`, which
+# returns a full ref path. Every ordinary clone has an origin/HEAD, so that is
+# what got recorded, and both hooks then compared `refs/remotes/origin/main`
+# against `main` and allowed every governed operation in silence.
+# =============================================================================
+TRB="$WORK/trunk-branch"; close_fixture "$TRB" no no answered no no true
+git -C "$TRB" update-ref refs/remotes/origin/main "$(git -C "$TRB" rev-parse main)" 2>/dev/null
+git -C "$TRB" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main 2>/dev/null
+
+for trunk_spelling in 'refs/remotes/origin/main' 'refs/heads/main' 'heads/main' 'origin/main'; do
+  printf '{"scaffolded":true,"trunk":"%s","gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' \
+    "$trunk_spelling" > "$TRB/.claude/sdd.json"
+  run_hook "$HOOKS/close-gate.sh" "$TRB" "$(bash_payload "$MERGE_CMD")"
+  expect_deny "trunk spelling: [$trunk_spelling] reduces to the branch and the gate still governs" "CG-"
+  run_hook "$HOOKS/scope-hook.sh" "$TRB" "$(edit_payload "$TRB/src/app.js")"
+  expect_deny "trunk spelling: [$trunk_spelling] still guards trunk writes" "SH-"
+done
+
+# A trunk naming NO local branch is refused rather than guessed at. Guessing
+# "main" would silently govern a branch the project never named.
+printf '{"scaffolded":true,"trunk":"no-such-branch","gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$TRB/.claude/sdd.json"
+run_hook "$HOOKS/close-gate.sh" "$TRB" "$(bash_payload "$MERGE_CMD")"
+expect_deny "trunk spelling: a trunk that names no local branch is refused, not guessed" "CG-TRUNK-NOT-A-BRANCH"
+
+# And the ordinary value is untouched.
+printf '{"scaffolded":true,"trunk":"main","gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$TRB/.claude/sdd.json"
+run_hook "$HOOKS/close-gate.sh" "$TRB" "$(bash_payload "$MERGE_CMD")"
+expect_deny "trunk spelling: a plain branch name still works exactly as before" "CG-"
+
+# =============================================================================
+# AN OPTION'S VALUE IS NOT AN OPTION, AND NOT A REF (F4/F5, second 1.0.8 leg).
+# Every word after `merge` was scanned as both, so the VALUE of -m was read as
+# though it had been typed as a flag: `-m "--continue"` matched the resumption
+# exemption and skipped every close check, and a message word could resolve as
+# a ref and make the gate validate a different branch from the one merged.
+# =============================================================================
+OPTV="$WORK/optvalue"; close_fixture "$OPTV" no no answered no no true
+
+for optv_cmd in \
+  'git merge --no-ff spec/0001-thing -m "--continue"' \
+  'git merge --no-ff spec/0001-thing -m --abort' \
+  'git merge --no-ff spec/0001-thing -m --quit' \
+  'git merge --no-ff spec/0001-thing -m spec/0002-other' ; do
+  run_hook "$HOOKS/close-gate.sh" "$OPTV" "$(bash_payload "$optv_cmd")"
+  expect_deny "option value: [$optv_cmd] is judged on the branch, not on its message" "CG-"
+done
+
+# The two ALLOW directions, and they are why this is a value-stripping fix
+# rather than a blanket refusal of -m. A REAL resumption must stay exempt, or a
+# conflicted close has no permitted way to finish; and an ordinary close with an
+# ordinary message must still pass.
+run_hook "$HOOKS/close-gate.sh" "$OPTV" "$(bash_payload 'git merge --continue')"
+expect_allow "option value: a REAL --continue is still exempt, so a conflicted close can finish"
+
+# =============================================================================
+# AN OCTOPUS MERGE IS SEVERAL MERGES (F2/F6 of the second 1.0.8 leg). The word
+# loop broke on the FIRST operand that resolved to a spec or chore ref, so
+# `git merge --no-ff spec/0003-good spec/0004-bad` contributed exactly one ref:
+# the compliant branch was judged and the unclosed one landed on the trunk with
+# every close check skipped. A command that merges several branches answers for
+# all of them, exactly as a command carrying several commits does.
+# =============================================================================
+OCTO="$WORK/octopus"; close_fixture "$OCTO" no no answered no no true
+git -C "$OCTO" checkout -q main
+git -C "$OCTO" checkout -q -b spec/0009-good
+mkdir -p "$OCTO/specs"
+printf '# Spec 0009\n\nStatus: CLOSED\n\n## Closing report\n\n- QA Pass 1 report (pasted verbatim):\n\ncriterion 1: PASS\n\n- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n' > "$OCTO/specs/0009-good.md"
+printf '# Spec inventory\n\n| Num | Title | Status |\n| --- | --- | --- |\n| 0009 | Good | CLOSED |\n' > "$OCTO/specs/STATUS.md"
+git -C "$OCTO" add -A >/dev/null 2>&1; git -C "$OCTO" commit -qm "close 0009" >/dev/null 2>&1
+git -C "$OCTO" checkout -q main
+
+# The compliant branch alone must pass, or the two cases below prove nothing.
+run_hook "$HOOKS/close-gate.sh" "$OCTO" "$(bash_payload 'git merge --no-ff spec/0009-good')"
+expect_allow "octopus: the compliant branch alone is allowed, so the control is real"
+
+run_hook "$HOOKS/close-gate.sh" "$OCTO" "$(bash_payload 'git merge --no-ff spec/0009-good spec/0001-thing')"
+expect_deny "octopus: a non-compliant SECOND operand is still judged" "CG-"
+
+run_hook "$HOOKS/close-gate.sh" "$OCTO" "$(bash_payload 'git merge --no-ff spec/0001-thing spec/0009-good')"
+expect_deny "octopus: order does not matter; the non-compliant operand is judged either way" "CG-"
+
+# ---------------------------------------------------------------------------
+# THE OTHER HALF OF THE SAME SENTENCE (leg 4, F3).
+#
+# The fix above extended the COLLECTION and left the DISPOSITION short-circuited.
+# One operand that resolved reached `continue` and every operand beside it was
+# never classified at all, so an operand this gate REFUSES on its own was waved
+# through by a compliant sibling:
+#
+#     git merge --no-ff FETCH_HEAD                  DENY, correctly
+#     git merge --no-ff spec/0009-good FETCH_HEAD   ALLOWED, and it landed
+#
+# Executed for real, the octopus merge succeeded and unreviewed content was on
+# the trunk. The trunk audit did not catch it either: it read the smuggled
+# parent as a chore merge and reported 0 violations.
+#
+# Asserted over the SET of indirect forms rather than over FETCH_HEAD, which is
+# the one a finding happened to use, and with a chore branch as the resolvable
+# operand as well as a spec branch: chore branches need no artifacts at all, so
+# that is the cheapest spelling of the attack, not an exotic one.
+git -C "$OCTO" update-ref FETCH_HEAD spec/0001-thing
+git -C "$OCTO" checkout -q -b chore/octo-cleanup main 2>/dev/null || git -C "$OCTO" checkout -q chore/octo-cleanup
+printf 'cleanup\n' > "$OCTO/cleanup.txt"
+git -C "$OCTO" add -A >/dev/null 2>&1; git -C "$OCTO" commit -qm "chore" >/dev/null 2>&1
+git -C "$OCTO" checkout -q main
+
+for resolvable in spec/0009-good chore/octo-cleanup; do
+  for indirect in FETCH_HEAD ORIG_HEAD HEAD '-' '@{-1}' '$EVIL'; do
+    run_hook "$HOOKS/close-gate.sh" "$OCTO" "$(bash_payload "git merge --no-ff $resolvable $indirect")"
+    expect_deny "octopus indirect: [$resolvable $indirect] is refused; a resolvable sibling does not vouch for an unverifiable operand" "CG-UNNAMEABLE-REF"
+    run_hook "$HOOKS/close-gate.sh" "$OCTO" "$(bash_payload "git merge --no-ff $indirect $resolvable")"
+    expect_deny "octopus indirect: [$indirect $resolvable] is refused in the other order too" "CG-UNNAMEABLE-REF"
+  done
+done
+
+# An operand that LOOKS like a spec branch and resolves to nothing is the same
+# case with a different cause, and it had the same hole: SEG_LOOKS_SPEC is set
+# for spec-shaped words whether or not they resolve, so it could not answer
+# "was anything left unresolved" and the disposition never asked.
+run_hook "$HOOKS/close-gate.sh" "$OCTO" "$(bash_payload 'git merge --no-ff spec/0009-good spec/9999-nonexistent')"
+expect_deny "octopus indirect: an unresolvable spec-shaped operand is refused beside a compliant one" "CG-UNNAMEABLE-REF"
+
+# AND THE DIRECTION THAT MAKES IT A FIX RATHER THAN A BLANKET REFUSAL. An
+# OPTION is not an operand, and `-` and `--no-ff` both start with a dash. If
+# these regress, every close in the field breaks.
+for allowed_cmd in \
+  'git merge --no-ff spec/0009-good' \
+  'git merge --squash spec/0009-good' \
+  'git merge -s recursive --no-ff spec/0009-good' \
+  'git merge -X ours --no-ff spec/0009-good' \
+  'git merge --no-ff spec/0009-good -m "closing 0009"' \
+  'git merge --no-ff spec/0009-good chore/octo-cleanup' ; do
+  run_hook "$HOOKS/close-gate.sh" "$OCTO" "$(bash_payload "$allowed_cmd")"
+  expect_allow "octopus indirect control: [$allowed_cmd] still merges, so options were not mistaken for operands"
+done
+
+# =============================================================================
+# A CHECKOUT IS CONDITIONAL (F7 of the 1.0.8 leg). The tracker modelled every
+# checkout as unconditionally taken, which is false for the commonest failure
+# there is: a checkout ABORTS when local changes would be overwritten, and after
+# it aborts the shell is still on the trunk. So the merge ran on the trunk while
+# the gate believed it was standing on a feature branch.
+#
+# Only `&&` implies the previous command succeeded. It is kept exact rather than
+# swept in with the others, because denying it would break an ordinary workflow:
+# if that checkout fails, the merge never runs at all.
+# =============================================================================
+SWFIX="$WORK/switch-conditional"; close_fixture "$SWFIX" no no answered no no true
+git -C "$SWFIX" branch feat-x main >/dev/null 2>&1
+
+run_hook "$HOOKS/close-gate.sh" "$SWFIX" "$(bash_payload 'git checkout feat-x; git merge --no-ff spec/0001-thing')"
+expect_deny "conditional switch: a merge reached across ; from a checkout is unresolved, not 'some other branch'" "CG-UNRESOLVED-SWITCH"
+
+run_hook "$HOOKS/close-gate.sh" "$SWFIX" "$(bash_payload 'git checkout feat-x || git merge --no-ff spec/0001-thing')"
+expect_deny "conditional switch: || does not imply the checkout succeeded either" "CG-UNRESOLVED-SWITCH"
+
+# ALLOW: && DOES imply success, so a merge onto a feature branch is not a close
+# and must not be denied. This is the assertion that stops the repair from being
+# "deny everything with a checkout in it".
+run_hook "$HOOKS/close-gate.sh" "$SWFIX" "$(bash_payload 'git checkout feat-x && git merge --no-ff spec/0001-thing')"
+expect_allow "conditional switch: && implies success, so a merge on a feature branch is still allowed"
+
+# DENY: the compound close is the whole reason the tracker exists, and it must
+# survive the repair intact.
+run_hook "$HOOKS/close-gate.sh" "$SWFIX" "$(bash_payload 'git checkout main && git merge --no-ff spec/0001-thing')"
+expect_deny "conditional switch: the compound close onto the trunk is still gated" "CG-"
+
+# =============================================================================
+# COMMAND POSITION, part three: redirections and path-qualified wrappers.
+# All three found by the 1.0.8 leg (F17, F18) and by the oracle once its corpus
+# was taught to generate them. None is adversarial: a caller silencing output
+# writes a redirection without thinking about parsers, /usr/bin/env is what a
+# shebang produces, and 2>&1 is how everyone spells it.
+# =============================================================================
+for pos_cmd in \
+  '>/dev/null git merge --no-ff spec/0001-thing' \
+  '2>/dev/null git merge --no-ff spec/0001-thing' \
+  '< /dev/null git merge --no-ff spec/0001-thing' \
+  '>/tmp/out 2>&1 git merge --no-ff spec/0001-thing' \
+  '/usr/bin/env git merge --no-ff spec/0001-thing' \
+  '/bin/nice git merge --no-ff spec/0001-thing' \
+  '/usr/bin/nohup git merge --no-ff spec/0001-thing' \
+  '>/tmp/out 2>&1 /usr/bin/env git merge --no-ff spec/0001-thing' ; do
+  if [[ "$(corpus_verdict "$pos_cmd")" == "deny" ]]; then
+    ok "command position: [$pos_cmd] is judged"
+  else
+    bad "command position: [$pos_cmd] must be judged" \
+        "something other than git sat at the head of the segment and the merge was never inspected"
+  fi
+done
+
+# The `&` inside a redirection is NOT a control operator. `2>&1` was cut by the
+# segment splitter into `2>` and `1 git merge ...`, so neither fragment began
+# with git. Asserted separately from the loop above because it is a splitter
+# defect rather than a stripping one, and the two fail differently.
+if [[ "$(corpus_verdict 'git merge --no-ff spec/0001-thing >/tmp/o 2>&1')" == "deny" ]]; then
+  ok "command position: a trailing 2>&1 does not split the command away from its verb"
+else
+  bad "command position: a trailing 2>&1 must not split the command" \
+      "the fd-duplication ampersand was read as a segment separator"
+fi
+
+# The ALLOW direction. Stripping redirections must not make the gate blind to
+# what follows, nor deny ordinary redirected work that merges nothing.
+if [[ "$(corpus_verdict '>/dev/null git status')" == "allow" ]]; then
+  ok "command position: a redirected non-merge is still allowed"
+else
+  bad "command position: a redirected non-merge must still be allowed" \
+      "stripping redirections turned an ordinary command into a denial"
+fi
+
+# =============================================================================
+# The spec-versus-chore TIE-BREAK, and the ambiguity refusal beside it.
+#
+# 1.0.8's identity-by-commit rewrite ended in `... | head -n1` over a
+# refname-sorted list. `refs/heads/chore/*` sorts before `refs/heads/spec/*`, so
+# a chore ref on the same commit won, SPEC_BRANCH read as a chore branch, and
+# the `== spec/*` guard skipped the entire close block: no Closing report, no QA
+# verdict, no diagram, no STATUS row, no authorship check. It did not fail to
+# close the alias hole, it INVERTED it, because 1.0.7 classified by NAME and so
+# kept the canonical spelling governed whatever else pointed at the commit.
+#
+# Four assertions, because three of them can pass for the wrong reason alone.
+# =============================================================================
+
+# 1. The regression itself. chore/cleanup is on spec/0001-thing's commit (see
+#    the corpus setup), and the merge names the SPEC branch, not the chore one.
+if [[ "$(corpus_verdict 'git merge --no-ff spec/0001-thing')" == "deny" ]]; then
+  ok "tie-break: a chore/ ref on the same commit does not disarm the close checks"
+else
+  bad "tie-break: a chore/ ref on the same commit must not disarm the close checks" \
+      "a chore sibling made an unclosed spec branch mergeable; the spec-over-chore preference has regressed to head -n1"
+fi
+
+# 2. The deny must name the SPEC branch. Denying for the wrong reason is how two
+#    of the 2026-07-27 findings first read as refutations.
+if bash_payload 'git merge --no-ff spec/0001-thing' \
+     | CLAUDE_PROJECT_DIR="$CORP" bash "$HOOKS/close-gate.sh" 2>/dev/null \
+     | grep -q 'spec/0001-thing'; then
+  ok "tie-break: the deny names the spec branch, not the chore ref beside it"
+else
+  bad "tie-break: the deny must name the spec branch" \
+      "the gate denied but reported a chore ref, so it judged the wrong object and the verdict is right by accident"
+fi
+
+# 3. THE ALLOW DIRECTION, which is the assertion that carries the weight. A
+#    tie-break repair that simply denies more would satisfy every check above.
+#    A COMPLIANT close must still pass with a chore sibling present.
+#    Uses the suite's own run_hook/expect_allow idiom rather than a hand-rolled
+#    jq read. The first cut of this assertion piped the hook into
+#    `jq -r '... // "allow"'`, and an ALLOW emits NOTHING, so jq had no input
+#    document, the `//` default never fired, and an empty string was compared
+#    against "allow". It reported the fix as breaking honest closes when the
+#    fix was fine. That is this repo's signature defect appearing inside the
+#    test written to catch this repo's signature defect.
+TIEOK="$WORK/tiebreak-allow"
+close_fixture "$TIEOK" yes yes answered yes no true
+git -C "$TIEOK" branch -f chore/cleanup spec/0001-thing
+run_hook "$HOOKS/close-gate.sh" "$TIEOK" "$(bash_payload "$MERGE_CMD")"
+expect_allow "tie-break: a COMPLIANT close is still allowed with a chore ref on the same commit"
+
+# 4. TWO DIFFERENT SPECS on one commit. The gate cannot tell whose Closing
+#    report it is judging, so it refuses instead of picking one and validating
+#    one spec's artifacts for a merge of another.
+#
+#    Distinctness is by spec NUMBER and not by ref count, deliberately: a local
+#    branch, its remote-tracking copy and a tag are three refs for ONE spec, and
+#    refusing those would deny every ordinary close. That non-regression is
+#    covered by the remote-tracking cases elsewhere in this file.
+TIEAMB="$WORK/tiebreak-ambiguous"
+close_fixture "$TIEAMB" no no answered no no true
+git -C "$TIEAMB" branch -f spec/0009-alias spec/0001-thing
+if bash_payload 'git merge --no-ff spec/0001-thing' \
+     | CLAUDE_PROJECT_DIR="$TIEAMB" bash "$HOOKS/close-gate.sh" 2>/dev/null \
+     | grep -qF 'CG-AMBIGUOUS-SPEC'; then
+  ok "tie-break: two different specs on one commit is refused, not resolved by sort order"
+else
+  bad "tie-break: two different specs on one commit must be refused" \
+      "the gate picked one spec and judged its artifacts for a merge that could be either; that is the wrong-object class the rewrite exists to end"
+fi
 
 # The two remaining asserted holes are exercised elsewhere in this file and are
 # named here so the ledger's "asserted" claims are all traceable:
@@ -2396,6 +3712,62 @@ if [[ -z "$CGIV_ALLOW_FAIL" ]]; then
 else
   bad "commit corpus index verbs: a command that does not write the index must still pass" \
       "these were denied:$CGIV_ALLOW_FAIL"
+fi
+
+# The commit gate carries its own copy of strip_wrappers, and a repair in one
+# has failed to be a repair in the other more than once in this repo.
+CGGRAM_FAIL=""
+for cmd in \
+  '{ git add -A; git commit -m x; }' \
+  'if true; then git add -A && git commit -m x; fi' \
+  '! git commit -am x' \
+  'for i in 1; do git commit -am x; done' \
+  ; do
+  [[ "$(cg_verdict "$cmd")" == "deny" ]] || CGGRAM_FAIL="$CGGRAM_FAIL
+    $cmd"
+done
+if [[ -z "$CGGRAM_FAIL" ]]; then
+  ok "commit corpus shell grammar: compound spellings are denied in the commit gate too"
+else
+  bad "commit corpus shell grammar: the same repair must land in both gates" \
+      "these scanned a stale index unchecked:$CGGRAM_FAIL"
+fi
+
+# --- the commit gate's QUOTED-WORD axis (1.0.8, B3b and F5) -----------------
+# Quoting the binary or the subcommand deleted the word this gate matches on, so
+# the line stopped being a commit as far as Check 0 could see. An odd number of
+# quote characters anywhere swallowed the real `git commit` with them.
+CGQ_FAIL=""
+for cmd in \
+  '"git" commit -am x' \
+  'git "commit" -am x' \
+  "'git' 'commit' -am x" \
+  'git add . && "git" commit -m x' \
+  "echo 'don'\\''t' && git add . && git commit -m x" \
+  ; do
+  [[ "$(cg_verdict "$cmd")" == "deny" ]] || CGQ_FAIL="$CGQ_FAIL
+    $cmd"
+done
+if [[ -z "$CGQ_FAIL" ]]; then
+  ok "commit corpus quoted word: quoting the binary or the subcommand does not hide the commit"
+else
+  bad "commit corpus quoted word: a quoted command word must still be the command word" \
+      "these skipped Check 0 and all three scans:$CGQ_FAIL"
+fi
+
+CGQ_ALLOW_FAIL=""
+for cmd in \
+  'echo "git add ." && git commit -m x' \
+  'git commit -m "add everything and commit"' \
+  ; do
+  [[ "$(cg_verdict "$cmd")" == "allow" ]] || CGQ_ALLOW_FAIL="$CGQ_ALLOW_FAIL
+    $cmd"
+done
+if [[ -z "$CGQ_ALLOW_FAIL" ]]; then
+  ok "commit corpus quoted word: a mention inside quotes is still not an operation"
+else
+  bad "commit corpus quoted word: keeping quoted words must not manufacture staging" \
+      "these were denied:$CGQ_ALLOW_FAIL"
 fi
 
 # --- the commit gate's AMPERSAND-SEPARATOR axis (1.0.7) ---------------------

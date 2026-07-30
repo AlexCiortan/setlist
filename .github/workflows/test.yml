@@ -8,7 +8,7 @@ jobs:
   hooks:
     name: hook suite (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 5
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -50,3 +50,41 @@ jobs:
 
       - name: Run the hook suite
         run: bash test/run-tests.sh
+
+      # The three private legs. dogfood/ is NOT exported, so these files exist
+      # only in the source repo, and this workflow is copied wholesale into the
+      # public one. The guard is FILE EXISTENCE rather than a repository-name
+      # expression, deliberately: the matrix comment above records that a
+      # condition evaluated in the wrong context reads as empty and silently
+      # skips every leg while reporting green. A file test cannot do that.
+      #
+      # And when they are absent the step SAYS SO. A skip nobody can see is the
+      # same defect as a check that cannot fail, which is what left
+      # macos-equiv.sh unable to fail for two days: no step obliged anyone to
+      # run it and nothing announced that it had not run.
+      - name: Hook smoke (private; the harness dispatch path)
+        run: |
+          if [ -f dogfood/hook-smoke.sh ]; then
+            bash dogfood/hook-smoke.sh
+          else
+            echo "SKIPPED: dogfood/hook-smoke.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
+          fi
+
+      - name: Outcome oracle (private; gate decision vs observed reality)
+        run: |
+          if [ -f dogfood/oracle-diff.sh ]; then
+            # Bounded rather than --all: the full corpus is about eleven minutes
+            # and the sample is a stride over every dimension, not a prefix, so
+            # a bounded run still crosses the whole space.
+            bash dogfood/oracle-diff.sh --gate both --cases 300
+          else
+            echo "SKIPPED: dogfood/oracle-diff.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
+          fi
+
+      - name: Mutation check (private; does the suite notice a broken gate?)
+        run: |
+          if [ -f dogfood/mutation-check.sh ]; then
+            bash dogfood/mutation-check.sh
+          else
+            echo "SKIPPED: dogfood/mutation-check.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
+          fi

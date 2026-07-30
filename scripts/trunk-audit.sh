@@ -173,7 +173,18 @@ while IFS= read -r C; do
     MISSING=""
     printf '%s\n' "$SPEC_TEXT" | grep -qE '^#+[[:space:]]*Closing report' || MISSING="$MISSING no-closing-report"
     printf '%s\n' "$SPEC_TEXT" | grep -qE '(^|[^A-Z])(PASS|PARTIAL|FAIL)([^A-Z]|$)' || MISSING="$MISSING no-qa-verdict"
-    printf '%s\n' "$STATUS_TEXT" | grep -E "^\|[[:space:]]*${SPEC_NUM}[[:space:]]*\|" | grep -q 'CLOSED' \
+    # The status is a CELL, not a word anywhere in the row (leg 5, F8). The
+    # close gate carried the identical defect and is fixed in the same commit:
+    # an ACTIVE row whose note column mentions another spec's closure satisfied
+    # both layers at once, so the gate and its only backstop went blind
+    # together, which is precisely the case the two-layer design claims to
+    # cover. Fixing one and not the other would have left the backstop making a
+    # claim the gate no longer makes.
+    printf '%s\n' "$STATUS_TEXT" | awk -F'|' -v num="$SPEC_NUM" '
+      function trim(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return x }
+      NF >= 5 && trim($2) == num && trim($4) == "CLOSED" { found = 1 }
+      END { exit found ? 0 : 1 }
+    ' \
       || MISSING="$MISSING no-CLOSED-row"
     if [[ -n "$MISSING" ]]; then
       printf 'VIOLATION %s  spec %s reached %s without:%s\n' "$SHORT" "$SPEC_NUM" "$TRUNK" "$MISSING"

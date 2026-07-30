@@ -27,8 +27,21 @@ PROJ="$(cd "${CLAUDE_PROJECT_DIR:-.}" && pwd)"
 
 # No jq: the pointer still ships, carrying the warning that the enforcement
 # layer is down. Fixed literal, so no escaping (and no jq) is needed.
-if ! command -v jq >/dev/null 2>&1; then
-  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"SDD re-grounding (the read budget, framework Part 2): before anything else, read specs/STATUS.md, then the active spec it names. WARNING: jq is not installed on this machine, so the three PreToolUse gates (scope, commit, close) are failing closed and will deny the writes, commits, and merges they govern until jq is present. Install jq (apt-get install jq, brew install jq, or the package manager for this system) before continuing."}}'
+#
+# JQ PRESENT IS NOT JQ USABLE (leg 4, F1), and here the consequence is worse
+# than a missing warning. `command -v jq` passed for a jq that exists and exits
+# nonzero, so the final `jq -Rs .` produced NOTHING and this hook emitted
+#
+#     {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":}}
+#
+# which is not JSON. So on the one machine where the three gates have silently
+# stopped enforcing, the session start emitted a malformed object carrying no
+# warning at all, and the notice the README promises never arrived. The warning
+# is most needed in exactly the state that suppressed it.
+#
+# jq is RUN rather than located, and both failures take the literal path.
+if ! command -v jq >/dev/null 2>&1 || ! printf '{}' | jq -e . >/dev/null 2>&1; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"SDD re-grounding (the read budget, framework Part 2): before anything else, read specs/STATUS.md, then the active spec it names. WARNING: jq is not usable on this machine (it is missing, or it is installed but exits nonzero), so the three PreToolUse gates (scope, commit, close) are failing closed and will deny the writes, commits, and merges they govern until that is fixed. Run jq --version to see which it is, then install or repair jq (apt-get install jq, brew install jq, or the package manager for this system) before continuing."}}'
   # fail-open-ok: not a pass; the pointer plus the jq warning was delivered.
   exit 0
 fi

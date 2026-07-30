@@ -9,6 +9,58 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 1.0.8
+
+Edition unchanged (v1.6). An adversarial review of the exact 1.0.7 tree found
+nine ways past the gates; all nine are closed here, together with two older ones
+that had been deferred. Every one of them was present in v1.0.6 as well, so this
+is the release to take from any earlier version.
+
+They turned out to be three defects rather than eleven, which is why they could
+be fixed together.
+
+**A ref is identified by the commit it names, not by how it is spelled.** The
+gate used to recognise a spec branch by stripping three literal prefixes from
+the merge argument. Every other spelling of the same commit read as an ordinary
+sync merge and skipped every close check: `heads/spec/0001-x`,
+`remotes/origin/spec/0001-x`, another remote's name, a TAG pointing at the
+branch, an alias branch, a raw commit id. Worse, for `origin/spec/0001-x` the
+strip produced the LOCAL branch name, so a compliant local branch could
+green-light a non-compliant remote one: the thing checked was not the thing
+merged. The gate now resolves the argument to a commit and asks git which refs
+point at it. A spelling nobody has thought of resolves like one everybody knows.
+
+This also closed a documented limitation without anyone aiming at it: merging a
+spec branch under a second name was on the known-holes list because an alias is
+a different string. An alias points at the same commit, so it is simply governed
+now.
+
+**Shell grammar no longer hides the command.** Wrapping a merge in `{ ...; }`,
+`if ... then`, `for ... do`, or prefixing it with `!` moved the git verb out of
+the position the gate inspects, and all four really did land a merge on the
+trunk. Reserved words are stripped at the head of a segment now, in both gates.
+
+**Quoted text is opaque.** The close gate deleted quote characters and kept
+their contents, so a commit message that merely mentioned a checkout could
+retarget the branch the gate believed it was standing on. The commit gate did
+the opposite, deleting whole quoted spans, so quoting the word `git` or `commit`
+deleted the word it matches on, and an odd number of quote characters in
+ordinary prose swallowed the real command. Neither treatment could serve both
+gates. A quoted span of one shell-safe word (a branch name, a binary, a
+subcommand) is now kept as that word, and anything longer becomes a single inert
+token that cannot supply a command or split a line. Escaped quotes are
+understood, so the ordinary way of writing a contraction no longer confuses the
+scan.
+
+**Two smaller ones.** A `.claude/sdd.json` that is valid JSON but not a single
+object (a top-level array, or two documents in one file, which a half-merged
+config produces) silently disabled the trunk rule in both the close gate and the
+scope hook; both now require one object. And the 1.0.7 upgrade check for
+"are the gates wired" matched the hook filename anywhere in your settings, so
+gates moved to the wrong hook event, or given a matcher that never names the
+tool they govern, certified as a complete refresh. It checks the event and the
+matcher now.
+
 ## 1.0.7
 
 Edition unchanged (v1.6). Two more bypasses closed, both in code 1.0.6 added,

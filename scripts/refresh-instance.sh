@@ -178,8 +178,86 @@ else
   # verbatim, in the same block whose comment above describes item 19. Caught
   # here only because the broken program was echoed where a test could see it.
   # A character class needs no escape and cannot lose one.
-  OURS_RE="/($(printf '%s' "$STAMPED_HOOKS" | tr ' ' '|'))[.]sh"
-  OURS="[.hooks | to_entries[] | .value[]? | .hooks[]? | select((.command // \"\") | test(\"$OURS_RE\"))]"
+# WHAT COUNTS AS ONE OF OURS, tightened 2026-07-28.
+#
+# Both predicates below used to be `test("/<name>[.]sh")`, a substring match at
+# any position in any command string. Two things satisfied it that must not:
+#
+#   a FORK. `"$CLAUDE_PROJECT_DIR"/.claude/hooks/local/close-gate.sh` is a
+#   different file that this script neither stamps nor updates, and with
+#   Setlist's own entry deleted the instance was reported CLEAN and --apply
+#   said "the refreshed gates bind from the NEXT session onward" about a gate
+#   that will never bind. A local fork is not adversarial: this script's own
+#   header treats a customized stamped copy as an anticipated fork.
+#
+#   a MENTION. `echo not-really/commit-gate.sh /close-gate.sh >> audit.log`
+#   passed, and the 1.0.8 comment names that exact string as one of the roads
+#   it had closed. It had not.
+#
+# The predicate is now "one of MY four stamped files is what this entry
+# EXECUTES": anchored at the command word, the path segment before the filename
+# must be exactly `.claude/hooks`, and a deeper path is refused. The `type`
+# field is checked too, because an entry that is not a command hook does not run
+# a command however its string reads.
+#
+# This is the same defect as the close gate's: asking whether a name APPEARS
+# rather than whether the thing named is the thing that acts.
+#
+# ANCHORING THE PATTERN WAS NOT ENOUGH (2026-07-29, leg 4 F2). The anchored
+# regex above refused the two examples the comment names and not the class,
+# because a pattern with `[^ ]*` at each end still asks about SHAPE:
+#
+#   ANY SUFFIX. `([^ ]*)?` after `[.]sh` accepted `close-gate.sh.disabled`,
+#   `close-gate.sh.orig` and `close-gate.shell-wrapper`. Renaming a hook to
+#   `.disabled` is precisely how a person turns a gate off, and the instance
+#   certified clean, exit 0, "the refreshed gates bind from the NEXT session".
+#
+#   ANY ROOT. `^[^ ]*` accepted any path ending in `.claude/hooks/<name>.sh`,
+#   so a sibling package's gate in a monorepo, `$HOME`'s, or a vendored one
+#   under `/opt` all satisfied "MY stamped file is what this entry executes".
+#   None of them is the file this script stamps or updates.
+#
+# So the predicate stops being a pattern. It is now membership in an ENUMERATED
+# SET of exact command words: the spellings this script stamps, plus this
+# instance's own absolute path. An entry counts when it executes one of those
+# and not when it merely looks like it might. A shape test cannot express "the
+# file I stamped"; a set of names can.
+#
+# ours_spellings <hook> -> JSON array of every command word that RUNS the file
+# this script stamps at $INSTANCE/.claude/hooks/<hook>.sh.
+#
+# $CLAUDE_PROJECT_DIR cannot be resolved from here (it is set by the client at
+# session start), so its spellings are enumerated rather than expanded. The
+# absolute forms are included because an instance may legitimately be wired with
+# a literal path, and both quoted and bare forms because both run.
+ours_spellings() {
+  local h="$1" abs
+  abs="$(cd "$INSTANCE" 2>/dev/null && pwd)" || abs="$INSTANCE" # fail-open-ok: an unreadable instance falls back to the given path, and the caller has already refused a missing one
+  printf '%s\n' \
+    "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/$h.sh" \
+    "\${CLAUDE_PROJECT_DIR}/.claude/hooks/$h.sh" \
+    "\"\${CLAUDE_PROJECT_DIR}\"/.claude/hooks/$h.sh" \
+    "\$CLAUDE_PROJECT_DIR/.claude/hooks/$h.sh" \
+    "$abs/.claude/hooks/$h.sh" \
+    "\"$abs\"/.claude/hooks/$h.sh" \
+    "\"$abs/.claude/hooks/$h.sh\"" \
+  | jq -R . | jq -s .
+}
+
+# ours_test <hook> -> a jq boolean expression over one hook entry.
+#
+# The command WORD is the string up to the first space, which is what the shell
+# would execute. Whole-string equality is tested too so an instance path
+# containing a space still matches when no arguments follow; the combination
+# fails CLOSED (reports UNWIRED) rather than open when it cannot tell.
+OURS_TEST='
+  (.type // "command") == "command"
+  and ((.command // "") as $c
+       | ($allowed | index($c)) != null
+         or ($allowed | index($c | split(" ")[0])) != null)
+'
+  OURS_ALL="$(for h in $STAMPED_HOOKS; do ours_spellings "$h"; done | jq -s 'add')"
+  OURS="[.hooks | to_entries[] | .value[]? | .hooks[]? | select($OURS_TEST)]"
 
   # THE GATES MUST BE WIRED AT ALL, which nothing here checked until 1.0.7.
   # The block below verified the scope hook's matcher and every entry's timeout,
@@ -192,28 +270,71 @@ else
   # This is the seam that carried plugin 1.0.3's worst defect, and an upgrade
   # path that certifies a disarmed instance is worse than no check: it converts
   # "you must verify this yourself" into "this was verified".
+  # WIRED MEANS WIRED IN THE RIGHT EVENT, WITH A MATCHER THAT REACHES THE TOOL
+  # (1.0.8, F2). The 1.0.7 version of this check tested whether the hook FILENAME
+  # appeared as a substring of any command, in any hook event, with no matcher
+  # constraint. Three things satisfied it that must not:
+  #
+  #   - both gates moved from PreToolUse to a Stop hook, where a PreToolUse deny
+  #     does nothing at all, and the instance still certified clean
+  #   - `echo not-really/commit-gate.sh /close-gate.sh` in an unrelated entry
+  #   - a gate wired on a matcher that never names Bash
+  #
+  # That is grep-enforced rather than meaning-enforced, which is backlog item 26,
+  # in a check written to close exactly that class. Both roads were reproduced by
+  # hand on 2026-07-27.
+  #
+  # The 1.0.7 triage note said REVERT rather than patch, and the intent behind
+  # that rule is not to leave a broken check limping. This is not a patch over
+  # the old test: it is the test the old comment already claimed to be, asserted
+  # in both directions. Reverting instead is a one-hunk change if that is
+  # preferred, and it costs the ability to notice a disarmed instance at all,
+  # which is the property the check was added for.
+  #
+  # Each stamped hook declares the EVENT it must live in and the TOOL its matcher
+  # must reach. A matcher is a regex, so coverage is tested by matching the tool
+  # name against it rather than by comparing strings.
   UNWIRED=""
   for h in $STAMPED_HOOKS; do
-    if ! jq -e --arg h "$h" '[.hooks | to_entries[] | .value[]? | .hooks[]?
-        | select((.command // "") | test("/" + $h + "\\.sh"))] | length > 0' "$SETTINGS" >/dev/null 2>&1; then
+    case "$h" in
+      scope-hook)        ev=PreToolUse;  tool=Write ;;
+      commit-gate)       ev=PreToolUse;  tool=Bash ;;
+      close-gate)        ev=PreToolUse;  tool=Bash ;;
+      regrounding-hook)  ev=SessionStart; tool="" ;;
+      *)                 ev=PreToolUse;  tool="" ;;
+    esac
+    if ! jq -e --arg ev "$ev" --arg tool "$tool" --argjson allowed "$(ours_spellings "$h")" "
+          [ (.hooks[\$ev] // [])[]
+            | select(any(.hooks[]?; $OURS_TEST))
+            | select((\$tool == \"\") or (.matcher as \$m | \$tool | test(\"^(\" + (\$m // \"\") + \")\$\")))
+          ] | length > 0" "$SETTINGS" >/dev/null 2>&1; then
       UNWIRED="$UNWIRED $h.sh"
     fi
   done
   if [[ -n "$UNWIRED" ]]; then
     WIRING_GAPS="$WIRING_GAPS
-  these Setlist hooks are stamped into .claude/hooks/ but NOTHING IN
-  .claude/settings.json RUNS THEM:$UNWIRED
-  The files being current is not the same as the gates being in force. Restore
-  each entry from the plugin's templates/claude/settings.json.tmpl (the scope
-  hook on Write|Edit|MultiEdit|NotebookEdit, the commit and close gates on
-  Bash, the re-grounding hook on SessionStart), keeping this file's own
-  permissions and model settings."
+  these Setlist hooks are stamped into .claude/hooks/ but are NOT WIRED IN A WAY
+  THAT RUNS THEM:$UNWIRED
+  Being present in the file is not the same as being in force: an entry in the
+  wrong hook event, or on a matcher that never names the tool it governs, never
+  fires. Restore each entry from the plugin's templates/claude/settings.json.tmpl
+  (the scope hook on PreToolUse matching Write|Edit|MultiEdit|NotebookEdit, the
+  commit and close gates on PreToolUse matching Bash, the re-grounding hook on
+  SessionStart), keeping this file's own permissions and model settings."
   fi
 
-  # The scope hook is identified by its command, and only ITS matcher is read.
-  SCOPE_MATCHER="$(jq -r '[.hooks.PreToolUse[]?
-      | select(any(.hooks[]?; (.command // "") | test("scope-hook\\.sh")))
-      | .matcher // ""] | first // "<unwired>"' "$SETTINGS")"
+  # The scope hook is identified by what its entry EXECUTES, and only ITS
+  # matcher is read.
+  #
+  # This predicate was left as an unanchored substring when its two neighbours
+  # above were anchored on 2026-07-28, so a fork at .claude/hooks/local/ or a
+  # bare MENTION of the filename still satisfied it and the matcher of a hook
+  # that never runs was read as the scope hook's. Fixing the two predicates a
+  # finding named and not the third one in the same file is the same
+  # stop-at-the-example error as the heading-depth range next door.
+  SCOPE_MATCHER="$(jq -r --argjson allowed "$(ours_spellings scope-hook)" "[.hooks.PreToolUse[]?
+      | select(any(.hooks[]?; $OURS_TEST))
+      | .matcher // \"\"] | first // \"<unwired>\"" "$SETTINGS")"
   if [[ "$SCOPE_MATCHER" == "<unwired>" ]]; then
     WIRING_GAPS="$WIRING_GAPS
   the scope hook is not wired in PreToolUse at all, so the trunk rule never runs."
@@ -226,7 +347,7 @@ else
   fi
 
   # Timeouts, on OUR entries only, and the message names each offender.
-  UNTIMED="$(jq -r "$OURS"' | map(select(.timeout == null))
+  UNTIMED="$(jq -r --argjson allowed "$OURS_ALL" "$OURS"' | map(select(.timeout == null))
       | map((.command // "") | split("/") | last | sub("\"$"; ""))
       | join(", ")' "$SETTINGS")"
   if [[ -n "$UNTIMED" ]]; then

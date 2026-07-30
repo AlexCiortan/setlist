@@ -117,9 +117,16 @@ When the instance predates this plugin, also:
   and tests role paths, the full-suite gate_command, and scaffolded=true (the
   project exists; the gates should bind now). Whether created or already
   present, sdd.json must carry the `trunk` field: detect the trunk branch
-  name (`git symbolic-ref refs/remotes/origin/HEAD`, else the current trunk
-  branch in use, else main) and record it; the scope and close hooks read it
-  instead of assuming main. Note that hooks load at session start, so the
+  NAME and record the plain name, never a ref path. `git symbolic-ref
+  refs/remotes/origin/HEAD` returns `refs/remotes/origin/main`, so pipe it
+  through `--short` and strip the remote, or read it from the branch you are
+  on: `git symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^[^/]*/##'`,
+  else the current trunk branch in use, else main. Recording the full ref path
+  used to disable BOTH hooks in silence, because they compare it against the
+  branch name you are standing on and the two can never be equal; the hooks now
+  reduce a ref spelling and refuse a trunk that names no local branch, but
+  writing the right value here is what stops the question arising. The scope
+  and close hooks read this field instead of assuming main. Note that hooks load at session start, so the
   gates bind from the NEXT session onward.
 - Refresh `specs/TEMPLATE.md` from the new edition:
   `bash "${CLAUDE_PLUGIN_ROOT}/scripts/part.sh" appendix-c` (the template body
