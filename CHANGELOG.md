@@ -9,6 +9,43 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 1.0.9
+
+Edition unchanged (v1.6). **If you are on macOS and running 1.0.8, update now.**
+On a Mac, 1.0.8's commit gate and close gate did not deny anything. They did not
+crash and they printed no error: they allowed, silently, every commit and every
+merge they exist to check. Linux and WSL were never affected. 1.0.7 and earlier
+were never affected on any platform.
+
+**The cause was one stray character, and the platform decided whether it
+mattered.** Both gates normalise the command they are given through a small awk
+program, and in 1.0.8 that program ended with `}\'` instead of `}'`. GNU awk and
+mawk, which is what Linux ships, accept the trailing backslash without comment.
+The BWK "one true awk" that macOS ships as `/usr/bin/awk` rejects it: syntax
+error, exit status 2, nothing written to standard output. The normalised command
+therefore came back EMPTY, the test for "is this a command I govern" matched
+nothing, and each gate concluded it had nothing to do. An empty read was
+indistinguishable from an absent one, and absence read as permission.
+
+That is the same failure this project fixed one layer down in 1.0.8 itself, when
+a `jq` that existed but could not run made the gates allow in silence. There the
+dependency was broken; here it was merely STRICTER. Both gates now carry the
+rule in the file: the lexer's awk program must not end in a backslash, and a
+gate whose lexer can fail must not treat lexer failure as a clean parse.
+
+**Nothing else changed.** This is a two-file, two-byte repair plus the comments
+explaining it. No new command spellings are recognised, no gate semantics moved,
+no checks were added or removed. Everything 1.0.8 closed stays closed.
+
+**How it escaped, stated plainly.** 1.0.8's evidence was real and it was
+platform-scoped. Every mechanical leg ran under Linux and GNU awk, where the
+defect is invisible by construction, and the release shipped with the macOS leg
+listed as an outstanding debt to be watched after the push rather than a gate to
+be passed before it. It went red on the first run: 169 of 451 assertions failed
+on `macos-latest` while the Linux leg was green. For 1.0.9 that debt is a
+blocking pre-publish gate instead of a note, and the suite is now also run
+locally under bash 3.2 with BWK awk, the same implementations macOS ships.
+
 ## 1.0.8
 
 Edition unchanged (v1.6). An adversarial review of the exact 1.0.7 tree found

@@ -2065,6 +2065,13 @@ so the next author can copy it:
 ```
 SPECEOF
 printf '# Spec inventory\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n' > "$L5C/specs/STATUS.md"
+# close_fixture creates specs/ and NOT src/, so this redirect used to fail
+# silently: the shell reported "No such file or directory" on stderr, the suite
+# carried on, and the assertion passed on the spec-file change alone. A fixture
+# line that has never once worked is worse than a missing one, because it reads
+# as covered. Found on the 1.0.9 macOS repair (mkdir added, not the line removed:
+# the intent was for the branch to touch code as well as its spec).
+mkdir -p "$L5C/src"
 echo work >> "$L5C/src/a.txt"
 git -C "$L5C" add -A >/dev/null 2>&1; git -C "$L5C" commit -qm "quote the template" >/dev/null 2>&1
 git -C "$L5C" checkout -q main
@@ -3132,12 +3139,29 @@ expect_allow "empty span: an ordinary command is unaffected by the empty-span ru
 # real shape. The ALLOW cases matter more than the deny one, because false
 # denial is the direction that breaks honest closes.
 #
-# The verdict line is inserted with sed against the QA Pass 2 marker, which is
-# where close_fixture ends the QA Pass 1 block.
-# =============================================================================
+# The verdict line is inserted against the QA Pass 2 marker, which is where
+# close_fixture ends the QA Pass 1 block.
+#
+# PORTABLY, via awk and a temp file, because the two sed forms this used carried
+# TWO GNU-only assumptions each and macOS has neither (1.0.9). `sed -i` without
+# an argument is GNU: BSD sed reads the NEXT WORD as the backup suffix, so
+# `sed -i 's|...|' file` consumes the script as a suffix and fails. And `\n` in a
+# sed REPLACEMENT is GNU: BSD sed inserts a literal `n`, so even a corrected
+# `-i ''` would have written "...not run" followed by "nn- QA Pass 2..." and the
+# assertion would have failed for a reason having nothing to do with the gate.
+#
+# awk needs neither: it prints the inserted lines itself.
+insert_before() { # insert_before <file> <marker-line> <text>
+  awk -v marker="$2" -v ins="$3" '
+    $0 == marker { print ins; print "" }
+    { print }
+  ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+
 QAV="$WORK/qa-verdict"; close_fixture "$QAV" yes no answered yes no true
 git -C "$QAV" checkout -q spec/0001-thing
-sed -i 's|^- QA Pass 2 (human): done|the browser tests PASS on my machine but mobile was not run\n\n- QA Pass 2 (human): done|' "$QAV/specs/0001-thing.md"
+insert_before "$QAV/specs/0001-thing.md" '- QA Pass 2 (human): done' \
+  'the browser tests PASS on my machine but mobile was not run'
 git -C "$QAV" add -A >/dev/null 2>&1; git -C "$QAV" commit -qm "prose, not a verdict" >/dev/null 2>&1
 git -C "$QAV" checkout -q main
 run_hook "$HOOKS/close-gate.sh" "$QAV" "$(bash_payload "$MERGE_CMD")"
@@ -3146,7 +3170,7 @@ expect_deny "qa verdict: prose containing the word PASS is not a pasted verdict"
 for qa_line in 'PASS' '- criterion 2: FAIL.' 'criterion 3: PARTIAL'; do
   QAOK="$WORK/qa-ok"; rm -rf "$QAOK"; close_fixture "$QAOK" yes no answered yes no true
   git -C "$QAOK" checkout -q spec/0001-thing
-  sed -i "s|^- QA Pass 2 (human): done|$qa_line\n\n- QA Pass 2 (human): done|" "$QAOK/specs/0001-thing.md"
+  insert_before "$QAOK/specs/0001-thing.md" '- QA Pass 2 (human): done' "$qa_line"
   git -C "$QAOK" add -A >/dev/null 2>&1; git -C "$QAOK" commit -qm "verdict" >/dev/null 2>&1
   git -C "$QAOK" checkout -q main
   run_hook "$HOOKS/close-gate.sh" "$QAOK" "$(bash_payload "$MERGE_CMD")"

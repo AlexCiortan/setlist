@@ -129,6 +129,20 @@ fi
 #
 # An UNTERMINATED quote appends a marker rather than silently swallowing the rest
 # of the line. A gate that cannot lex its input has not evaluated its predicate.
+#
+# THE PROGRAM BELOW MUST NOT END IN A BACKSLASH (1.0.9). From 1.0.8 it closed
+# with `}\'` instead of `}'`, a stray byte gawk and mawk accept in silence. The
+# BWK "one true awk" that macOS ships as /usr/bin/awk does not: it reports a
+# syntax error, exits 2, and writes NOTHING to stdout. CMD_NORM then came out
+# empty, the applicability grep below matched nothing, the gate concluded it had
+# no merge to govern, and every Mac running 1.0.8 ALLOWED the merges this file
+# exists to check. 169 of 451 assertions failed on the macOS CI leg and the
+# Linux leg was green, because the difference is the awk, not the code.
+#
+# That is the same shape as the jq finding above, one layer out: the input
+# failed to materialise, empty read as "nothing to govern", and absence read as
+# permission. Here the dependency was not missing or broken, it was STRICTER.
+# A gate whose lexer can fail must not treat lexer failure as a clean parse.
 CMD_NORM="$(printf '%s' "$CMD" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' | tr '\n\r' ';;' | tr -s '[:space:]' ' ' | awk '{
   out = ""; q = ""; buf = ""
   n = length($0)
@@ -193,7 +207,7 @@ CMD_NORM="$(printf '%s' "$CMD" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; els
   }
   if (q != "") { out = out " @@UNTERMINATED@@" }
   print out
-}\')"
+}')"
 GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
 
 # THE MARKER IS NOW READ, and until 2026-07-28 it was not.

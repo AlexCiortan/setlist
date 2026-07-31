@@ -122,6 +122,15 @@ CMD_NORM="$(printf '%s' "$CMD" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; els
 # path) and replaces anything else with `@@Q@@`, which cannot be a command word
 # and cannot separate segments. Same model as the close gate now uses, from the
 # opposite starting point: that gate kept too much and this one kept too little.
+#
+# THE PROGRAM BELOW MUST NOT END IN A BACKSLASH (1.0.9). From 1.0.8 it closed
+# with `}\'` instead of `}'`, a stray byte gawk and mawk accept in silence. The
+# BWK "one true awk" that macOS ships as /usr/bin/awk does not: it reports a
+# syntax error, exits 2, and writes NOTHING to stdout. CMD_BARE then came out
+# empty, the applicability grep below matched nothing, the gate concluded it had
+# no commit to govern, and every Mac running 1.0.8 ALLOWED the commits this file
+# exists to check. See the identical note in close-gate.sh; the two lexers broke
+# together because they were written together.
 CMD_BARE="$(printf '%s' "$CMD_NORM" | awk '{
   out = ""; q = ""; buf = ""
   n = length($0)
@@ -186,7 +195,7 @@ CMD_BARE="$(printf '%s' "$CMD_NORM" | awk '{
   }
   if (q != "") { out = out " @@UNTERMINATED@@" }
   print out
-}\')"
+}')"
 GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
 
 # THE MARKER IS NOW READ, and until 2026-07-28 it was not.
