@@ -46,3 +46,12 @@ line can.
   interactions have confabulated (a whole-command deny narrated as a partial
   success). When an entry records an enforcement event, write what the repo
   shows (branch, status, checksums), not what the session said happened.
+- Name the scanner honestly when an entry records one. A scan that matches
+  token-shaped strings is a token-shape scan, not a secret scan; writing the
+  stronger name into the record is how a later reader inherits a guarantee
+  nobody made. The same goes for "the suite passed" when what ran was a subset.
+- Quoted history keeps its punctuation. Pasted verifier output, upstream text
+  and relocated documents are evidence of what was written then; the em-dash
+  rule is forward-only and governs what this project writes now. Do not
+  "correct" quoted material into compliance, and if a path must hold such
+  content verbatim, scope the scan by path rather than weakening it.

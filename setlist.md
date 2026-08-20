@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.6 (the field edition)**
+**Edition v1.8 (the boundary edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -162,13 +162,31 @@ The rules, observed in the field and unchanged in substance since v1.4:
   evidence about the tier, and give a degraded planning turn a journal line so the record
   stays honest about which model actually decided.
 
-**Current bindings (v1.6):**
+**Current bindings, RE-VERIFIED 2026-08-13 against the live harness** (Claude Code
+2.1.221, the documented model-alias table, and a live probe of each alias). The table
+carries its verification date because a bindings table whose date is older than the
+harness is a claim nobody has checked, and renumbering a stale table to the current
+edition would be the same defect wearing a new number.
 
-| Tier | Binding |
-|---|---|
-| Planning | Opus, via `opusplan` plan mode |
-| Execution | Sonnet, via `opusplan` execution mode |
-| Escalation | The strongest model available in the environment; the harness has shipped a model family above Opus, and where it is available it is the escalation rung, otherwise Opus is |
+| Tier | Binding | How it was verified |
+|---|---|---|
+| Planning | Opus, via `opusplan` plan mode. On the Anthropic API `opus` resolves to Opus 5 | `opusplan` is documented as "uses `opus` during plan mode, then switches to `sonnet` for execution", and `claude -p --model opusplan` returned a clean reply here |
+| Execution | Sonnet, via `opusplan` execution mode. On the Anthropic API `sonnet` resolves to Sonnet 5 | same alias, same probe: one setting binds both tiers |
+| Escalation | **The model family above Opus now has a name: Claude Fable 5, alias `fable`.** The availability-aware alias is `best`, which uses Fable 5 where the organization has access and the latest Opus otherwise | `claude -p --model fable` and `claude -p --model best` each returned a clean reply here; the alias table defines `best` in exactly those terms |
+
+Three facts about this table that are easy to get wrong:
+
+- **Aliases resolve per PROVIDER, not universally.** `opus` and `sonnet` resolve to the
+  newest models on the Anthropic API, and to older ones on some third-party providers. An
+  instance on a managed gateway may be one or two versions behind what this table names
+  while the alias string is identical, so read the row as "the alias", not "the version".
+- **`opusplan[1m]`** forces the 1M-token context window in BOTH phases where the account
+  tier does not upgrade it automatically. The plain `opusplan` inherits the `opus` setting's
+  window.
+- **`opusplan` is verified by a LIVE PROBE at bootstrap, never assumed.** `/setlist:new`
+  and `/setlist:retrofit` both run it and record `opusplan_verified` in the answers, and
+  the stamp writes the `model` line only when the probe passed. An alias that stops
+  resolving is therefore a stamped instance that never claimed it, rather than a broken one.
 
 When these names age, the fix is one row in this table (recorded in the Changelog) and a
 settings edit, not a protocol change.
@@ -244,6 +262,29 @@ Two harness realities the loop must bind to explicitly:
   an unreviewed guess that ships. It was promoted deliberately ahead of a first observed
   incident; the Changelog records why the standing evidence rule was overridden for this
   one class.
+- **Strict, fair, and willing to name bad judgement, including the human's (new in v1.7).**
+  Every other stance line in this document points toward compliance: the Builder parks
+  rather than improvising, the Planner asks only genuine forks. That is right for SCOPE and
+  wrong as a whole personality, because this framework's value rests on the human REVIEWING
+  rather than typing. If the agent's default is agreement, approval degrades into the human
+  approving their own idea reflected back, and the claim is hollow at exactly the moments it
+  exists for: spec approval, criteria wording, QA judgments, the close gate's honesty about
+  what actually passed, and post-mortems that smooth over what went wrong. An agreeable
+  agent produces the same artifact as a rigorous one right up until the artifact is wrong.
+  So: be evidence-first, say plainly when a proposal is weak, and name bad judgement when it
+  appears, whoever produced it.
+  **Naming the bypass is not the agent's move to make.** This is the sharp half, and it
+  comes from a field observation rather than from the general principle. In a cold session a
+  gate correctly refused an action and correctly cited the reason, and then, unprompted and
+  before anyone had pushed back, offered to "proceed anyway as a one-off". Pressed, it held
+  the line well. The drift is not caving; it is OFFERING THE EXIT at the first sign of
+  friction. State the rule and the reason. Do not volunteer the workaround, the
+  `--no-verify`, or the "just this once". If the human chooses a bypass, that is theirs to
+  choose and yours to record.
+  **The limit, in the same breath, so this does not become performed contrarianism.**
+  Disagreement is stated ONCE, with the reason and a recommendation. The human decides. The
+  decision is recorded (an ADR, or a STATUS line). It is not relitigated, and repeating an
+  objection after it has been heard and overruled is its own failure, not rigour.
 
 ### Enforcement
 
@@ -423,7 +464,8 @@ belongs elsewhere.
 
 It contains, and contains only:
 - **Current state.** Phase, active spec, working mode, the named next action.
-- **Spec inventory table.** Every spec: status (QUEUED / ACTIVE / REVISED / CLOSED / DRAFT)
+- **Spec inventory table.** Every spec: status (DRAFT / QUEUED / ACTIVE / REVISED / BUILT /
+  PARKED / CLOSED, the canonical list in Part 5)
   and a one-line note. For CLOSED specs the note is one line; the full post-mortem lives in
   that spec file's **Closing report** (Part 5).
 - **Open chores** (Part 5b). Closed chores get one archive line each, trimmed periodically.
@@ -658,7 +700,54 @@ count is not a goal.
 
 ### Spec lifecycle
 
-`QUEUED -> ACTIVE -> CLOSED`, with one branch: `ACTIVE -> REVISED -> ACTIVE`.
+`QUEUED -> ACTIVE -> CLOSED`, with one branch: `ACTIVE -> REVISED -> ACTIVE`, and two states
+for work that is finished on its branch but not yet on the trunk: **BUILT** and **PARKED**.
+
+The complete inventory vocabulary, which is the list every mechanism reads:
+
+<!-- SDD-LIFECYCLE-STATES:BEGIN -->
+```text
+DRAFT
+QUEUED
+ACTIVE
+REVISED
+BUILT
+PARKED
+CLOSED
+```
+<!-- SDD-LIFECYCLE-STATES:END -->
+
+**That block is the canonical enumeration, not an illustration of one.**
+`scripts/part.sh lifecycle-states` extracts it; the commit gate's staged-transition check
+carries the same list and the test suite asserts the two are identical; and `STATUS.md`'s
+legend is checked against it too. This matters because the gate enumerates the vocabulary
+literally: a state that exists in the protocol and not in the gate is not a loose end, it is
+a lifecycle transition the gate silently fails to notice, which is the one failure mode a
+gate must never have. Adding a state here and nowhere else turns the suite red rather than
+turning a check off.
+
+**BUILT** means complete on its branch with the close pending: the work exists, the trunk
+does not have it yet. **PARKED** means deliberately paused on its branch, unmerged, and it
+carries three rules:
+
+1. A PARKED spec's work **does not exist on the trunk**. Every planning precondition reads
+   the STATUS state rather than assuming close order follows spec order. A plan that says
+   "0044 is done, so 0045 can build on it" is simply false while 0044 sits parked, and that
+   sentence has already been written in the field.
+2. **Resuming a PARKED spec requires re-validating the branch against the trunk as it exists
+   then**, by rebase or by an explicit re-validation, before it may continue toward close.
+   The trunk moved while the branch slept.
+3. **A PARKED row states its reason and its revisit trigger.** A parked row with neither is
+   not a decision, it is an abandoned branch with a label, and the health check reports it.
+
+The release ceremony names any PARKED row in what a cut EXCLUDES. An unmerged parked branch
+cannot be silently included, because the merge never happened; what it can be is silently
+assumed present, which is the planning-precondition failure arriving at release time.
+
+Keep BUILT and PARKED distinct from the closed-with-an-open-criterion state below. These two
+are branch-lifecycle facts about work the trunk does not contain. That one is a criterion
+fact about work the trunk does contain, and it lives on the CLOSED row plus a Closing-report
+field, not in this vocabulary.
 
 A spec moves to **REVISED** when human use (not test failure) reveals a section needs design
 rework. The revision is a planning act, narrowly scoped to the failing section, recorded in
@@ -757,6 +846,37 @@ concrete scope (files/lines), when-to-do-it, one-line definition of done, effort
 Closed chores collapse to one archive line each, trimmed periodically (STATUS.md is
 bounded).
 
+**The archive line has a form, and the form is load-bearing** (new in v1.7). A completed
+chore is recorded in STATUS.md as:
+
+```
+- CHORE-007: DONE 2026-08-02. Renamed the duplicate helper in src/parse.js.
+```
+
+`DONE` is a FIELD, not a word in a sentence: it is the first token after the chore's colon.
+That is the same discipline the spec inventory's Status column uses and the same one the QA
+verdict rule uses, and it exists for the same reason. A note reading "this is done once
+CHORE-007 lands" must not count as a completion record, or the record means nothing.
+
+This form is what makes a chore's completion **checkable by a mechanism rather than by
+reading**, which Part 6's trunk rule now depends on. Before v1.7 the edition said closed
+chores collapse to an archive line and never said what one looked like, so the enforcement
+layer had nothing to read: it refused every `chore/<slug>` merge that touched a role path,
+which is precisely the work Part 5b prescribes, and advised the operator to "route it as a
+chore branch" while they were standing on one.
+
+**What the archive line proves, and what it does not.** It is a DECLARATION, not a
+verification. A closed spec carries acceptance criteria, a QA report with a pasted verdict,
+and a diagram answer, and the hooks check all three. A chore carries one line, and the hooks
+check only that the line is there and is new. That asymmetry is deliberate and it is the
+same trust Part 5b has always extended (small chores commit straight to the trunk), but it
+means the chore route's strength is that it is RECORDED and auditable, never that it is
+verified. Writing `- CHORE-999: DONE` over an unspecced feature will let that feature reach
+the trunk. It will also put a dated, named, reviewable claim in STATUS.md and in the trunk
+audit's output, which is exactly what a deliberate exception should cost: something a person
+can find later, not something the mechanism can catch now. If you want the stronger
+guarantee, the work is a spec.
+
 **Spec or chore? The test.** If "done" fits in one observable sentence and there's no
 product-behavior shift, it's a chore. If you're tempted to write multiple acceptance
 criteria or scope-bounding rules, it's a spec. **Demote** proposed specs that are mostly
@@ -772,6 +892,12 @@ the guard exists for.
 
 **Commit prefix.** `chore: ...` (small chores can go directly on `main`, same exemption as
 docs-only commits); larger ones get a `chore/<slug>` branch and merge `--no-ff`.
+
+**Completing the EVIDENCE on a closed spec is a chore, not a reopened spec** (new in v1.7).
+A QA report that was never pasted, or a criterion that became reachable later, is recorded
+through a `chore/` branch that amends the closed spec's Closing report. It is not a lifecycle
+transition and it does not reuse the spec number. Part 6's "Amending a spec that is already
+CLOSED" gives the reasoning and the other two routes.
 
 Without this primitive, small debt either inflates into ceremony specs or gets forgotten.
 
@@ -868,7 +994,20 @@ session's backlog reconciliation (Part 7b Step 3), alongside the Closing-report 
 
 A feature-branch model where "feature" means "spec."
 
-- **`main` is always shippable**; only completed, closed specs land on it. (Throughout
+- **Two invariants, not one.** "`main` is always shippable" turned out to be two separate
+  promises wearing one sentence, and instances that deploy nothing were forced to pretend
+  the second one applied to them. They are now stated apart, and both are stated without
+  naming a mechanism: **(a) the trunk is always green and integrable**, and **(b) what
+  users run is identifiable from a version recorded in the repo, and the trunk may run
+  ahead of it.** **What reaches the trunk arrives through a CLOSED SPEC or a RECORDED
+  CHORE, and nothing else** (restated in v1.7; it read "only completed, closed specs land
+  on the trunk", which was never true of the chore route Part 5b has always prescribed and
+  which the v1.7 enforcement layer took literally enough to refuse every chore merge that
+  touched a role path). A recorded chore is one whose completion this same commit writes
+  into STATUS.md in the archive-line form Part 5b defines; that form is what the hooks
+  read, and a chore branch that records nothing is indistinguishable from an unspecced
+  feature and is refused like one. How an instance RECORDS
+  that version is a declaration, not a rule; see "The release rail" below. (Throughout
   this document `main` names the trunk branch by convention; a repo whose trunk is
   `master` or another name reads it accordingly, and the stamped hooks read the real
   trunk name from `.claude/sdd.json` rather than assuming it.)
@@ -878,12 +1017,15 @@ A feature-branch model where "feature" means "spec."
   working retreat point; spec-scoped messages make history self-documenting.
 - **Closing a spec** = gates + QA loop pass, Closing report completed (including the diagram
   field), STATUS.md one-line update, merge `--no-ff`. Never feature code directly on `main`.
-- **The close gate has three bindings.** Solo: `/setlist:checkpoint` refuses the merge. Team:
-  CI refuses the merge (the same checks moved into the pipeline, which is stricter because
-  it cannot be skipped). Agent: the stamped close-gate hook (below, new in v1.5) denies
-  the merge attempt itself, so a raw `git merge` from an agent session hits the same wall
-  `/setlist:checkpoint` enforces. Same gate, three enforcements: the hook binds the agent, CI
-  binds the team, and the human typing git in their own terminal remains sovereign.
+- **The close gate has four bindings, and one of them is the boundary.** Solo:
+  `/setlist:checkpoint` refuses the merge. Team: CI refuses the merge (the same checks moved
+  into the pipeline, which is stricter because it cannot be skipped). Agent, advisory: the
+  stamped PreToolUse close-gate hook warns before the command runs. Agent and human alike,
+  and this is the one the guarantee rests on since v1.7: the stamped **git hooks** refuse the
+  operation itself, from git's own state, after the shell has finished with it. Within that
+  layer, the guarantee is the push-time trunk audit; the per-merge hooks are its early
+  warning (see "The enforcement boundary" below for why the fourth binding is different in
+  kind from the other three, and where the guarantee sits inside it).
 - **The agent does all Git** under the `/setlist:checkpoint` mandate; the human never types
   Git commands. The mandate binds duties, not the invocation: a session may run a
   checkpoint duty inline (a Builder opening its spec branch, a close merging once the
@@ -892,6 +1034,278 @@ A feature-branch model where "feature" means "spec."
   first (enforced in `settings.json`).
 - Solo developers merge locally; with a host, a pull-request per spec lets CI gate the
   merge.
+
+### The release rail (new in v1.7)
+
+Invariant (b) says a version identifies what users run. It does not say how that version is
+recorded, because two field instances answered that differently and both were right. One
+invented an annotated-tag ceremony unaided; the other shipped three patches in a day off a
+VERSION file with no deploy at all. They differ on the MARKER (a tag versus a file) and on
+the CADENCE (a batched cut versus a bump riding every close). They do not differ on the
+invariant. So the rail is one rail with declared bindings, and neither binding is the
+exception.
+
+An instance declares its binding in a minimal `release` block in `.claude/sdd.json`:
+
+```json
+"release": { "model": "none" }
+```
+
+Three models, and the default is deliberate:
+
+- **`none`** (the default). Early stage, deploy-on-push, or nothing shipped yet. Invariant
+  (b) is satisfied trivially: users run the trunk. No ceremony, and the sections below about
+  cutting a release read as not applicable.
+- **`tags`**. An annotated `vN.N` tag on the trunk is the release; a deploy or publish hangs
+  off the tag or an explicit dispatch. The block carries the tag pattern as its marker fact.
+- **`version-file`**. A VERSION file on SemVer; the bump rides the close commit, a minor per
+  spec and a patch per chore. Users pull and run; nothing deploys. The block carries the
+  file path as its marker fact.
+
+The block carries the model plus its marker fact and nothing else. Deploy stance stays in
+protocol text and the instance's own ADR, because a config key nobody reads mechanically is
+a second place for the truth to live.
+
+**A missing block means `model: none`, and the reading is stated rather than guessed.**
+`/setlist:checkpoint` treats an absent `release` block as `none` and SAYS SO when a release
+question arises, so an instance stamped before v1.7 behaves predictably instead of having a
+model inferred for it. Nothing guesses: an instance that wants a model declares one.
+
+**Why `sdd.json` and not a new file.** That is where the project facts the skills already
+read live (`trunk`, `gate_command`, `roles`). A ceremony that has to ask or guess every time
+is a ceremony that gets skipped.
+
+### Cutting a release
+
+The ceremony lives in `/setlist:checkpoint`, which is already the instance's only Git
+operator. A release cut is a Git operation with a checklist, and splitting it into a second
+command would split that mandate and grow the public command surface for no functional gain.
+
+**For `tags`:**
+
+1. Verify the trunk is green (invariant (a)). A cut is not the place to discover a red trunk.
+2. State what the release CONTAINS and what it EXCLUDES. The exclusion half is the one that
+   gets skipped, and it is the one that matters: name any PARKED row, because a parked spec's
+   work is not on the trunk and therefore is not in this release.
+3. Write the short release notes.
+4. Create the annotated tag.
+5. **Push only with human approval.**
+
+**For `version-file`:** the bump rides the close commit as ordinary checkpoint work. There is
+no per-bump approval, because one instance shipped three patches in a day and a confirmation
+prompt on each would be pure theater.
+
+**Approval binds to OUTWARDNESS, not to versioning.** That is the rule the two models share,
+and stating it that way is what lets them share one ceremony. Versioning is bookkeeping and
+needs no ceremony; a cut that triggers a deploy, a publish, or anything else the world can
+see is the same class as this framework's own human-gated publish, and asks first.
+
+**One correction worth keeping, because the obvious version of this rule is wrong.** The
+parked-spec check at cut time is that the release notes NAME what the release does not
+include. An unmerged PARKED branch cannot be "silently included": the merge never happened,
+so its work is not there. What it can be is silently ASSUMED PRESENT, by a reader who
+remembers the spec being finished and does not remember it never landing. That is the
+planning-precondition failure (Part 5, the PARKED rules) arriving at release time, and it is
+a documentation duty rather than a mechanical one.
+
+### Environments map to refs, never to branches
+
+Scoped to instances that deploy. A `none`-model instance, or one with no deploy at all,
+reads this section as not applicable, and that is a real answer rather than an omission.
+
+- The spec branch, or its pull request, maps to **preview** and **staging**.
+- The trunk tip is the **integration truth**.
+- A tag, or an explicit dispatch, maps to **production**.
+
+Configuration differences live in environment config and secret stores. They never live in
+source branches.
+
+**Environment branches are rejected, and named here so the next person with the intuition
+finds the answer rather than the silence.** A `main -> staging -> production` promotion chain,
+where each environment has its own long-lived branch and you merge to deploy, is the pattern
+being refused. It looks like it gives you control and what it actually gives you is three
+branches that drift, a merge queue that reorders your releases, and a "what is actually in
+production" question answerable only by diffing. The industry's settled answer agrees.
+
+> **Gotcha.** The intuition that a branch per environment is safer is strong, and it is
+> usually reached while trying to solve a real problem: "how do I stop this reaching
+> production before it is ready?" The answer is that the TRIGGER is what gates the
+> deployment, not the branch it lives on. A tag, a dispatch, an approval. If your CI vendor
+> can only watch branches, the narrow exception is a branch that exists solely as a deploy
+> trigger and carries no commits of its own, and it gets an ADR saying so.
+
+### Migrations
+
+For instances with a persistence layer that has real environments. Migrations are **spec
+artifacts**: ordered files, named in the spec, reviewed in QA like code, and verified against
+staging before any production apply. The Closing report names them (Appendix C's migrations
+field) or says `none`.
+
+**Bias to expand-then-contract.** The additive migration ships with the spec; the destructive
+cleanup ships only after a release has proved the new path. Two rules the field taught, both
+stated because both were learned the expensive way:
+
+1. **The migrate-trigger and the deploy-trigger are DIFFERENT EVENTS**, and the instance names
+   both in its CI design. Binding "apply the migration" to "ship the build" reads as tidy and
+   removes the ability to do the one ordering that works.
+2. **Additive migrations go schema-first, app-second.** The schema change lands and applies
+   before the app build that reads it ships. In the field a merge migrated the production
+   database while production kept serving the previous build, and that was CORRECT: the
+   reverse order would have failed silently on every device until the migration landed.
+
+**No hook enforces this, deliberately.** The framework adds enforcement after observing the
+drift it prevents, and the field handled migrations correctly under text alone, so there is
+no observed drift to mechanize. Hook surface is where silent failure lives; it is grown
+reluctantly. If a spec ever closes with unlisted migrations, that is the firing, and the check
+is grep-decidable when it comes.
+
+### Observing the CI you just triggered
+
+**After any push to the trunk, the checkpoint duty is not complete until the session reads the
+result of the run that push triggered, and reports it.** `gh run watch`, or `gh run list` plus
+a read of the completed run.
+
+A session that cannot wait records a one-line debt in STATUS.md (`CI run <id> unobserved`).
+The debt can be deferred; it cannot be silently dropped.
+
+The diagnosis this comes from is structural rather than moral: a session that pushes and stops
+is exactly where "observe green CI" gets skipped, and the step already existed as words when a
+trunk sat red for two days. More words in the same place would fail the same way. What this
+adds is an obligation parked somewhere every session is forced to re-read.
+
+**The mechanical guarantee ends where the evidence of health leaves the machine**, and the
+edition says so rather than implying otherwise. A CI job cannot fix this, because the CI run
+IS the thing going unobserved.
+
+### Release branches: a stated escalation with no mechanism
+
+Trigger-gated. **No instance adopts this until it actually ships an artifact with review
+latency or no rollback**, store binaries being the type specimen.
+
+The pattern: cut `release/x.y` from the trunk at submission, keep developing on the trunk, fix
+on the trunk FIRST and cherry-pick to the release branch, tag the shipped build on the release
+branch. Everything else in the same repo stays tag-on-trunk.
+
+**Nothing ships in v1.7 to support it**: no protected-branch list in `sdd.json`, no close-gate
+awareness of promotion or cherry-pick flows, no checkpoint verbs. The position is written now
+so the planning session that needs it has the vocabulary, and the bill is deferred rather than
+avoided: when the trigger fires, the close gate (which today recognizes only `spec/*` and
+`chore/*` merging into a single trunk), the `sdd.json` shape, and checkpoint all move.
+Mechanizing an unobserved workflow is how the plausible-but-wrong gets baked into a hook.
+
+### Amending a spec that is already CLOSED (new in v1.7)
+
+Closed specs stay closed (Part 5). Three things that look like reopening are not, and each
+has a route:
+
+1. **Additive extension.** A NEW spec that depends on the closed one. The ordinary case.
+2. **Structural amendment**, where the closed spec's own design turns out wrong: surface the
+   problem, propose the change, get approval, and land it as a new spec that supersedes the
+   affected criteria by name. The audit trail is the point; a silent edit destroys it.
+3. **Evidence completion**, where the work was right and the RECORD is incomplete (a QA
+   report that was never pasted, an environment that became reachable later). **This takes
+   the CHORE route, not a reused spec number**, and the reasoning is the load-bearing part.
+
+Reusing the closed spec's number would let the branch inherit satisfaction of two of the
+three close conditions: the original Closing report satisfies completeness and the existing
+CLOSED row satisfies the inventory check, so only the file-modified check forces any new
+writing, and a one-line addendum clears it. That route carries a materially lower evidence
+bar than a fresh spec, which is exactly what the authorship check exists to prevent.
+Sanctioning it because the current gate happens to permit it would let an implementation
+define the protocol. Evidence completion is also not a lifecycle transition: the spec is
+already CLOSED and stays CLOSED.
+
+### Split specs: the suffix convention (new in v1.7)
+
+A build that runs big parks its remainder as a **suffixed sibling**: `0002b` off `0002`,
+and `0008c` for a second-order split off `0008b`. Fired six times in one instance before
+being written down here.
+
+The convention buys more than tidiness. A suffixed sibling reads as *the same work
+continued*; a fresh number reads as *new work*. Platform-parity pairs are genuinely the
+former, and numbering them apart loses that.
+
+**The split is pre-agreed at PLAN time, not invented mid-build.** The planning session names
+the boundary in advance ("the WSL2 half parks as 0002b if the session overruns"), so the
+Builder never has to invent a scope boundary under pressure at the exact moment its judgment
+is worst.
+
+**The STATUS.md inventory row uses the SUFFIXED number.** The close gate's row check greps
+for the spec number literally, so a `0002b` spec with a `0002` row does not close.
+
+**ONE FILE PER SPEC NUMBER, and the guarantee layer now enforces it.** Exactly one
+`specs/<number>-*.md` may exist for a given number. A companion document beside it,
+`specs/0002-other-design.md` next to `specs/0002-other.md`, is refused `SLH-SPEC-DUPLICATE`
+at merge time, because which of the two carries the Closing report is not something a hook
+can decide. Until 2026-08-08 it decided by SORT ORDER, and both git commands feeding it
+emit sorted paths, so the companion always won: a non-compliant spec merged clean once a
+compliant-looking companion existed, and a fully compliant close was refused with a message
+that was false about the file it named. The advisory close gate has refused this input by
+name since 1.0.x; the layer carrying the guarantee had not.
+
+Put design notes, research and scratch material anywhere except that namespace:
+`docs/design/0002-notes.md`, `specs/notes/0002.md`, or a suffixed sibling with its own
+number and its own inventory row. A split sibling is NOT a duplicate: `0002b-parked.md`
+beside `0002-first.md` is a different spec and both close independently.
+
+### Doctrine for anything that checks anything (new in v1.7)
+
+These three are one family: a check reporting a result it did not earn. They are stated here
+because an instance writes QA gates and automated checks of its own, and they generalise.
+
+- **A gate that cannot evaluate its predicate DENIES and says why. It never passes through.**
+  Silence is the failure mode that costs most, because a check that cannot run looks exactly
+  like a check that passed. The scope is the predicate the gate EXISTS to enforce: an
+  auxiliary check that could not run owes the word UNVERIFIED, in those words, rather than a
+  clean report. And when a gate must fail, it fails toward the alarm.
+- **A new gate's negative test is not optional.** An assertion nobody watched fail is a
+  restatement, not a regression test. This covers every checking artifact, fixtures included,
+  and a fixture is only evidence to the extent it matches the real artifact. The mechanised
+  form is to reintroduce each closed defect on purpose and require the suite to go red; a
+  mutation that survives is a defence nothing tests.
+- **A gate checks the CLAIM, not the vocabulary.** Matching the words a correct answer would
+  contain is not verifying the answer. Sharpened once already: checking the claim is still
+  not enough if the INPUT is chosen arbitrarily, so the thing being verified must also SELECT
+  the evidence it is judged on.
+- **A documented-limitation assertion must exercise the BEHAVIOUR the limitation describes,
+  never the SOURCE that implements it.** A limitation is pinned so that the day it closes,
+  the suite says so instead of the documentation describing a weakness the release no longer
+  has. That makes its failure direction unusual: it fails toward DELETING a true warning.
+  Source-shape checks rot in exactly that direction. Measured, v1.7: an assertion pinning
+  "`pre-push` does not read `SETLIST_SKIP_HOOKS`" grepped the hook for that name and reported
+  the hole CLOSED, because the name is present in the refusal message that RECOMMENDS the
+  escape. A mention is not a read and no pattern can tell them apart, so the assertion passed
+  while testifying the opposite of the truth, and its own message instructed the next session
+  to remove a bullet describing an open hole. Replaced by provoking a real refusal and
+  setting the variable, with a control proving the refusal happens without it. This is worse
+  than an assertion that tests nothing: an empty one is silent, a source-shape one is
+  confident and wrong.
+
+### Scanning staged content: provenance and path scoping (new in v1.7)
+
+The staged-content scans (the em-dash rule, the secret scan) read what a commit ADDS, which
+means they also read content that arrived from somewhere else.
+
+- **Provenance exemption for quoted history.** Pasted verifier output, quoted upstream text,
+  and relocated historical documents carry their original punctuation, and the em-dash rule
+  is forward-only: it governs what this project WRITES.
+
+  This paragraph used to end "it scopes the scan by path rather than weakening it, and records
+  the scoped path where the next reader will find it", and THAT MECHANISM DOES NOT EXIST. The
+  staged-content scans take no pathspec, so an instance following the edition's own instruction
+  found nothing to configure. A governing document that prescribes a remedy the product does
+  not implement is worse than one that admits the gap, because the reader spends their time
+  looking for the setting.
+
+  Until the pathspec ships, the honest position is that there is no procedure that works end to end. Committing the foreign material with
+  `SETLIST_SKIP_HOOKS=1` exempts the COMMIT and not the PUSH: `pre-push` does not read that variable, so the push is
+  refused on the same content. Keep foreign material out of the scanned paths, or accept that its branch needs
+  `--no-verify` on the push, which is a decision to own rather than a procedure this edition endorses (v1.7 claims
+  audit).
+- **Name the scanner honestly.** A secret scan that matches token-shaped strings is a
+  token-shape scan. Calling it a secret scan in a report implies a guarantee it does not
+  make, and the gap between the name and the mechanism is where a false sense of coverage
+  lives.
 
 ### The skills (`.claude/skills/`) and the shipped commands
 
@@ -908,6 +1322,13 @@ skill of their own (upgrading repos remove them; the Changelog is the delta list
 - Scaffold the project on the locked stack; init version control; create the pure-logic
   skeleton; wire tests/lint/CI. (`.claude/settings.json` itself is stamped in bootstrap
   phase 1, Part 8 Step 3, not generated here.)
+- **Arm the git-hook boundary immediately after `git init`, and verify it took:**
+  `core.hooksPath = .githooks` and `merge.ff = false`. `/setlist:new` runs in an EMPTY
+  directory, so the stamp had no repository to write these into and says so in its own
+  output; until they are set the hooks sit in `.githooks/` and git never runs them, so the
+  project has NO enforcement while appearing fully set up. Measured before this step
+  existed: a secret committed, an unclosed spec merged onto the trunk, and both reached a
+  remote, every command exiting 0 with no hook output (v1.7 claims audit, R3-1).
 - Record the single command that runs the FULL suite as `gate_command` in
   `.claude/sdd.json`, then flip `scaffolded` to true. The flip arms the scope hook:
   feature code on main is blocked from the next write on, so it comes last.
@@ -969,14 +1390,410 @@ journals. An entry exists only because it happened; nothing speculative lands th
 a surface with no observed failures says so rather than inventing one. The section grows
 per edition the same way the anti-pattern table does.
 
+### The enforcement boundary (new in v1.7; narrowed to the audit in the B2 refactor)
+
+**The guarantee lives in the push-time trunk audit. The per-merge git hooks are early
+refusal inside the same boundary, and the PreToolUse gates are advisory.** v1.7 moved the
+boundary from the session gates to the git hooks as a set; the B2 refactor narrows where
+the GUARANTEE inside that set lives, because the cycle measured the difference: six
+guarantee defects arrived through the per-merge checks' routes in one cycle, the fifth
+born from the fourth's fix, while the audit's defects were finite identity questions with
+finite fixes. `pre-commit` and `pre-merge-commit` KEEP refusing, at the same moments,
+with the same reasons; what changes is what their refusals MEAN. They are the early
+warning a developer feels at commit and merge time. The thing that stands between
+unreviewed work and a shared trunk is the audit `pre-push` runs over history, which asks
+identity and ancestry questions that need no enumeration of shapes. The original v1.7
+reasoning follows, because it is the reasoning that moved the boundary out of the session
+gates and it has not changed.
+
+A PreToolUse gate decides what a command will do by reading the command's TEXT, before the
+shell runs it. A shell command can compute its own arguments, so no parser can be correct
+about that in general. This is not a theoretical objection: across five releases the same
+class of defect arrived every time, in a spelling the previous release had not imagined.
+Ref prefixes, wrapper flags with separate values, a non-alphabetic flag value, a newline, a
+lone `&`, quoted spans donating boundaries, a leading redirection, a sibling ref at the same
+commit. Each was closed; each closure was followed by another. The set of spellings is
+unbounded because shell is not a regular language, so the loop has no end state.
+
+Then a platform incident settled it from the other direction. Plugin 1.0.8's two parser
+gates died on macOS, in silence, and allowed everything, because their lexer's awk program
+ended with a trailing backslash that GNU awk tolerates and the BWK awk macOS ships rejects.
+A git hook, `pre-push`, was untouched and passed on the same machine in the same run. A
+parser has failure modes its subject matter does not.
+
+**Three git hooks are stamped, into a tracked `.githooks/` directory:**
+
+- **`pre-commit`** carries the cheap checks: the em-dash scan, the secret scan, and
+  STATUS-in-the-same-commit when the staged diff moves a spec's lifecycle state. It also
+  carries the close verification in one specific case, described under "What each hook can
+  and cannot see" below.
+- **`pre-merge-commit`** carries the close verification: every spec this change CLOSES has a
+  complete Closing report with a pasted QA Pass 1 verdict and an answered diagram field (with
+  the last-match caveat recorded under Known limitations in this document), its
+  CLOSED inventory row, and a green run of the project's gate command. It also refuses a
+  merge that brings feature code to the trunk while closing no spec that was not already
+  CLOSED **and recording no completed chore**. This is the expensive one, and it belongs at
+  merge time precisely because it can run the full suite, which is intolerable on every
+  commit.
+
+  **The word CLOSES is load-bearing, and the v1.7 claims audit is what sharpened it.** The
+  Closing-report, QA-verdict and diagram checks iterate over the specs whose inventory row
+  flips to CLOSED in this same change. A spec that is merely PRESENT on the branch, with no
+  Closing report and no CLOSED row, is never examined, and the chore route satisfies the
+  refusal above on its own. Measured on the shipped bytes: a branch carrying an unclosed
+  spec plus role-path code is refused `SLH-CLOSES-NO-SPEC`, and adding one
+  `CHORE-NNN: DONE` line to `specs/STATUS.md` makes the identical merge succeed. The trunk
+  audit then reports that trunk as one violation, so this route is caught at `pre-push`
+  rather than at the merge. The layer that stops it reaching a shared remote is the audit,
+  not the merge hook.
+- **`pre-push`** runs the trunk audit over history, which is the only layer that can see
+  work that arrived by a route no local hook witnessed.
+
+Git invokes these itself, from its own internal state, after argument parsing and after
+`$(...)` has already been expanded. Within a session where the hooks RUN there is nothing
+left to spell around: a merge is a merge whether it was written `git merge spec/0001-x`,
+`{ nice -n 5 git merge heads/spec/0001-x; }`, or `$MERGE_CMD`.
+
+**KNOWN LIMITATION, THE DIAGRAM FIELD'S LAST-MATCH READING.** Both the merge hook and the
+trunk audit take the LAST line matching `Architecture diagram:` anywhere in the spec, not the
+one inside the Closing report. A later bulleted mention of the label therefore decides the
+check in either direction: a spec whose real field is the unedited template placeholder
+MERGES and PUSHES if a follow-up note happens to contain an accepted answer, and a compliant
+spec is refused if a later note repeats the label unanswered. Measured on the shipped bytes,
+at both layers. Keep the `Architecture diagram:` label on exactly one line of a spec. This is
+recorded here because this document is stamped into every instance and read on its own; the
+public README carries the same entry, and a limitation that exists in only one of them is a
+limitation half its readers never see (v1.7 claims confirmation).
+
+**THE GUARANTEE IS A DISCIPLINE CONTROL FOR COOPERATING USE, NOT A SECURITY BOUNDARY, and six rounds of
+adversarial claims review are what narrowed it to that.** For a developer or agent following the process,
+the git hooks enforce closed-spec discipline: a merge bringing role-path code to the trunk is refused unless
+it closes a spec or records a chore, a spec whose row flips to CLOSED must carry a complete Closing report,
+a QA verdict and an answered diagram field (with the last-match caveat below), the gate command must pass, and the push-time audit reads history
+for the ordinary routes no local hook saw. Against a committer deliberately crafting merges to evade it, the
+layer does not hold and is not claimed to. The routes found so far are named in Known limitations; that list
+is maintained rather than complete, one of its entries was introduced by the fix for the entry before it, and
+the checks that once refused two of them were removed on 2026-08-07 because they could not tell a crafted merge
+apart from `git pull` on a shared trunk. Those routes are open and documented rather than defended.
+A boundary that must hold against deliberate evasion belongs on the forge, in branch protection and required
+checks, where the committer does not control the enforcement point.
+
+**"Where the hooks run" is a real condition and not a formality, and v1.7's own hostile
+legs are what narrowed this paragraph.** A git hook fires only when `core.hooksPath` points
+at the tracked `.githooks/` and the file is executable, and every hook in this release then
+opens by checking that the CHECKED-OUT branch carries `.claude/sdd.json`, exiting silently
+when it does not. That guard is what stops the hooks governing unrelated repositories, and
+it also means a checkout is an enforcement switch: on a branch without that file, the same
+push that is refused from the trunk succeeds. Measured on the shipped bytes, not argued:
+from `main` the push of an unclosed merge is refused by the audit; after `git checkout` of
+an orphan branch with no `sdd.json`, the identical push of the identical commits succeeds
+and the work reaches the remote trunk. The spelling-independence above is therefore a claim
+about the SHELL, which it survives, and not about the repository's state, which it does
+not.
+
+**The severity model changes with the boundary, and this is the part that ends the
+treadmill.** A new bypass spelling of a PreToolUse gate is now a MAJOR, not a release
+blocker: the agent was warned later than it should have been, and the work still cannot
+reach the trunk. Under the old model every new spelling was a BLOCKER, which guaranteed the
+release could never be finished, because the set of spellings is infinite.
+
+**The B2 refactor extends the same move one layer in, on the same measured reasoning.** A
+route past `pre-commit` or `pre-merge-commit` is a MAJOR, not a release blocker: the
+developer was refused later than intended, and the work still cannot reach a shared trunk
+past the audit. What blocks a release is the audit failing its own question: a route by
+which unreviewed role-path code reaches a REMOTE trunk at exit 0, or a cooperative gap
+that refuses ordinary work. The v1.7 cycle priced the alternative: treating every
+per-merge route as a blocker spent round after round of adversarial review on a surface whose
+routes kept arriving, one of them created by the fix for the one before it. Known evasion
+routes stay documented rather than chased, exactly as the frozen parsers' spellings do.
+
+**The advisory layer keeps real value and is not being deprecated.** It fires BEFORE the
+command runs, so the agent is told the rule at the moment it is about to break it, in a form
+it can act on. That is a teaching surface and a fast feedback loop. It is simply not the
+thing standing between unreviewed work and the trunk, and the edition no longer says it is.
+
+**And since 2026-08-04 it is advisory in MECHANISM, not only in name.** The three PreToolUse
+gates permit every command and report what they would have decided: the reason, the refusal
+code, and a machine-readable verdict. They no longer veto a tool call. This paragraph
+described a warning for an entire edition while the gates actually denied, and the gap had a
+price that was measured rather than guessed: across four hostile reviews, five of six blocking
+findings and three majors were in parser code written the same day to fix the previous review,
+and while the parsers could deny, every one of those was a release blocker.
+
+The trade is stated rather than sold, and half of it did not survive contact with the
+harness. A parser false positive is now noise instead of a blocked command. But **on current
+Claude Code versions the advisory reason is not delivered to the model when the decision is
+`allow`**: measured on 2.1.221, with the control that makes it a harness finding rather than a
+wiring one, since a hook returning `deny` has its reason delivered verbatim. So the gates do
+not in fact warn the agent today.
+
+What that leaves is honest and still useful. The in-session feedback surface is the git hooks'
+refusal messages, which arrive as ordinary command output at the moment of the attempt, and
+which is where the guarantee lives. The advisory verdict stays machine-readable for tooling,
+CI and the suite. The gap is filed upstream and re-checked every release by
+`dogfood/advisory-visibility-probe.sh`; if the harness begins rendering reasons on allow, the
+warning value returns with no decision to re-take.
+
+The parsers and their test corpus are FROZEN together from that date. A newly discovered
+spelling they read wrongly is a documented limitation, not a fix: the review that priced this
+also showed that changing them is what generates the next defect.
+
+**What each hook can and cannot see.** Git fires different hooks for different merge forms,
+and the shape of this section follows from measurement rather than from the documentation:
+
+| operation | `pre-commit` | `pre-merge-commit` |
+|---|---|---|
+| ordinary commit | fires | no |
+| `git merge --no-ff` (a true merge commit) | no | fires |
+| `git merge --ff-only` (fast-forward) | no | no |
+| `git merge --squash` (stages only) | no | no |
+| the commit that completes a squash | fires | no |
+
+Three consequences follow, and none is what the naive reading predicts. A squash merge never
+reaches `pre-merge-commit`, so the close verification also runs from `pre-commit` when git
+signals a squash or a staged merge being completed. The two hooks are disjoint rather than
+nested, so neither may assume the other ran. And a fast-forward merge fires nothing at all,
+which is why the stamp sets **`merge.ff = false`** alongside `core.hooksPath`: without it,
+`git merge spec/0001-x` walks unreviewed work onto the trunk past an otherwise airtight
+boundary.
+
+### Known limitations of the mechanical layer
+
+The edition describes a mechanical enforcement layer, so it owes an honest statement of
+where that layer ends. Everything below is a real hole, known and accepted, not an oversight.
+
+- **`--no-verify` bypasses git hooks**, and `git push --no-verify` bypasses `pre-push`. This
+  is a genuine hole and a different KIND of hole: a deliberate act with an obvious name, not
+  an apostrophe in a commit message. The framework's own escape hatch, `SETLIST_SKIP_HOOKS=1`,
+  is the same thing said out loud.
+- **`git merge --ff-only` and `git merge --ff` walk past the merge hooks.** A fast-forward
+  creates no merge commit, so `pre-merge-commit` never fires, and an explicit `--ff-only` on
+  the command line beats the `merge.ff = false` the stamp sets. So does a bare **`--ff`**,
+  which this list named nowhere until the 1.1.0 hostile review measured it: identical
+  outcome, identical silence, under a flag name a reader was never told to watch for. This
+  is a different KIND of hole from `--no-verify`: that flag announces itself, while these
+  are routine preference flags that several GUI clients pass by default, so an operator
+  using one has no reason to think they have skipped anything. **`pre-push` catches both for
+  cooperating use**, and does: a fast-forward puts the spec's commits directly on the trunk
+  with no closing merge, so the trunk audit reads them as role-path work that did not arrive
+  through a spec-closing merge and refuses the push, whether or not the close was compliant.
+  The work sits on the local trunk and cannot be pushed, which is the same two-layer
+  disagreement the `--squash` bullet below documents; close with `--no-ff` instead. The audit
+  does NOT re-run the gate command, but that never comes into play on this route, because the
+  fast-forwarded close is refused as direct feature code before any gate command would run.
+  Merge topology crafted to evade the audit is a separate class named in Known limitations.
+  Verified by running it.
+- **`git merge --squash` is unusable while `merge.ff = false` is set, and git's error says
+  nothing about why.** The setting implies `--no-ff`, and git refuses the combination:
+  `fatal: options '--squash' and '--no-ff.' cannot be used together`. This is unconditional
+  rather than limited to the fast-forwardable case, and the message names neither the
+  framework nor the setting, so an operator has nothing to search for. The workaround is `git -c merge.ff=true merge --squash <branch>`
+  for a one-off, and it comes with a second limitation that this paragraph recommended its
+  way into on 2026-08-04 before measuring it: **a squash merge onto the trunk leaves the trunk
+  unpushable.** A squash has no second parent, so the trunk audit cannot see the branch the
+  work came from. `pre-commit` runs the full close verification and allows the commit;
+  `pre-push` then reports it as feature code committed directly to the trunk and refuses,
+  every time. The two layers disagree about the route, so until they are taught to agree,
+  close a spec with `--no-ff` and treat squash-merging onto the trunk as unsupported. The setting stays: a plain fast-forward merge fires no hook at all, and closing
+  that is worth more than the convenience. Named here because the framework's own
+  `pre-commit` carries a dedicated squash branch, so a reader is entitled to assume the
+  route works.
+- **The trunk is recognised by the NAME recorded in `.claude/sdd.json`, and nothing checks that the
+  name is the branch you actually merge onto.** Every git hook decides "am I on the trunk" by comparing the
+  checked-out branch's name to the recorded one. On a git-flow shaped repository, where the team works on
+  `trunk` or `develop` (tracking `origin/main`) while a local `main` exists as the release branch, a recorded
+  trunk of `main` means every hook takes its fail-open exit while merges really do advance the branch the
+  project treats as its trunk. Measured: unspecced role-path code lands there with the whole guarantee layer
+  silent. A version of these hooks also consulted what the branch TRACKS, which closed this shape and broke a
+  much commoner one, because `git checkout -b <name> origin/main` is git's own way to branch from a remote
+  trunk and made every such branch the trunk to the hooks. The two are indistinguishable from inside a hook,
+  so this is documented rather than defended. The remedy is one line: record the branch you actually merge
+  onto. Section 8's setup does this correctly when it is followed; the failure mode is a project that adopted
+  the framework by copying a recorded trunk from somewhere else.
+- **A first push to a brand-new EMPTY remote audits every pushed branch as a trunk
+  candidate.** An empty remote has no default branch yet, and git hosts adopt the first
+  pushed branch as the default, so `pre-push` cannot know which pushed ref is about to become
+  the trunk and audits them all. The clean trunk pushed on its own passes; a spec branch
+  pushed first, or alongside the trunk, is audited as if it were the trunk and refused,
+  because unclosed feature code must not become a remote's default by a raw push. Push the
+  trunk first, or use `SETLIST_SKIP_TRUNK_AUDIT=1` for a deliberate exception. This is
+  fail-closed and it closed a fail-open found by adversarial review: a
+  differently-named branch pushed first to an empty remote was previously ALLOWED while the
+  hook audited the local trunk, a ref the push never touched, exactly the class the
+  remote-trunk resolution was written to close.
+- **Hooks are per-clone, and `core.hooksPath` narrows that gap without closing it.**
+  `.git/hooks` is not cloned, which is why the hooks are stamped into a tracked directory
+  instead: they are versioned, reviewed in diffs, and present in every clone. What is still
+  per-clone is the CONFIG pointing at them, since `.git/config` is not cloned either. A fresh
+  clone is unprotected until the instance is set up. `merge.ff = false` is per-clone for the
+  same reason.
+- **The forge merge button is uncovered.** No local hook sees a merge performed in a web UI.
+  `pre-push`'s trunk audit catches the Closing-report, QA-verdict, diagram and CLOSED-row conditions on the next push, but does NOT re-run the gate command, so a red suite reaches the remote by this route, which is the reason that
+  layer exists at all rather than being redundant with the other two.
+- **The Bash escape hatch remains.** A human typing git in their own terminal is sovereign by
+  design; hooks bind the agent, and for teams the same checks move into CI.
+- **The secret scan is a first cut.** Token-shaped, connection-string-shaped and
+  password-shaped strings. It will miss things. It is a seatbelt, not a vault.
+- **The pathspec hole.** A commit against a named index file or inside a nested repository is
+  not scanned by the staged-content checks.
+- **`jq` is a hard dependency** of the stamped hooks, and the GIT hooks fail CLOSED without it
+  while the three session gates report their verdict and PERMIT (advisory since v1.7): an
+  absent jq, and a jq that exists and exits nonzero, both route to a refusal rather than a
+  silent pass. That is deliberate, and it means a broken jq stops work rather than quietly
+  ungating it.
+- **A headless BUILD has no integrity chain.** Nothing mechanically stops a `claude -p`
+  session from building against a spec that was edited after approval, or never approved.
+  BL-005's `Spec-hash` makes the drift VISIBLE at session start, which is a warning and not
+  a gate, and SessionStart has no deny mechanic. The designed fix is drafted in Part 7c and
+  designed in `design-attestation-v1.7.md`; it is not built in v1.7.
+- **The set of tested platforms is a list, not a proof.** The suite runs on Linux and on
+  macOS under bash 3.2 with the BWK awk, which is where the 1.0.8 fault would have been
+  caught. A platform absent from that list is untested, and the release notes say which list
+  rather than implying the proof.
+
+### Spec integrity: the approved text is the text you build (new in v1.7)
+
+A spec edited after approval, mid-build, means the Builder is executing against text the
+Planner never approved. Until now only discipline caught that.
+
+**The mechanism.** When `/setlist:checkpoint` flips a spec to ACTIVE it writes a
+**`Spec-hash:`** field into the spec header, in the same commit. At every session start the
+re-grounding hook recomputes it and warns on a mismatch.
+
+**What is hashed, and each exclusion is load-bearing.** sha256 over the spec from its first
+line through the line immediately preceding the `## Closing report` heading, with the
+`Spec-hash:` line itself removed. The Closing report is excluded because it is APPENDED
+during the build by design, so including it would make every honest build read as drift, and
+a warning that fires on correct work is a warning people learn to scroll past. The
+`Spec-hash:` line is excluded because it lives inside the hashed range, so hashing it would
+change the value being written; excluding it is what makes writing the hash idempotent.
+
+**It warns; it does not deny.** SessionStart has no deny mechanic, and claiming enforcement
+where there is none is the failure this framework spends its time removing. The warning tells
+the session to stop and resolve before building.
+
+**The legitimate revision path is the existing lifecycle.** A spec that genuinely needs to
+change goes `ACTIVE -> REVISED -> ACTIVE` with Planner sign-off, and checkpoint rewrites the
+hash on the way back. Editing the spec and quietly recomputing the hash is the thing this
+field exists to make visible, so it is not a step anybody performs by hand.
+
+**Graceful for specs written before v1.7:** an absent `Spec-hash:` field produces no warning
+and no error. Warning about every pre-existing spec would spend the mechanism's credibility
+before it had said anything true. `/setlist:validate` notes the absence on an ACTIVE spec as
+information, not as a finding.
+
+**A missing or broken sha256 tool reports UNVERIFIED in those words**, never silence. "The
+check could not run" and "the spec has not drifted" are different facts, and a hook that
+conflates them is the silent stop in Appendix B.
+
+### Closing with an open criterion (new in v1.7)
+
+A spec sometimes closes with a mandatory criterion genuinely open, because the environment
+that would answer it is unreachable. One field instance carries roughly ten of these and had
+to invent the vocabulary by hand. It is a real state and it is NOT the same as PARKED: a
+PARKED spec's work is not on the trunk, while this spec is CLOSED, merged and shipped, with
+completion evidence the environment cannot yet supply. One is a branch-lifecycle fact, the
+other is a criterion fact, so they live in different homes: PARKED is an inventory state,
+this is a Closing-report field on a CLOSED row.
+
+The field distinguishes two things that look alike and are not:
+
+- **NOT YET RUN.** Nobody has run it. It is owed.
+- **STRUCTURALLY BLOCKED.** It cannot be run here, and the reason is named ("no Mac
+  reachable").
+
+**Reachability is a per-session fact, not a property of the project.** "No Mac reachable"
+describes today. Writing it as though it were permanent is how an owed criterion becomes a
+forgotten one.
+
+**A blocked criterion is never chased with a workaround that proves nothing, and never
+silently assumed closed.** Simulating the unreachable environment produces evidence about the
+simulation. Saying so is the honest close; both other options are worse.
+
+**Where these fields go, and since v1.7 it is a STYLE choice rather than a mechanical
+constraint.** The close gate used to extract the QA Pass 1 verdict block between the
+`QA Pass 1 report` and `QA Pass 2` field markers, and the ordering rule below existed to
+keep a later field from truncating the verdict out of that extraction. That extraction was
+deleted when the verdict became a fenced `qa-pass-1` block: all three layers now read the
+block wherever it appears, so there is no truncation trap left to route around (v1.7 claims
+round 4, F3, which found this paragraph still describing the old reader). Keep the ordering
+anyway for readability, but nothing mechanical depends on it. Any field added to the Closing report therefore lands AFTER the QA Pass 2
+field, and this one is additionally named "Open mandatory criterion" rather than anything
+beginning "QA Pass 2", because a label starting with the string that TERMINATES the block
+would truncate the verdict out of the extraction and rebuild a false denial this project
+already shipped a fix for once. The test suite pins both directions of that trap.
+
+### What counts as a QA verdict (new in v1.7)
+
+The close conditions require a QA Pass 1 verdict, and both the close gate and the trunk audit
+have to decide mechanically whether one is present. Until 2026-08-05 that decision was a
+regular expression over English, and the rule read:
+
+**A verdict is a FIELD. A verdict is not a word in a sentence, and a tally is not a verdict.**
+
+That rule was right about what it wanted and could not express it. Adversarial review closed it
+with one line, `Criteria that did not PASS: 2, 5 and 7.`, which is a sentence saying the
+opposite of a pass and which satisfied every layer: the close gate allowed the merge, the git
+hook allowed it, and the trunk audit reported the result clean. Three siblings did the same,
+including `Blocked on staging: FAIL to reach the host, so QA Pass 1 never ran.` The three
+layers were kept in deliberate byte-identical lockstep, so the gate and its only backstop
+were blind together, exactly as designed.
+
+The failure is not that the pattern was too loose. It is that a pattern over prose cannot
+decide this: any expression wide enough to admit the shapes real verifiers emit is wide
+enough to admit a sentence that contains one. So the verdict stops being prose.
+
+**The verdict is a structure, and the pasted report stays beside it as evidence.** A Closing
+report carries a fenced block whose info string is `qa-pass-1`, and every line inside it is
+one criterion and one verdict token:
+
+````
+- QA Pass 1 verdicts:
+  ```qa-pass-1
+  1: PASS
+  2: PARTIAL
+  3: FAIL
+  ```
+- QA Pass 1 report (pasted verbatim): <the verifier's own output, unedited>
+````
+
+Each line is `<criterion>: <PASS|PARTIAL|FAIL>`, where the criterion is a bare identifier
+(digits, letters, dot, dash, underscore, no spaces). Blank lines are ignored. **A line inside
+the block that is not a verdict line is a refusal, not something skipped**, because skipping
+is how a sentence gets in.
+
+What this buys is not a tighter pattern, it is a smaller language. `Criteria that did not
+PASS: 2, 5 and 7.` cannot be written in that block: the criterion field admits no spaces and
+the verdict field admits three tokens and nothing else. The tally boundary the old rule drew
+by hand, and had to defend in prose, is now simply unexpressible: `4 PASS / 0 FAIL` is not a
+verdict line. The doctrine is unchanged and the enforcement moved from refusing bad input to
+not having a way to say it.
+
+The pasted verifier output stays required and stays unedited. It is the evidence a human
+reads, and the six shapes real verifiers emit (a table cell, a bracketed verdict, a labelled
+value, a verdict-as-label, a verdict at either end of its line) are still exactly what belongs
+there. What changed is that no gate parses it any more. The machine reads the structure; the
+human reads the report; neither is asked to do the other's job.
+
+**Why a fence and not a looser marker.** The block's own content is constrained to identifier,
+colon, verdict, so no line inside it can be a fence delimiter, which is what makes the reader
+trivial: opener, lines, closer, no nesting rule and no info-string subtleties. This is the
+same lesson the leg's own report checker learned the expensive way, where five successive
+repairs to a markdown parser each closed the case in hand and left the next edge open.
+
+**Migration.** A spec closed under the old rule is not retro-gated; the trunk audit reads
+history and does not re-judge closes that predate the block. A spec written today needs the
+block, and adding it is mechanical: one line per criterion, taken from the report already
+pasted below it.
+
 ### The stamped hooks (`.claude/hooks/`)
 
 A gate becomes a hook exactly when its predicate is decidable by a grep or an exit code;
 judgment gates stay with the human. Four hooks are stamped into every instance, enabled,
-wired in `settings.json`: three PreToolUse gates (new in v1.5) and one SessionStart
-re-grounding hook (new in v1.6):
+wired in `settings.json`: three PreToolUse gates (new in v1.5, **advisory since v1.7**, see
+"The enforcement boundary" above) and one SessionStart re-grounding hook (new in v1.6):
 
-- **The scope hook** (Write and Edit): denies writes under the src and tests role paths
+- **The scope hook** (Write and Edit): REPORTS a verdict on writes under the src and tests role paths and permits them
   while the current branch is the trunk, once `/scaffold` has flipped the `scaffolded`
   flag in `.claude/sdd.json`. The trunk branch name is recorded in `sdd.json` at stamp
   or upgrade time (detected from the repo; main is only the final fallback), never
@@ -987,12 +1804,12 @@ re-grounding hook (new in v1.6):
   docs-only trunk commits the loop depends on). This mechanizes "never feature code
   directly on the trunk" and gives the role boundary a branch-shaped enforcement that
   holds where plan mode does not exist (Part 7c).
-- **The commit gate** (Bash, `git commit`): staged-content checks, each denial naming the
+- **The commit gate** (Bash, `git commit`): staged-content checks, each VERDICT naming the
   specific failure so the agent can fix and retry: the em-dash scan, the secret scan
   (token-shaped, connection-string-shaped, password-shaped strings), and
   STATUS-in-the-same-commit when the staged diff transitions a spec's lifecycle state.
   A command that writes the index and commits in one step (`git add ... && git commit`,
-  or `git commit` with an auto-staging flag such as `-a`) is denied outright: the hook
+  or `git commit` with an auto-staging flag such as `-a`) gets a deny VERDICT and is permitted (the git hooks are the layer that refuses): the hook
   decides before the command runs, so only content already staged is scannable. Stage
   first, then commit; the split is what makes the scan real. "Writes the index" is the
   full set, not just `add`: `stash pop`, `restore --staged`, `reset`, a pathspec
@@ -1014,6 +1831,14 @@ re-grounding hook (new in v1.6):
   satisfies this. The merge target is derived from
   the command plus repo state, so the compound `git checkout <trunk> && git merge ...`
   form is gated exactly like the split form.
+- **The commit gate also checks GIT IDENTITY, when the project declares one** (new in
+  v1.7). An optional `identity.user_email` in `sdd.json` is compared against
+  `git config user.email`, and a mismatch is WARNED about by the advisory commit gate and refused by nothing: no git hook and not the trunk audit reads `user.email`, so a declared identity has no enforcing layer (v1.7 claims audit), naming both values and
+  the remedy. It is opt-in by construction: no key means no check, so every existing
+  instance is unaffected, and nothing infers the identity from the machine, because the
+  value of the check is that somebody DECLARED which identity this repo commits under.
+  One machine holding a work identity and a personal one is the ordinary case, and
+  catching the wrong one at commit time costs an amend rather than a rebase.
 - **The re-grounding hook** (SessionStart, new in v1.6): injects the read-budget pointer
   at session start: read `specs/STATUS.md`, then the active spec, before anything else
   (Part 2). It fires on fresh starts, resumes, and post-compaction restarts alike (the
@@ -1044,7 +1869,9 @@ Every substantive session ends the same way, in order:
 2. STATUS.md updated in the same commit as the state change.
 3. Journal entry written (via `/setlist:journal`), if the session was substantive.
 4. `/setlist:checkpoint`: commit, and branch operations if a spec opened or closed.
-5. Next action named in STATUS.md's current state, so the next session starts oriented.
+5. If the session pushed to the trunk: the CI run that push triggered is OBSERVED and
+   reported, or a one-line debt is recorded in STATUS.md (`CI run <id> unobserved`).
+6. Next action named in STATUS.md's current state, so the next session starts oriented.
 
 ---
 
@@ -1063,7 +1890,9 @@ project's `RUNBOOK.md` with the concrete commands for that stack.
    route through the design intake first (Part 5c) and are specced against the locked
    redline. You approve; the session exits plan mode and the Builder writes the spec from
    `specs/TEMPLATE.md`, updates the inventory, commits.
-2. **Branch.** `/setlist:checkpoint` opens `spec/NNNN-<slug>`.
+2. **Branch.** `/setlist:checkpoint` opens `spec/NNNN-<slug>`. If a split was pre-agreed at
+   plan time, the sibling number is already decided (Part 6, the suffix convention). Read the
+   STATUS STATE of anything this spec depends on: only CLOSED means the work is on the trunk.
 3. **Build.** "Build NNNN." The Builder implements in small spec-scoped commits, runs gates
    as it goes. Genuine ambiguities get parked in STATUS.md's open questions and surfaced to
    you, never improvised. You answer inline, or flip into plan mode if the answer is
@@ -1078,7 +1907,64 @@ project's `RUNBOOK.md` with the concrete commands for that stack.
 6. **Close.** Complete the Closing report (deviations, test counts, diagram field, follow-up
    chores or parking-lot rows). Journal entry if the session was substantive.
    `/setlist:checkpoint` runs the close gate and merges `--no-ff`. STATUS.md names the next action.
+   Under a declared release model, this is also where a version bump rides the close commit
+   (`version-file`) or where the release notes learn what this spec added (`tags`); under
+   `none`, neither applies and nothing is owed. If the close pushed to the trunk, the CI run
+   it triggered is observed and reported, or its debt is recorded.
 7. **Next.** Shift+Tab, repeat from 1. Between specs is when open chores get done.
+
+### Blast radius beyond the working tree (new in v1.7)
+
+The rest of this document reasons about the repo and the working tree. It says nothing about
+the MACHINE the session runs on, and for any project whose product mutates a host
+(installers, dotfiles, infrastructure, CLI tooling) that is the dangerous axis.
+
+The firing: an instance discovered mid-thread that the shell every previous session had
+treated as an isolated build sandbox was the developer's real machine, the same one those
+sessions believed they were reserving for QA Pass 2. An `apt-get download`, read-only in
+intent, had already written a stray file to the real disk.
+
+**The Builder does not test, install, or run probes with side effects on the real machine.**
+Not "carefully". Not "just this once to check". A command that is read-only in intent is not
+read-only in effect, and the difference is discovered afterwards.
+
+**Whether an isolated environment is reachable is a PER-SESSION fact**, and it belongs in
+STATUS.md as a blocking one when the answer is no ("no isolated environment reachable from
+this session"), checked before any verification work is planned. It is a per-session fact
+because it describes today: a machine unreachable this afternoon may be reachable tomorrow,
+and recording it as a project property is how an owed verification becomes a forgotten one.
+
+**The escalating isolation ladder**, cheapest first, take the lowest rung that answers the
+question:
+
+1. **A noop interpreter.** Print the line count and hash instead of executing. Proves a
+   pinned download is the artifact you think it is without running it.
+2. **A tampered COPY, redirected by an environment variable**, never an edit of the real
+   file. A crash mid-test then cannot leave the repo poisoned.
+3. **A real install into a scratch HOME**, verified non-invasive afterwards by mtime.
+4. **A disposable container**, with the repo snapshotted in via `git archive` rather than a
+   live mount, torn down at session end. A live mount is not isolation; it is the working
+   tree with extra steps.
+
+This is the machine-safety axis. Worktree isolation protects the working tree and is a
+different concern.
+
+**Credentials and provisioning, the same axis one step out.** A Builder that touches live
+infrastructure or secrets follows four rules, all field-tested:
+
+1. **Developer-owned logins happen in the developer's own terminal.** The agent picks up
+   the resulting CLI token as the same user. It does not drive the login.
+2. **Generated secrets pipe straight into a write-only store and are never printed.** A
+   secret that reaches a transcript is a secret that has been disclosed.
+3. **Key material is filtered to the public-by-design piece BEFORE it reaches a command
+   line**, not after. Selecting the anon key out of a blob is a different act from having
+   pasted the blob.
+4. **Temporary broad write access is DECLINED, not managed.** This is the load-bearing one
+   and it is a refusal rather than a caution. Anything pasted into a transcript is
+   compromised regardless of later revocation, and live infrastructure has no branch-like
+   undo. The replacement shape is a read-only scoped token plus a local script the
+   developer runs themselves, and in the field that shape is what surfaced the actual
+   security finding, so it is not merely the safer option, it worked better.
 
 ### Your actual inputs as the human
 
@@ -1133,7 +2019,9 @@ Five steps, in order:
 
 1. **Re-ground and scan.** Read STATUS.md, ROADMAP.md (the gate and the next stage's table),
    and the DECISIONS.md index. Run `/setlist:validate` and report findings. Compare `specs/` against
-   the inventory; confirm the tree is clean and `main` is green; skim the Closing reports of
+   the inventory; confirm the tree is clean and the trunk is green and integrable (invariant
+   (a), Part 6; a gate asks whether the trunk is healthy, not whether it has been released,
+   which is invariant (b) and a separate question); skim the Closing reports of
    specs closed since the last transition (deviations and follow-ups only). Where a design
    surface exists, run **/insights** over its record (Part 5c). The repo as it exists is the
    ground truth, not the roadmap's assumptions.
@@ -1253,6 +2141,24 @@ on the TUI. How they bind:
 - **The session-end checklist still applies.** A headless session ends with gates run,
   STATUS.md truthful, and the next action named, exactly like an interactive one; a
   scripted run that cannot complete the checklist ends by parking, not by guessing.
+- **DRAFT (not built in v1.7): the integrity chain for headless BUILDS.** Part 7c covers
+  headless operation and has no integrity chain, so nothing mechanically prevents a
+  headless Builder from executing a spec nobody approved. The designed shape is stated
+  here so the vocabulary exists, and it is marked DRAFT because none of it ships in this
+  edition: a spec is verified and approved; an attestation binds that verdict to the
+  spec's `Spec-hash` as SIGNED DATA rather than as prose a checker greps; a headless
+  executor refuses to build without a valid one, and an unreadable or unverifiable
+  attestation is a refusal rather than a warning. The reasoning, the decision record and
+  the implementation trigger are in `design-attestation-v1.7.md`. Until it is built, this
+  is a KNOWN LIMITATION and not a guarantee: a named hole beats an unexercised mechanism,
+  and a DRAFT section that reads as shipped is exactly the failure this edition spent its
+  cycle removing.
+- **Observing CI takes the RECORD-THE-DEBT path by default.** A `claude -p` session cannot
+  sit in a watch loop, so a headless run that pushes to the trunk writes the one-line
+  `CI run <id> unobserved` debt in STATUS.md rather than waiting or, worse, claiming a
+  result it did not read. That is the honest default rather than a degraded one: the
+  obligation lands somewhere the next session is forced to re-read, which is the half of
+  the duty that actually holds.
 
 ---
 
@@ -1272,8 +2178,8 @@ Gather:
 - **Constraints:** budget, solo vs team, time, legal/safety/privacy concerns.
 - **Environment:** OS, languages, hosting, anything mandated. Claude Code is assumed;
   confirm `opusplan` actually *resolves* in the environment by running it once (access on
-  paper is not resolution in practice, especially behind gateways such as Bedrock or
-  Vertex). If unverified, leave the model line out of settings.json and park it with a
+  paper is not resolution in practice, and a managed API gateway or enterprise proxy is
+  where it most often is not). If unverified, leave the model line out of settings.json and park it with a
   named verification owner.
 - **The QA tooling** available for this project type. For web UIs the default is the
   Part 5 browser-QA binding (Playwright + Chromium in-repo); confirm the environment can
@@ -1618,6 +2524,28 @@ The durable ideas; everything in Parts 1-10 is one implementation of them.
   diagram: it confidently lies. The mandatory Closing-report field and the checkpoint gate
   exist so the diagram is either current or explicitly marked no-impact, never silently
   stale.
+- **The silent stop (new in v1.7).** A check that could not run, reporting the same thing as
+  a check that ran and passed. A missing dependency, an empty parse, a glob that matched
+  nothing, a step skipped by a condition nobody printed: each produces a green that means
+  less than it appears, and green is the one result nobody investigates. The rule is that a
+  gate which cannot evaluate its predicate denies and says why, that an auxiliary check which
+  could not run owes the word UNVERIFIED rather than silence, and that every skip announces
+  itself. A gate that cannot fail is not a gate.
+- **Approval theatre (new in v1.7).** Getting agreement instead of getting review. It looks
+  like a spec approved with no friction in a session that raised a concern and then dropped
+  it, a QA report where every criterion passes on a hard spec, a post-mortem that finds only
+  blameless process causes. The artifact is identical to the rigorous version right up until
+  it is wrong, which is why this one is nearly invisible from the inside. The agent's job is
+  to state disagreement once, with a reason and a recommendation, and to name bad judgement
+  when it appears, including the human's (Part 2). The human's job is to notice when nothing
+  has pushed back for a while and ask why.
+- **One assertion per defect (new in v1.7).** Fixing a bug and pinning it with a single test
+  keyed to the exact input that failed. The next spelling of the same defect walks straight
+  through, and the suite reports green with the class still open. Parametrise the assertion
+  over the SET the rule governs (every lifecycle state, every wrapper form, every ref
+  spelling) so a new member arrives already covered in both directions. Measured on this
+  framework's own suite: two previously-fixed defects were each held closed by exactly one
+  assertion, which is the shape this is written against.
 
 ---
 
@@ -1625,10 +2553,11 @@ The durable ideas; everything in Parts 1-10 is one implementation of them.
 
 The contents of `specs/TEMPLATE.md`, emitted by bootstrap. Every spec starts as a copy.
 
-```markdown
+````markdown
 # Spec NNNN - <feature name>
 
 Status: QUEUED
+Spec-hash: <written by /setlist:checkpoint when Status flips to ACTIVE; leave blank until then>
 Depends on: <spec numbers, or "none"> (must all be CLOSED in STATUS.md before starting)
 Owner docs: <the steering docs the Builder must load for this spec>
 Strictness: <review-only: strict and exhaustive | developer-writes: guiding>
@@ -1653,6 +2582,31 @@ become regression-lock criteria, not build work.>
 - [ ] <...>
 - [ ] Human acceptance: the developer uses the feature in its intended context and
       confirms it feels right. (Mandatory for experience-critical work.)
+<Five clauses added in v1.7, each from a field failure. Delete the ones that do not apply
+rather than leaving them unanswered.>
+- [ ] If this spec adds a DESTRUCTIVE action: its confirmation affordance is named here,
+      even if the answer is "none, and here is why". A delete shipped confirmation-free
+      because the design specified a sheet for the harmless action and nothing for the
+      destructive one.
+- [ ] Interactive developer-QA affordances are specified HERE, not invented at build time.
+      A harness hook self-detects when it is wired, persists results across redirects and
+      reloads, and any return-to-harness hook in a production file reverts at close.
+- [ ] If a status surface can MASK divergence, it gets an honesty criterion. A card that
+      always read "Synced just now" off the local count hid total server-side divergence
+      for a day; "the card says synced" stopped being evidence.
+- [ ] Platform defaults are verified LIVE, and normalization is explicit (revoke-then-grant,
+      never add-a-grant). A defaults assumption in an ADR was empirically false and would
+      have shipped an access-control bypass; a dashboard's permission summary understated a
+      token's real grant by two orders of magnitude. Dashboards and prior ADRs are not
+      ground truth for live platform state.
+- [ ] If closing evidence can only exist POST-MERGE (a CI run id for an on-merge workflow),
+      say so here rather than implying everything rides the closing commit.
+- [ ] If a fact about mounting, ordering, or lifecycle is established for one surface, this
+      spec states what it implies for every OTHER surface it touches. Three QA Pass 2
+      defects and two live production bugs in one arc shared exactly that signature: a fact
+      verified on one surface and silently generalized to a neighbouring one.
+- [ ] If this spec RENDERS an infrastructure property, a QA leg re-checks that property. A
+      rendering surface is how invisible infrastructure bugs become visible.
 
 ## Gates
 - [ ] Lint passes
@@ -1671,16 +2625,38 @@ become regression-lock criteria, not build work.>
 |---|---|---|
 
 ## Closing report (completed at close; checkpoint gates on this section)
+<Contract, v1.7: every evidence claim is labelled OBSERVATION or INFERENCE and scoped to
+what was actually measured. "It works" and "the mechanism is proven" are different claims,
+and a smoke test that cannot discriminate between two mechanisms has not chosen between
+them. State the weaker accurate claim and record the discriminating re-check for the next
+person.>
 - What was built:
-- Deviations from the spec (and whether each was ratified):
+- Deviations from the spec (and whether each was ratified): <travel VERBATIM from the build
+  log, never summarized; a summarized list cost a review round trip. A live defect this
+  spec's work EXPOSED is not a deviation, it is a stronger and different fact, and is
+  recorded as such.>
+- Open verifications parked: <none | each with an OWNER and a SLOT. An open verification
+  with no owner is not parked, it is lost.>
+- Verification environment: <container-verified | real-hardware-verified | both>. <These are
+  different claims and the distinction is not pedantry: a container proves the software path
+  and says nothing about the hardware one.>
 - Test counts (before -> after):
+- QA Pass 1 verdicts:
+  ```qa-pass-1
+  <one line per criterion: `<criterion>: PASS|PARTIAL|FAIL`, criterion is a bare
+  identifier with no spaces. A line here that is not a verdict line is refused, not
+  skipped. Delete this note and list the criteria.>
+  ```
 - QA Pass 1 report (pasted verbatim):
 - QA Pass 2: confirmed by developer on <date>; spot-checked criterion: <which>
+- Open mandatory criterion: <none | criterion N: NOT YET RUN | criterion N: STRUCTURALLY
+  BLOCKED, <what is unreachable>, recorded as a per-session fact>
+- Migrations: <none | the ordered list of migration files this spec shipped>
 - Design QA: <punch list empty | items accepted/deferred by name | n/a (functional)>
 - Architecture diagram: <updated in this commit | no impact>
 - Follow-ups filed: <CHORE-NNN / parking-lot rows / none>
 - If REVISED: what changed between passes and why:
-```
+````
 
 ---
 
@@ -1691,6 +2667,125 @@ judgment. Appendix A is the part worth keeping; everything else is implementatio
 ---
 
 ## Changelog
+
+- **v1.8 (the boundary edition).** This delta list is authoritative for
+  `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases
+  (this edition ships as plugin 2.0.0), the edition counts revisions of this document.
+  v1.7 moved the enforcement boundary off the session gates; v1.8 says where the
+  guarantee sits INSIDE that boundary, which is what moves the edition one step rather
+  than amending v1.7 in place.
+
+  **THE GUARANTEE IS THE PUSH-TIME TRUNK AUDIT (Part 6).** `pre-commit` and
+  `pre-merge-commit` keep refusing, at the same moments, with the same reasons: they are
+  EARLY WARNING inside the boundary. What stands between unreviewed work and a shared
+  trunk is the audit `pre-push` runs over history. **Severity moves with it: a route past
+  a per-merge hook is a MAJOR, not a release blocker**, exactly as v1.7 reclassified a
+  session-gate bypass. What blocks a release is a route by which unreviewed role-path code
+  reaches a REMOTE trunk at exit 0, or a cooperative gap that refuses ordinary work. The
+  reason is measured, not preferred: the per-merge surface produced six guarantee defects
+  in one cycle, the fifth born from the fourth's fix, under sustained adversarial review.
+
+  **THE AUDIT ASKS IDENTITY AND ANCESTRY QUESTIONS, NOT SHAPE QUESTIONS.** Its last
+  shape-decided outcome is gone: a merge's parent count no longer decides whether the
+  pre-rule exemption applies, because arity is a spelling and the question the exemption
+  turns on is WHEN, which ancestry answers for every arity at once. Nothing was relaxed
+  (a post-adoption octopus with an unjustified parent is still a violation, now decided by
+  ancestry) and pre-adoption history keeps the same exemption every pre-rule merge keeps.
+
+  **THE STAMP REFUSES TO DISPLACE A HOOK LAYER IT DOES NOT OWN.** `scripts/stamp.sh` wrote
+  `core.hooksPath` unconditionally, so a retrofit into a project already using husky,
+  lefthook or pre-commit switched that project's own hook layer off, secret scanning
+  included. It now refuses BEFORE its first write, decides ownership by the CONTENT of the
+  hooks directory rather than by its name, and keeps `SETLIST_ADOPT_HOOKSPATH=1` as the
+  deliberate override. The ownership rule lives in one file that both delivery scripts
+  source, and it fails closed when that file is missing.
+
+  **THE MODEL BINDINGS ARE RE-VERIFIED AGAINST THE LIVE HARNESS** (Part 2), not renumbered.
+  See that table for what was probed and what it resolves to.
+
+- **v1.7 (the convergence edition).** This delta list is authoritative for
+  `/setlist:upgrade`.
+
+  **THE ENFORCEMENT BOUNDARY MOVED, and it is the headline.** Git hooks
+  (`pre-commit`, `pre-merge-commit`, `pre-push`) are now the guarantee; the three
+  PreToolUse gates are **advisory** and are described that way (Part 6). The reason is
+  five releases of one-spelling-at-a-time hardening with no end state, plus a platform
+  incident where both parser gates died on macOS in silence and allowed everything while
+  a git hook on the same machine in the same run was untouched. **Severity is
+  reclassified with it: a new bypass spelling of the advisory layer is a MAJOR, not a
+  release blocker**, because the work still cannot reach the trunk. Nothing is removed;
+  the advisory layer keeps the value only it has, warning before the command runs.
+
+  **A BEHAVIOURAL CHANGE EVERY STAMPED INSTANCE WILL FEEL: `merge.ff = false`.** The
+  stamp sets it alongside `core.hooksPath`, because a fast-forward merge fires no git
+  hook at all and would walk unreviewed work onto the trunk past an otherwise airtight
+  boundary. Merges that used to fast-forward now create merge commits. This is the one
+  v1.7 change an upgraded project notices immediately, so `/setlist:upgrade` is required
+  to say so rather than let it be discovered.
+
+  **The release rail** (Part 6): "main is always shippable" splits into two invariants
+  stated mechanism-neutrally, and instances declare how they record a version in a
+  minimal `release` block in `sdd.json` (`none` the default, `tags`, `version-file`). The
+  cut ceremony lives in checkpoint with **approval bound to outwardness rather than to
+  versioning**. Environments map to refs, and environment branches are named and
+  rejected. Migrations are spec artifacts with the migrate-trigger and deploy-trigger
+  decoupled and additive migrations going schema-first. The unobserved-CI seam becomes a
+  checkpoint duty with a STATUS fallback, and Part 7c makes record-the-debt the headless
+  default. Release branches are a stated escalation with **zero mechanism**, trigger-gated.
+
+  **The spec lifecycle gains BUILT and PARKED** (Part 5), with the canonical enumeration
+  in a machine-readable block that `scripts/part.sh lifecycle-states` extracts and the
+  hooks and suite are asserted against, so a state added to the protocol and not to the
+  gate turns the suite red instead of becoming a silent non-check. A PARKED row states
+  its reason AND its revisit trigger. Closing with an open criterion is a separate state
+  from PARKED and lands as a Closing-report field distinguishing NOT YET RUN from
+  STRUCTURALLY BLOCKED, with reachability recorded as a per-session fact.
+
+  **What counts as a QA verdict is now stated** (Part 6): a verdict is a FIELD, and a
+  tally is not a verdict. The previous rule required a verdict to end its line and
+  justified itself with a claim about Appendix C that Appendix C does not make; measured
+  against a real instance it rejected 15 of 18 specs.
+
+  **Known limitations exists**, listing `--no-verify`, the per-clone `.git/config` gap
+  that a tracked `.githooks/` narrows without closing, the forge merge button, the Bash
+  escape hatch, the secret scan as a first cut, the pathspec hole, jq as a hard
+  fail-closed dependency, and the sentence that the set of tested platforms is a list and
+  not a proof.
+
+  **Doctrine**: a gate that cannot evaluate its predicate denies and says why (an
+  auxiliary check owes UNVERIFIED in those words); a new gate's negative test is not
+  optional, fixtures included; a gate checks the claim, not the vocabulary, and must
+  select its own evidence. Appendix B gains the silent stop, approval theatre, and
+  one-assertion-per-defect. Part 2 gains the agent stance: strict, fair, evidence-first,
+  willing to name bad judgement including the human's, with the limit in the same block
+  and the specific rule that **naming the bypass is not the agent's move to make**.
+
+  **Riders**: the three routes for amending a CLOSED spec (evidence completion takes the
+  chore route, and the reasoning is written out); the split-suffix convention with the
+  STATUS-row clause; provenance and path scoping for the staged-content scans; blast
+  radius beyond the working tree with the escalating isolation ladder (Part 7); Appendix
+  C's five acceptance clauses and its Closing-report contract.
+
+  **Two record-keeping notes this edition owes.** First, **Part 6's fourth close
+  condition landed early**, inside plugin 1.0.7, under an unchanged v1.6 header. It is
+  repaired forward-only rather than reverted, and the rule adopted with it is: describing
+  shipped hook behaviour more precisely is a correction that may ride a patch, while
+  changing what the protocol REQUIRES is an edition move. **No edition bytes in a patch**
+  from here. Second, **item 18's stance block was promoted on a field firing, not on
+  precedent**: a cold session refused correctly and then offered the bypass unprompted
+  (2026-07-22), which is a sharper target than the general principle and is the trigger of
+  record.
+
+  **Parked, with triggers restated so nothing leaves the lot for tidiness**: the
+  instance-level retrospective sweep (no firing, plus an open design question about where
+  its output lands); the demo-recording skill (trigger: the browser modality's field
+  evidence arrives); the attestation layer's CODE half (its design fires this cycle with
+  BL-005, the implementation does not); the grep-enforced fail-open convention (trigger:
+  any review finding a silent pass that WAS annotated); the commit gate's missing location
+  check and the residual strictness gaps (both two-sided: superseded if the boundary move
+  holds, returning on their own merits if it is refused). Watching: mechanized
+  cross-artifact consistency, worktree isolation, the /doctor disambiguation, and the
+  two-orchestrators seam, each with its trigger intact.
 
 - **v1.6 (the field edition).** The first edition cut from field findings of the plugin
   era: two live instances (a shell tool and a web app) upgraded in place and ran v1.5

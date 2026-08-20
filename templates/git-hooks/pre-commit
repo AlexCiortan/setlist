@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# Setlist pre-commit hook: the CHEAP checks, over the index that is about to
+# become a commit.
+#
+# Why a git hook rather than a Claude Code PreToolUse gate. The gates decide by
+# parsing a shell command before it runs, and a shell command can compute its own
+# arguments, so no parser can be correct about what a command will do. This hook
+# asks git what is actually staged. For any commit that reaches this hook there
+# is nothing left to spell around: the index is the index whether the commit was
+# written `git commit -m x`, `{ nice -n 5 git commit -m x; }`, or `$COMMIT_CMD`.
+# That is a claim about the SHELL, and it is scoped on purpose: a commit that
+# never reaches this hook (--no-verify, core.hooksPath unset, the per-clone gap)
+# is outside it, exactly as Known limitations records.
+#
+# WHAT LIVES HERE AND WHAT DOES NOT. Cheap checks only. The close verification
+# can run the project's full suite, which is tolerable once at merge time and
+# intolerable on every commit, so it lives in pre-merge-commit. There is exactly
+# one exception and it is measured rather than assumed, below.
+#
+# THE SQUASH ANSWER, settled by running git rather than by reading about it.
+# Measured 2026-08-01, one probe repository, every merge form:
+#
+#   operation                          pre-commit   pre-merge-commit
+#   ordinary commit                       YES            no
+#   git merge --no-ff (true merge)        no             YES
+#   git merge --ff-only (fast-forward)    no             no
+#   git merge --squash (stages only)      no             no
+#   the commit completing a squash        YES            no
+#
+# Three consequences, and none of them is what the naive reading predicts:
+#
+#   1. A squash merge NEVER reaches pre-merge-commit. It reaches pre-commit, as
+#      an ordinary-looking commit. So the close verification has to run from here
+#      too, or squashing is a total bypass of it. That is why this hook has an
+#      expensive branch at all.
+#   2. pre-commit does NOT fire for a true merge commit. The two hooks are
+#      disjoint, not nested, so neither can rely on the other having run.
+#   3. A FAST-FORWARD merge fires NOTHING. No local hook sees it. That is a real
+#      hole, it is documented in the edition's Known limitations, and pre-push
+#      (the trunk audit, which reads history) is what covers it.
+#
+# A squash is recognised by $GIT_DIR/SQUASH_MSG, which `git merge --squash`
+# writes and an ordinary commit does not. Verified in the same probe.
+#
+# To bypass once, for a deliberate exception you are willing to own:
+#   SETLIST_SKIP_HOOKS=1 git commit ...
+# `git commit --no-verify` also bypasses it, as it bypasses every git hook. Both
+# are documented holes rather than oversights: they are deliberate acts with an
+# obvious name, which is a different kind of hole from an apostrophe in a commit
+# message.
+
+set -u
+
+if [ "${SETLIST_SKIP_HOOKS:-}" = "1" ]; then
+  printf 'setlist: pre-commit skipped by SETLIST_SKIP_HOOKS=1\n' >&2
+  # fail-open-ok: the DOCUMENTED escape hatch, announced on stderr.
+  exit 0
+fi
+
+PROJ="$(git rev-parse --show-toplevel 2>/dev/null || printf '.')"
+[ -f "$PROJ/.claude/sdd.json" ] || exit 0   # not a framework instance
+
+# Resolve the shared library. Refusing beats passing when it cannot be found: a
+# hook that silently skips its own logic is the fail-open class this mechanism
+# exists to remove.
+LIB=""
+for cand in \
+  "$(dirname "$0")/setlist-hook-lib.sh" \
+  "${CLAUDE_PLUGIN_ROOT:-}/templates/git-hooks/setlist-hook-lib.sh" \
+  "$PROJ/.claude/hooks/setlist-hook-lib.sh" ; do
+  if [ -n "$cand" ] && [ -f "$cand" ]; then LIB="$cand"; break; fi
+done
+if [ -z "$LIB" ]; then
+  printf 'setlist pre-commit: cannot find setlist-hook-lib.sh.\n' >&2
+  printf '  Refusing rather than passing: a check that cannot run has not passed.\n' >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+. "$LIB"
+
+# The tools the library runs on must actually work before anything it decides can
+# be trusted. A broken grep turned this hook into a silent pass (v1.7 gate, F2).
+slh_require_toolchain || exit 1
+
+TRUNK="$(slh_trunk "$PROJ")" || exit 1
+
+STAGED="$(slh_staged_files "$PROJ")"
+# fail-open-ok: an empty index is nothing to judge. Note the direction: only an
+# EMPTY staged list short-circuits, and it short-circuits because a commit with
+# no content carries no work anywhere.
+[ -n "$STAGED" ] || exit 0
+
+# ---------------------------------------------------------------------------
+# Cheap checks 1 and 2: no em-dash and no secret-shaped string in newly added
+# content. The RULE lives in setlist-hook-lib.sh and is called from here, from
+# pre-merge-commit and from pre-push, because binding it to one operation is
+# what let cherry-pick, rebase, am and merge carry unscanned bytes to the trunk
+# (F1 of the 2026-08-05 leg). See the library for what commit-time layers
+# cannot cover and which layer catches it instead.
+# ---------------------------------------------------------------------------
+slh_scan_added "$(git -C "$PROJ" diff --cached --unified=0 2>/dev/null)" "staged content"
+
+# ---------------------------------------------------------------------------
+# Cheap check 3: a staged spec lifecycle transition stages specs/STATUS.md too.
+# The vocabulary is the canonical enumeration from the edition (Part 5); the
+# suite asserts this list matches it and matches commit-gate.sh's.
+# ---------------------------------------------------------------------------
+SLH_LIFECYCLE_STATES='DRAFT QUEUED ACTIVE REVISED BUILT PARKED CLOSED'
+STATES_RE="$(printf '%s' "$SLH_LIFECYCLE_STATES" | tr ' ' '|')"
+# fail-open-ok: as above, a non-zero grep here means no staged spec lines, so
+# there is no lifecycle transition to pair with an inventory row.
+SPEC_ADDED="$(git -C "$PROJ" diff --cached --unified=0 -- 'specs/*.md' ':(exclude)specs/STATUS.md' ':(exclude)specs/TEMPLATE.md' 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+if printf '%s\n' "$SPEC_ADDED" | grep -qE "^\+Status:[[:space:]]*(${STATES_RE})|^\+#+[[:space:]]*Closing report"; then
+  if ! printf '%s\n' "$STAGED" | grep -qx 'specs/STATUS.md'; then
+    slh_refuse "SLH-STATUS-MISSING" "this commit changes a spec lifecycle state but does not stage specs/STATUS.md; update the inventory row in the same commit."
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# The expensive branch: a commit that LANDS A MERGE on the trunk. Two spellings
+# reach here, and the second was found by the oracle rather than reasoned out.
+#
+#   SQUASH_MSG  a `git merge --squash` being completed. git fires no
+#               pre-merge-commit for a squash at all, so without this branch
+#               squashing is a total bypass of the close verification.
+#
+#   MERGE_HEAD  a merge that is staged but not yet committed, being completed by
+#               a plain `git commit`. This is the ordinary state git leaves
+#               behind when pre-merge-commit REFUSES: it prints "Not committing
+#               merge; use 'git commit' to complete the merge", and that commit
+#               fires pre-commit, not pre-merge-commit. So refusing in
+#               pre-merge-commit and stopping there would have left the operator
+#               one documented, git-suggested command away from landing exactly
+#               the merge that was just refused.
+#
+# The oracle caught that: the completing commit was blocked in the probe only
+# because SLH-STATUS-MISSING happened to fire on unrelated grounds, which is a
+# pass nobody earned. Same reason a conflicted merge resolution reaches here.
+# ---------------------------------------------------------------------------
+GITDIR="$(git -C "$PROJ" rev-parse --absolute-git-dir 2>/dev/null || printf '')"
+LANDING=""
+if [ -n "$GITDIR" ]; then
+  [ -f "$GITDIR/SQUASH_MSG" ] && LANDING="squash merge"
+  [ -f "$GITDIR/MERGE_HEAD" ] && LANDING="merge"
+fi
+if [ -n "$LANDING" ] && slh_on_trunk "$PROJ" "$TRUNK"; then
+  printf 'setlist pre-commit: this commit completes a %s onto %s, so the close\n' "$LANDING" "$TRUNK" >&2
+  printf '  verification runs here (git fires no pre-merge-commit for this path).\n' >&2
+  # fail-open-ok: both refusals are recorded in SLH_REFUSED and decided below, so
+  # a non-zero return must not abort before every check has had its say.
+  slh_verify_close "$PROJ" "$TRUNK" "this $LANDING" || true
+  # fail-open-ok: same, the refusal is recorded and acted on below.
+  slh_run_gate_command "$PROJ" || true
+fi
+
+if [ "$SLH_REFUSED" != "0" ]; then
+  printf '\nsetlist pre-commit: refusing this commit. Fix the above, or commit with\n' >&2
+  printf 'SETLIST_SKIP_HOOKS=1 if this is a deliberate exception you are willing to own.\n' >&2
+  exit 1
+fi
+# fail-open-ok: reached only with SLH_REFUSED at 0, meaning every check ran and
+# none refused. This is the allow this hook exists to reach on compliant work.
+exit 0

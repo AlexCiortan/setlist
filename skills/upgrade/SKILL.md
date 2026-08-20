@@ -93,7 +93,9 @@ When the instance predates this plugin, also:
   Part 8c is explicit that a customized stamped copy is a fork to surface in
   the umbrella ADR, never a file to silently overwrite. On --apply the four
   hooks (scope-hook, commit-gate, close-gate, regrounding-hook) are copied byte
-  for byte and the plugin version is recorded in `.claude/sdd.json`.
+  for byte, the git-hook boundary is delivered (`.githooks/` plus
+  `core.hooksPath` and `merge.ff`, see the boundary bullet below), and the plugin
+  version is recorded in `.claude/sdd.json`.
   **Exit code 3 means the refresh applied INCOMPLETELY**: the hook bytes and the
   version record are current, but `.claude/settings.json` still needs an edit the
   script named and deliberately did not make (that file carries the instance's own
@@ -117,15 +119,34 @@ When the instance predates this plugin, also:
   and tests role paths, the full-suite gate_command, and scaffolded=true (the
   project exists; the gates should bind now). Whether created or already
   present, sdd.json must carry the `trunk` field: detect the trunk branch
-  NAME and record the plain name, never a ref path. `git symbolic-ref
-  refs/remotes/origin/HEAD` returns `refs/remotes/origin/main`, so pipe it
-  through `--short` and strip the remote, or read it from the branch you are
-  on: `git symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^[^/]*/##'`,
-  else the current trunk branch in use, else main. Recording the full ref path
-  used to disable BOTH hooks in silence, because they compare it against the
-  branch name you are standing on and the two can never be equal; the hooks now
-  reduce a ref spelling and refuse a trunk that names no local branch, but
-  writing the right value here is what stops the question arising. The scope
+  NAME and record the plain name, never a ref path. ASK THE BRANCH THE PROJECT
+  MERGES ONTO, NOT THE REMOTE'S DEFAULT. These are different questions and this
+  skill used to lead with the wrong one: `git symbolic-ref --short
+  refs/remotes/origin/HEAD | sed 's#^[^/]*/##'` returns the REMOTE's default
+  branch name, which on a git-flow shaped repository is `main` while the branch
+  actually worked on and merged onto is `trunk` or `develop`. Recording `main`
+  there names a real-but-wrong local branch, and until 2026-08-05 every layer
+  then concluded "not on the trunk" and no-opped in silence on every close
+  (v1.7 re-leg, F3). Prefer, in order:
+
+  1. the branch you are on now, if it is the one this project merges onto:
+     `git symbolic-ref --short HEAD`
+  2. the local branch whose upstream is the remote's default, which is the
+     git-flow answer: `git for-each-ref --format='%(refname:short) %(upstream:short)' refs/heads`
+     and take the one whose upstream matches `origin/HEAD`
+  3. the remote default, `git symbolic-ref --short refs/remotes/origin/HEAD | sed 's#^[^/]*/##'`
+  4. main
+
+  Record the plain name, never a ref path: recording the full ref path used to
+  disable BOTH hooks in silence, because they compare it against the branch
+  name you are standing on and the two can never be equal. The hooks now reduce
+  a ref spelling and refuse a trunk that names no local branch, but they do NOT
+  recognise the trunk under a different local name: a version that did so, by
+  what the branch TRACKS, refused ordinary merges on every branch cut with
+  `git checkout -b <name> origin/main` and was removed on 2026-08-07. So
+  writing the right value here is not a convenience, it is the whole of the
+  trunk detection, and the git-flow case is a documented limitation when it is
+  wrong. The scope
   and close hooks read this field instead of assuming main. Note that hooks load at session start, so the
   gates bind from the NEXT session onward.
 - Refresh `specs/TEMPLATE.md` from the new edition:
@@ -140,6 +161,64 @@ When the instance predates this plugin, also:
   `.claude/agents/qa-verifier.md` (the stamp gives every new instance this
   agent; an upgraded instance gets the same). If a hand-edited copy exists,
   surface the diff instead of overwriting.
+- **Add the `release` block to `.claude/sdd.json`** (edition v1.7). Write
+  `"release": {"model": "none"}` unless the project already has a release
+  practice to declare, appended AFTER the `plugin` block rather than reordering
+  the file. `none` is the WRITTEN DEFAULT and not a placeholder: it means users
+  run the trunk, which is the true answer for most instances. Do not infer
+  `tags` from the presence of tags, or `version-file` from the presence of a
+  VERSION file; a model is declared by a person, and `/setlist:validate`
+  check 13 will hold whatever is declared to its marker.
+- **The GIT HOOKS and their config** (edition v1.7, the enforcement boundary).
+  **The refresh script above delivers this; do not install it by hand.**
+  `refresh-instance.sh --apply` copies `pre-commit`, `pre-merge-commit`,
+  `pre-push` and `setlist-hook-lib.sh` from
+  `${CLAUDE_PLUGIN_ROOT}/templates/git-hooks/` into a TRACKED `.githooks/`,
+  makes the three hooks executable and DIES if any is not, and sets both
+  `git config core.hooksPath .githooks` and `git config merge.ff false`. A
+  hand copy is what this bullet used to ask for and it is the worse path: git
+  skips a non-executable hook SILENTLY, so a manual install that loses the mode
+  bit leaves a boundary that stops nothing and says nothing.
+  **Both settings, and the second is not optional**: a fast-forward merge fires
+  no git hook at all, so without it `git merge spec/0001-x` walks unreviewed
+  work onto the trunk past the boundary.
+  What is left for a person here is the VERIFICATION and the warning, not the
+  install: confirm `git config core.hooksPath` reads `.githooks` and
+  `git config merge.ff` reads `false` after the refresh (`/setlist:validate`
+  check 17 asserts exactly this), and warn the human that this is a BEHAVIOURAL
+  change they will feel immediately, since merges that used to fast-forward now
+  create merge commits. **Tell them about the squash too**: `merge.ff = false`
+  implies `--no-ff`, and git refuses that with `--squash`, so
+  `git merge --squash <branch>` stops working with
+  `fatal: options '--squash' and '--no-ff.' cannot be used together`. The error
+  names neither Setlist nor the setting, so an operator who is not told has
+  nothing to search for. The workaround is `git merge --ff --squash <branch>`,
+  which `pre-commit` still gates because the commit completing a squash reaches
+  it. If the instance is not a git work tree the script warns
+  and sets neither, which is the one case where a person has to act.
+- **Tell the human what the boundary move means.** The PreToolUse gates are now
+  ADVISORY, and within the git hooks the GUARANTEE is the push-time trunk audit:
+  the two per-merge hooks keep refusing at commit and merge time as early
+  warning, and the audit at `pre-push` is what stands between unreviewed work
+  and a shared trunk. Nothing is removed and no workflow breaks, but a bypass
+  spelling of a session gate, and a route past a per-merge hook, are MAJORs
+  rather than release blockers now, and the honest holes (`--no-verify`, the
+  forge merge button, the per-clone config) are listed in the edition's Known
+  limitations. An upgrade that silently changes what a guarantee means is worse
+  than one that says so.
+- **Optionally declare a git identity** (BL-007, plugin 1.1.0). If this machine
+  holds more than one git identity, add `"identity": {"user_email": "..."}` to
+  `.claude/sdd.json` and the commit gate will WARN about a commit made under the
+  wrong one. Do NOT add it silently: no key means no check, which is the correct
+  default, and writing whatever `git config user.email` currently returns would
+  ratify a possibly-wrong value rather than declare an intended one. Ask.
+- **Mention the new `Spec-hash:` field, and migrate NOTHING** (BL-005, edition
+  v1.7). Existing specs simply lack it and acquire one at their next transition
+  to ACTIVE. Do not back-fill hashes across historical specs: a hash computed
+  today over a spec approved months ago attests to nothing, and writing one
+  would turn an honest "not yet covered" into a false "verified". Tell the human
+  the field exists and that the drift warning starts working from the next spec
+  that goes ACTIVE.
 - Record all of this inside the umbrella ADR.
 
 ## 4. Instance skill flags (any instance stamped before plugin 1.6)

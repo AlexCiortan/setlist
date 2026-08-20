@@ -3,7 +3,7 @@
   "name": "setlist",
   "displayName": "Setlist",
   "description": "Spec-driven development for Claude Code: you direct, the agent builds. A structured interview locks the foundational decisions before any file is written, work proceeds one small spec at a time with an enforced out-of-scope list, mechanical hooks gate commits, merges, and trunk writes, and every feature passes automated plus human QA. Seven /setlist commands (new, retrofit, upgrade, checkpoint, validate, gate, journal), reference skills, and stamped instance templates. Scaffolding a new project may install your chosen stack's tooling; the plugin itself collects no data.",
-  "version": "1.0.9",
+  "version": "2.0.0",
   "author": {
     "name": "AlexCiortan",
     "email": "alexciortan@gmail.com"

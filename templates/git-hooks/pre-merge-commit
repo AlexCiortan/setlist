@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# Setlist pre-merge-commit hook: the EXPENSIVE close verification, run once, at
+# the moment a merge commit is about to be created.
+#
+# This is the hook the whole enforcement-boundary argument is about. The close
+# gate spent four releases trying to decide, from the TEXT of a shell command,
+# whether that command was going to merge an unclosed spec onto the trunk. Every
+# release found another spelling: ref prefixes, wrapper flags, quoted spans, a
+# lone `&`, a leading redirection, a sibling ref at the same commit. This hook
+# does not read a command. Git has already parsed the arguments, expanded
+# `$(...)`, resolved the refs and staged the result; it then asks this hook
+# whether to proceed. There is no spelling left to get wrong.
+#
+# WHAT IT CANNOT SEE, stated here rather than discovered later. Measured
+# 2026-08-01 against a probe repository (the firing table is in pre-commit's
+# header): pre-merge-commit does NOT fire for a fast-forward merge, and does NOT
+# fire for a squash merge. The squash case is handled by pre-commit, which does
+# fire for the commit that completes it. The fast-forward case is handled by
+# nothing local, and is a documented Known limitation covered by pre-push's
+# trunk audit, which reads history and does not care how work arrived.
+#
+# IDENTITY BY CONTENT, NOT BY REF NAME, and this is a measured constraint rather
+# than a preference. During a clean automatic merge, $GIT_DIR/MERGE_HEAD does not
+# exist when this hook runs (only AUTO_MERGE and ORIG_HEAD do), so there is no
+# merged ref name to read. That turns out to be a feature: "which specs does this
+# change close" is answerable from the index alone, needs no ref resolution, and
+# is immune to the entire class of alias, tag, remote-ref and sibling-ref defects
+# that identity-by-name and identity-by-commit both walked into.
+#
+# To bypass once, for a deliberate exception you are willing to own:
+#   SETLIST_SKIP_HOOKS=1 git merge ...
+# `git merge --no-verify` also bypasses it. Documented, not overlooked.
+
+set -u
+
+if [ "${SETLIST_SKIP_HOOKS:-}" = "1" ]; then
+  printf 'setlist: pre-merge-commit skipped by SETLIST_SKIP_HOOKS=1\n' >&2
+  # fail-open-ok: the DOCUMENTED escape hatch, announced on stderr so the bypass
+  # is never silent. Removing it would not make the boundary stronger, it would
+  # make people work around it in ways nobody can see.
+  exit 0
+fi
+
+PROJ="$(git rev-parse --show-toplevel 2>/dev/null || printf '.')"
+[ -f "$PROJ/.claude/sdd.json" ] || exit 0   # not a framework instance
+
+LIB=""
+for cand in \
+  "$(dirname "$0")/setlist-hook-lib.sh" \
+  "${CLAUDE_PLUGIN_ROOT:-}/templates/git-hooks/setlist-hook-lib.sh" \
+  "$PROJ/.claude/hooks/setlist-hook-lib.sh" ; do
+  if [ -n "$cand" ] && [ -f "$cand" ]; then LIB="$cand"; break; fi
+done
+if [ -z "$LIB" ]; then
+  printf 'setlist pre-merge-commit: cannot find setlist-hook-lib.sh.\n' >&2
+  printf '  Refusing rather than passing: a check that cannot run has not passed.\n' >&2
+  exit 1
+fi
+# shellcheck source=/dev/null
+. "$LIB"
+
+# The tools the library runs on must actually work before anything it decides can
+# be trusted. A broken grep turned this hook into a silent pass (v1.7 gate, F2).
+slh_require_toolchain || exit 1
+
+TRUNK="$(slh_trunk "$PROJ")" || exit 1
+
+# Only merges INTO the trunk are close events. A merge of the trunk INTO a spec
+# branch (the ordinary way a long branch keeps up) is not a close and must not be
+# gated, or the hook makes the normal workflow impossible, which is the
+# false-denial direction this repo treats as the more dangerous one.
+if ! slh_on_trunk "$PROJ" "$TRUNK"; then
+  # A merge that is not INTO the trunk is not a close event, and gating it would
+  # make the ordinary catch-up merge impossible. The predicate is genuinely
+  # evaluated: $TRUNK arrives here REDUCED to a local branch name by slh_trunk,
+  # which refuses outright if it cannot establish one. That was the v1.7 gate's
+  # BLOCKER: an unreduced ref path made this comparison unequal for every input,
+  # so this exit was taken without the predicate ever meaning anything.
+  # fail-open-ok: not on the trunk, predicate evaluated against a reduced name.
+  exit 0
+fi
+
+# The refusals are accumulated in SLH_REFUSED and acted on below, so a non-zero
+# return here must not abort the hook before the gate command has also had its
+# say: the operator gets ALL the reasons at once rather than one per retry.
+# fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below.
+
+slh_verify_close "$PROJ" "$TRUNK" "this merge" || true
+
+# THE MERGE'S OWN CONTENT (F1). pre-commit does not fire for a true merge, so
+# until 2026-08-05 a merge carried its bytes to the trunk unscanned while the
+# identical bytes through `git commit` were refused. During a merge the index
+# holds the merge result, so diffing it against HEAD is exactly what this commit
+# will add to the first parent. Same rule as pre-commit, one definition, in the
+# library.
+# fail-open-ok: a diff that cannot be produced yields empty, and slh_scan_added
+# returns early on empty input. That is the pre-2026-08-05 behaviour for this
+# path (no scan at all on a merge), so it cannot be a regression, and the
+# pre-push range scan reads the same content again before it is shared.
+slh_scan_added "$(git -C "$PROJ" diff --cached --unified=0 HEAD 2>/dev/null)" "this merge's content"
+
+# The expensive half, and the reason this lives at merge time. It can be the
+# project's full suite.
+# fail-open-ok: same reason; the refusal is recorded in SLH_REFUSED and the
+# decision is taken by the check below, which is the only exit that matters.
+slh_run_gate_command "$PROJ" || true
+
+if [ "$SLH_REFUSED" != "0" ]; then
+  printf '\nsetlist pre-merge-commit: refusing this merge onto %s. Fix the above, or merge\n' "$TRUNK" >&2
+  printf 'with SETLIST_SKIP_HOOKS=1 if this is a deliberate exception you are willing to own.\n' >&2
+  exit 1
+fi
+# fail-open-ok: reached only when SLH_REFUSED is 0, which means every check above
+# ran and none of them refused. This is the allow, and it is the one this hook is
+# supposed to reach on compliant work.
+exit 0

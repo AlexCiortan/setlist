@@ -10,9 +10,15 @@ change it records.
 - Phase: bootstrap (phase 1 stamped {{STAMP_DATE}}; phase 2 tailored generation pending)
 - Active spec: none
 - Working mode: {{WORKING_MODE}}
+- Latest release: none yet
 - Next action: complete phase 2 tailored generation, then /scaffold
 
 ## Spec inventory
+
+States: DRAFT, QUEUED, ACTIVE, REVISED, BUILT, PARKED, CLOSED. BUILT is complete on its
+branch with the close pending; PARKED is deliberately paused and unmerged, and a PARKED row
+states its reason and its revisit trigger in the note. Neither is on the trunk, so a
+planning precondition reads this column rather than assuming close order follows spec order.
 
 | Spec | Title | Status | Note (one line) |
 |---|---|---|---|
@@ -20,6 +26,15 @@ change it records.
 ## Open chores
 
 (none)
+
+Completed chores collapse to one archive line each, in this form (Part 5b). `DONE` is the
+first token after the colon because that is what the git hooks read: a chore branch that
+touches a role path may only merge when the same commit records its completion here.
+The example uses `CHORE-NNN` on purpose: the rule requires DIGITS, so this line is a shape
+you copy rather than a record the hooks would count. An example that counts as a real record
+would ship every new instance a pre-satisfied one.
+
+    - CHORE-NNN: DONE 2026-08-02. Renamed the duplicate helper in src/parse.js.
 
 ## Open questions for the Planner
 

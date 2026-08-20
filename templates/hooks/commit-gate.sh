@@ -17,25 +17,65 @@
 
 set -u
 
-deny() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' \
+# THE commit ADVISES, IT DOES NOT VETO (design-advisory-means-advisory.md,
+# RATIFIED 2026-08-04).
+#
+# This function used to emit permissionDecision "deny" and hold a hard veto over
+# the session. It now emits "allow" and reports what it WOULD have decided in a
+# machine-readable field. The guarantee did not move with it: it stayed where
+# edition v1.7 put it, in git's own hooks, which run from git's internal state
+# after argument parsing and ref resolution and have nothing left to spell
+# around.
+#
+# WHY, in one number. Across four hostile legs on 2026-08-03 and 2026-08-04,
+# five of six BLOCKERs and three MAJORs were in parser code written that same
+# day to fix the previous leg: roughly a fifth of parser repairs introduced a
+# new defect. That rate is a property of changing a shell command parser at all,
+# not of any one change, and while the parsers could DENY, every one of those
+# defects was a release blocker. The README has told users this layer only warns
+# since v1.7; the leg filed a finding because it did not. The mechanism is the
+# half that moved.
+#
+# THE CONTRACT, frozen with the parsers:
+#   permissionDecision   ALWAYS "allow"
+#   setlistAdvisory      {gate, verdict: deny|allow, code, reason}
+#   systemMessage        the reason, again, because permissionDecisionReason is
+#                        documented as reaching the USER rather than the model
+#                        when the decision is allow, and the point of a warning
+#                        is that the session sees it.
+#
+# `setlistAdvisory.verdict` is evidence about THIS layer only. Every
+# guarantee-layer check binds to observed repository state instead, because a
+# guarantee that asked the parser whether the parser was right would be the
+# laundering defect this cycle is a record of, one layer up.
+advise() {
+  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":%s},"systemMessage":%s,"setlistAdvisory":{"gate":"commit","verdict":"deny","code":%s,"reason":%s}}\n' \
+    "$(printf '%s' "$1" | jq -Rs .)" \
+    "$(printf 'setlist %s' "$1" | jq -Rs .)" \
+    "$(printf '%s' "$ADV_CODE" | jq -Rs .)" \
     "$(printf '%s' "$1" | jq -Rs .)"
-  # fail-open-ok: not a pass at all; exit 0 is how the hook protocol delivers
-  # the deny JSON emitted above.
+  # fail-open-ok: the gate is advisory by design as of 2026-08-04. It has
+  # reported its verdict and the session proceeds; the git hooks carry the
+  # guarantee.
   exit 0
 }
+deny() { advise "$1"; }
 
-# Deny with a fixed literal reason, for the paths where jq is unavailable to
+# Advise with a fixed literal reason, for the paths where jq is unavailable to
 # escape one. The text must contain no double quotes, backslashes, or newlines.
-deny_literal() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
-  # fail-open-ok: not a pass at all; exit 0 delivers the deny JSON above.
+advise_literal() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"commit","verdict":"deny","code":"","reason":"%s"}}\n' "$1" "$1" "$1"
+  # fail-open-ok: advisory by design; see advise() above.
   exit 0
 }
+deny_literal() { advise_literal "$1"; }
 
 INPUT=$(cat)
 
-# Fail closed when jq is absent. The raw payload is scanned instead of the
+# Decide WITHOUT jq when it is absent, and report. This gate is advisory since
+# v1.7, so the verdict below is emitted with permissionDecision "allow": the
+# GIT hooks are the layer that refuses. The raw payload is scanned instead of the
 # parsed command so that a missing jq gates the commands this hook governs
 # rather than every Bash call in the session: the agent can still run the
 # install command that fixes it. The match is the bare word here, not "git
@@ -60,13 +100,49 @@ if ! command -v jq >/dev/null 2>&1; then
 elif ! printf '{}' | jq -e . >/dev/null 2>&1; then
   JQ_STATE=broken
 fi
+# AND THE REST OF THE TOOLCHAIN, for exactly the same reason (v1.7 gate, F2).
+#
+# jq was the only tool anyone probed, while awk, sed, tr and grep are just as
+# load-bearing: break any one of them and the normalised command came back empty,
+# the applicability test matched nothing, and this gate ALLOWED every commit in
+# silence. Each probe RUNS its tool and checks the OUTPUT as well as the status,
+# because a tool that exits 0 and prints nothing breaks this gate just as
+# thoroughly. The comparisons are bash builtins, so the probe never depends on
+# the thing it is probing.
+TOOLCHAIN_BROKEN=""
+_probe="$(printf 'x\n' | awk '{ print }' 2>/dev/null)" || _probe=""
+[[ "$_probe" == "x" ]] || TOOLCHAIN_BROKEN="awk"
+if [[ -z "$TOOLCHAIN_BROKEN" ]]; then
+  _probe="$(printf 'x\n' | sed 's/x/y/' 2>/dev/null)" || _probe=""
+  [[ "$_probe" == "y" ]] || TOOLCHAIN_BROKEN="sed"
+fi
+if [[ -z "$TOOLCHAIN_BROKEN" ]]; then
+  _probe="$(printf 'x\n' | tr 'x' 'y' 2>/dev/null)" || _probe=""
+  [[ "$_probe" == "y" ]] || TOOLCHAIN_BROKEN="tr"
+fi
+if [[ -z "$TOOLCHAIN_BROKEN" ]]; then
+  _probe="$(printf 'x\n' | grep -E '^x$' 2>/dev/null)" || _probe=""
+  [[ "$_probe" == "x" ]] || TOOLCHAIN_BROKEN="grep"
+fi
+if [[ -n "$TOOLCHAIN_BROKEN" ]]; then
+  case "$INPUT" in
+    *commit*)
+      deny_literal "commit gate [CM-NO-TOOLCHAIN]: $TOOLCHAIN_BROKEN is installed but does not work on this machine, so this gate cannot read the command it is meant to check and would otherwise allow every commit unchecked. Run '$TOOLCHAIN_BROKEN --version' to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+      ;;
+    # fail-open-ok: the raw payload does not mention committing, so this is not a
+    # command the gate governs, and gating every Bash call would block the very
+    # command that repairs the broken tool.
+    *) exit 0 ;;
+  esac
+fi
+
 if [[ "$JQ_STATE" != "ok" ]]; then
   case "$INPUT" in
     *commit*)
       if [[ "$JQ_STATE" == "absent" ]]; then
-        deny_literal "commit gate [CM-NO-JQ]: jq is not installed, so this gate cannot read the command it is meant to check and would otherwise allow every commit unchecked. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+        deny_literal "commit gate [CM-NO-JQ]: jq is not installed, so this gate cannot read the command it is meant to check and would otherwise allow every commit unchecked. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
       fi
-      deny_literal "commit gate [CM-JQ-BROKEN]: jq is installed but does not run on this machine, so this gate cannot read the command it is meant to check and would otherwise allow every commit unchecked. Run jq --version to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+      deny_literal "commit gate [CM-JQ-BROKEN]: jq is installed but does not run on this machine, so this gate cannot read the command it is meant to check and would otherwise allow every commit unchecked. Run jq --version to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
       ;;
     # fail-open-ok: without a usable jq the raw payload does not mention
     # committing, so this is not a command the gate governs; gating every Bash
@@ -81,7 +157,7 @@ fi
 if ! CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"; then
   case "$INPUT" in
     *commit*)
-      deny_literal "commit gate [CM-JQ-UNPARSED]: jq could not parse the payload this hook was given, so the command being run cannot be read and this gate cannot check what it stages. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+      deny_literal "commit gate [CM-JQ-UNPARSED]: jq could not parse the payload this hook was given, so the command being run cannot be read and this gate cannot check what it stages. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
       ;;
     # fail-open-ok: the unparseable payload does not mention committing either.
     *) exit 0 ;;
@@ -95,7 +171,87 @@ fi
 # is squeezed once, quoted strings are dropped so a message mentioning the word
 # cannot trip it, and git's own global options are tolerated between the binary
 # and the subcommand.
-CMD_NORM="$(printf '%s' "$CMD" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' | tr '\n\r' ';;' | tr -s '[:space:]' ' ')"
+# A HEREDOC BODY IS A QUOTING CONSTRUCT, AND THE LEXER DID NOT KNOW IT
+# (1.1.0 hostile leg, F9). The line-joining below turns every newline into a
+# separator, and a heredoc body is not inside quotes as far as the quote scan
+# is concerned, so every LINE OF THE COMMIT MESSAGE became its own segment
+# judged at command position. A message reading "git add . is no longer needed
+# here" was denied as a compound stage-and-commit, and the remediation named no
+# command the author could move, because there was none: the words were prose.
+# The quoted spelling of the same message allows, so two spellings of one commit
+# disagreed and the shorter one was the one that worked.
+#
+# Bash never executes these lines, so the gate must not read them. The body is
+# removed BEFORE the join, which is the only place it is still identifiable.
+# `<<<` is neutralised first: a herestring is not a heredoc, and without that
+# guard `<<<WORD` matched at its second character and swallowed the rest of the
+# command, which is a fail-open dressed as a fix.
+#
+# An unterminated heredoc drops everything after it. That is safe rather than
+# convenient: bash would refuse the same command as a syntax error, so nothing
+# the gate stops reading was ever going to run.
+HEREDOC_AWK='
+# A HEREDOC OPENER IS ONLY AN OPENER OUTSIDE QUOTES AND OUTSIDE A COMMENT.
+#
+# The first cut of this pass (1.1.0, F9) matched << anywhere on the raw line and
+# it opened a BLOCKER the very next leg found: `git commit -m "use <<EOF heredoc
+# in the installer"` followed by a real `git merge --no-ff spec/0001-thing`
+# swallowed the merge as heredoc body and the gate allowed it in silence. The
+# oracle confirmed the merge really lands. It reproduced from a quoted message,
+# from a shell comment, and from ordinary prose, and the trunk audit called the
+# result a chore merge at exit 0.
+#
+# The justification that shipped with the broken version was the load-bearing
+# error and is worth quoting: "an unterminated heredoc drops everything after it
+# ... bash would refuse the same command as a syntax error, so nothing the gate
+# stops reading was ever going to run". That is false exactly where it matters.
+# Bash sees NO heredoc inside quotes or after #, and runs every line.
+#
+# So this tracks quote state across lines the way a shell does, skips a comment
+# that starts a word, and treats <<< as the herestring it is. Only a delimiter
+# found outside quotes opens a body.
+function hd_scan(s,   i, c, n, d, j, ch) {
+  n = length(s); i = 1
+  while (i <= n) {
+    c = substr(s, i, 1)
+    if (hdq == "") {
+      if (c == "\\") { i += 2; continue }
+      if (c == "'"'"'" || c == "\"") { hdq = c; i++; continue }
+      if (c == "#" && (i == 1 || substr(s, i-1, 1) ~ /[ \t;&|(]/)) return ""
+      if (c == "(" && substr(s, i+1, 1) == "(") { __d = 0; while (i <= n) { __x = substr(s, i, 1); if (__x == "(") __d++; else if (__x == ")") { __d--; if (__d == 0) { i++; break } } i++ } continue }
+      if (c == "<" && substr(s, i+1, 1) == "<") {
+        if (substr(s, i+2, 1) == "<") { i += 3; continue }
+        j = i + 2
+        if (substr(s, j, 1) == "-") j++
+        while (substr(s, j, 1) == " " || substr(s, j, 1) == "\t") j++
+        d = ""; ch = substr(s, j, 1)
+        if (ch == "'"'"'" || ch == "\"") {
+          j++
+          while (j <= n && substr(s, j, 1) != ch) { d = d substr(s, j, 1); j++ }
+        } else {
+          if (substr(s, j, 1) !~ /[A-Za-z_]/) return ""
+          while (j <= n && substr(s, j, 1) ~ /[A-Za-z0-9_]/) { d = d substr(s, j, 1); j++ }
+        }
+        if (d != "") return d
+        i = j; continue
+      }
+      i++
+    } else {
+      if (hdq == "\"" && c == "\\") { i += 2; continue }
+      if (c == hdq) hdq = ""
+      i++
+    }
+  }
+  return ""
+}
+{
+  if (hdin) { hdl = $0; sub(/^[ \t]+/, "", hdl); if (hdl == hddelim) hdin = 0; next }
+  hdd = hd_scan($0)
+  print $0
+  if (hdd != "") { hddelim = hdd; hdin = 1 }
+}'
+CMD_HD="$(printf '%s' "$CMD" | awk "$HEREDOC_AWK")"
+CMD_NORM="$(printf '%s' "$CMD_HD" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' | tr '\n\r' ';;' | tr -s '[:space:]' ' ')"
 # Quoted spans are removed by a LEFT-TO-RIGHT scan, not by two sed passes.
 #
 # The two passes paired quote characters across the whole line, and across
@@ -196,7 +352,20 @@ CMD_BARE="$(printf '%s' "$CMD_NORM" | awk '{
   if (q != "") { out = out " @@UNTERMINATED@@" }
   print out
 }')"
-GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
+# ONLY SOME GLOBAL OPTIONS TAKE A SEPARATE VALUE (1.1.0 leg, third run).
+#
+# This used to allow ANY option to swallow the next non-dash word, so the option
+# run ate the SUBCOMMAND itself and any later bare word could satisfy the
+# applicability test. `git --no-pager grep -n merge -- src` was therefore judged
+# as a trunk merge and DENIED with CG-UNNAMEABLE-REF, telling the operator to
+# author a Closing report for a grep. `git --no-pager log --grep merge` did the
+# same. Agents in this harness write `git --no-pager ...` constantly.
+#
+# The subcommand is the first NON-OPTION word after git, so only the options
+# that genuinely take a separate argument may consume one. The attached spellings
+# (`--git-dir=x`, `-c k=v` written as one word) still match the generic branch,
+# which is why that branch keeps no value clause at all.
+GIT_OPTS='( +(-[cC] +[^ ]+|--(exec-path|git-dir|work-tree|namespace|super-prefix|config-env|attr-source) +[^ ]+|-{1,2}[A-Za-z][^ ]*))*'
 
 # THE MARKER IS NOW READ, and until 2026-07-28 it was not.
 #
@@ -378,10 +547,30 @@ strip_wrappers() { # strip_wrappers <segment> -> echoes the segment, unwrapped
 # them can never be read as a separator. Two literal substitutions rather than a
 # capture-group rewrite, because POSIX awk gsub has no backreferences and a
 # clever regex here would be the third thing in this file to be too clever.
-SEGMENTS="$(printf '%s\n' "$CMD_BARE" | awk '{ gsub(/>&/, ">@@FD@@"); gsub(/<&/, "<@@FD@@"); gsub(/&&|\|\||[;|()&]/, "\n"); print }')"
+#
+# A SINGLE `&` IS NOT A SEQUENCER, and the positional rule below depends on the
+# difference. `&&`, `;` and `|` all guarantee the previous command finished
+# before the next starts; `&` BACKGROUNDS it, so `git commit -m x & git add -A`
+# runs both at once and the add really can reach the index before the commit
+# reads it. That is the stale-index case, and it survives the position check
+# that correctly clears `git commit -m x && git add -A`. Marked rather than
+# flattened so the loop can tell them apart: the suite caught this the first
+# time the position check was written without it, which is what that corpus is
+# for.
+SEGMENTS="$(printf '%s\n' "$CMD_BARE" | awk '{ gsub(/>&/, ">@@FD@@"); gsub(/<&/, "<@@FD@@"); gsub(/&&/, "\n"); gsub(/\|\|/, "\n"); gsub(/&/, "\n@@BG@@ "); gsub(/[;|()]/, "\n"); print }')"
 HAS_COMMIT=""
 HAS_STAGE=""
+STAGE_PENDING=""
 while IFS= read -r seg; do
+  seg="$(printf '%s' "$seg" | sed -e 's/^ *//' -e 's/ *$//')"
+  # Was the command BEFORE this segment backgrounded? Matched with and without
+  # the trailing space, because the trim above has already removed it from a
+  # marker-only segment.
+  BACKGROUNDED=""
+  case "$seg" in
+    "@@BG@@ "*) BACKGROUNDED=1; seg="${seg#@@BG@@ }" ;;
+    "@@BG@@")   BACKGROUNDED=1; seg="" ;;
+  esac
   seg="$(printf '%s' "$seg" | sed -e 's/^ *//' -e 's/ *$//')"
   [[ -n "$seg" ]] || continue
   seg="$(strip_wrappers "$seg")"
@@ -405,8 +594,35 @@ while IFS= read -r seg; do
     # semantics wanted: one offending commit in a compound is enough to deny.
     HAS_COMMIT="${HAS_COMMIT}${HAS_COMMIT:+
 }$seg"
+    # An index writer seen EARLIER on this line stages content this commit will
+    # carry, and the gate scanned the index before any of it existed. That is
+    # the stale-index case check 0 is for, and it is the only one.
+    if [[ -n "$STAGE_PENDING" && -z "$HAS_STAGE" ]]; then
+      HAS_STAGE="$STAGE_PENDING"
+    fi
   elif printf '%s' "$seg" | grep -qE "^([^ ]*/)?git${GIT_OPTS} +($INDEX_VERBS)( |$)"; then
-    HAS_STAGE="$seg"
+    # POSITION IS THE WHOLE POINT (1.1.0 hostile leg, F1). This recorded any
+    # index writer ANYWHERE on the line and check 0 denied on its presence
+    # alone, so `git commit -m "x" && git checkout -` was refused: the canonical
+    # spec-branch workflow this framework prescribes, commit on the branch and
+    # return to where you were. The remedy the message gives ("run the
+    # index-writing command on its own first") inverts the author's intent,
+    # because they deliberately put it second.
+    #
+    # The rationale check 0 states is entirely positional: the index writer runs
+    # "after this gate scanned it, so the gate would scan a stale index". When
+    # the commit runs FIRST, the index the gate scanned is exactly the index
+    # that gets committed and every staged-content check below is meaningful.
+    # So the pending writer is remembered, and it only becomes a finding when a
+    # commit segment follows it. The very next check was already careful about
+    # this same attribution problem; check 0 was not.
+    STAGE_PENDING="$seg"
+    # ...unless the commit before it was BACKGROUNDED, in which case there is no
+    # "before": the two run concurrently and the add can beat the commit to the
+    # index. Position proves nothing across a `&`.
+    if [[ -n "$BACKGROUNDED" && -n "$HAS_COMMIT" && -z "$HAS_STAGE" ]]; then
+      HAS_STAGE="$seg"
+    fi
   fi
 done <<SEGEOF
 $SEGMENTS
@@ -429,7 +645,54 @@ if [[ -n "$HAS_STAGE" ]]; then
 fi
 # Read the COMMIT segment's own flags, not the whole line: another command's
 # -a on the same line is not this commit's auto-staging flag.
-if printf '%s' "$HAS_COMMIT" | grep -qE '(^|[[:space:]])-[a-zA-Z]*[ai][a-zA-Z]*([[:space:]]|$)|--all([[:space:]]|$)|--include([[:space:]]|$)|--interactive([[:space:]]|$)'; then
+#
+# GIT ACCEPTS ABBREVIATIONS, and this check matched fixed strings (1.1.0
+# hostile leg, F14). `git commit --inc src/a.txt -m "x"` ALLOWED while
+# `--include` denied; so did `--incl`, `--inclu`, `--includ` and `--interacti`,
+# all of them accepted by real git. close-gate.sh learned this exact class as
+# leg 5's F5 and closed it by matching a PREFIX rather than a list, and its own
+# comment says why: "enumerating abbreviations would be the same mistake as
+# enumerating wrapper names". One file was left behind, which is this
+# repository's signature failure, so the close gate's approach is ported here
+# rather than reinvented.
+#
+# AN OPTION'S VALUE IS NOT AN OPTION (1.1.0 hostile leg, F10). The scan ran over
+# the raw segment, so `git commit -m "-fix"` was denied as auto-staging: the
+# one-word message survives the lexer as a bare word and the old regex matched
+# the `i` in it. `-m "-i18n strings"` allowed, because a multi-word span becomes
+# @@Q@@, so the one-word message was the unlucky spelling. Value-taking options
+# are dropped WITH their values first, exactly as the close gate's MARGS
+# stripper does, and then the flags are read.
+#
+# The prefix match requires five characters (`--all`, `--inc`, `--int` are all
+# five) so a shorter fragment that git itself rejects as ambiguous is not
+# treated as a flag here.
+AUTOSTAGE="$(printf '%s\n' "$HAS_COMMIT" | awk '
+function is_value_opt(w,   i, opts, n, o) {
+  if (w !~ /^--[a-z-]+$/) return 0
+  n = split("--message --file --author --date --template --cleanup --reuse-message --reedit-message --fixup --squash --trailer --pathspec-from-file", opts, " ")
+  for (i = 1; i <= n; i++) { o = opts[i]; if (substr(o, 1, length(w)) == w) return 1 }
+  return 0
+}
+function is_autostage(w,   i, opts, n, o) {
+  if (w ~ /^-[a-zA-Z]+$/) { if (w ~ /[ai]/) return 1; return 0 }
+  if (w !~ /^--[a-z-]+$/) return 0
+  if (length(w) < 5) return 0
+  n = split("--all --include --interactive", opts, " ")
+  for (i = 1; i <= n; i++) { o = opts[i]; if (substr(o, 1, length(w)) == w) return 1 }
+  return 0
+}
+{
+  skip = 0
+  for (i = 1; i <= NF; i++) {
+    if (skip) { skip = 0; continue }
+    w = $i
+    if (w ~ /^(-m|-F|-c|-C|-t)$/ || is_value_opt(w)) { skip = 1; continue }
+    if (w ~ /^--[a-z-]+=/) { if (is_autostage(substr(w, 1, index(w, "=") - 1))) { print "YES"; exit } ; continue }
+    if (is_autostage(w)) { print "YES"; exit }
+  }
+}')"
+if [[ "$AUTOSTAGE" == "YES" ]]; then
   deny "commit gate [CM-AUTOSTAGE-FLAG]: git commit with -a, -i, --all, or --include stages at commit time, so the gate would scan an empty index and check nothing. Stage the exact files with git add first, then run git commit without auto-staging flags."
 fi
 
@@ -456,10 +719,56 @@ fi
 # the same commit. Ordinary mid-build spec edits do not trip it. The formats
 # bound here are Appendix C exactly: the header line "Status: QUEUED" (bare
 # label, one lifecycle state) and the "## Closing report" heading.
+#
+# THE ENUMERATION IS A LOCKSTEP, AND IT IS THE CLASS FIX RATHER THAN THE
+# INSTANCE FIX. This check recognises the lifecycle vocabulary LITERALLY, so a
+# state the protocol gains and this list does not is not a missing feature: it
+# is a lifecycle transition the gate silently allows through without asking for
+# STATUS.md, which is a check quietly switching itself off. That is exactly what
+# happened when the edition gained BUILT and PARKED: probed on the shipped hook,
+# a staged `Status: CLOSED` without specs/STATUS.md denied, while `Status: BUILT`
+# and `Status: PARKED` both allowed.
+#
+# So the list below is bound to the CANONICAL enumeration in the edition (Part 5,
+# between the SDD-LIFECYCLE-STATES markers), which `scripts/part.sh
+# lifecycle-states` extracts and the test suite compares against this line as a
+# SET. Adding a state to the edition without adding it here turns the suite red.
+# The binding is to an extractor a production path already uses, never to prose
+# by grep, because a lockstep against prose is the same defect it exists to stop.
+# B2's INDEX_VERBS pairing is the precedent.
+CM_LIFECYCLE_STATES='DRAFT QUEUED ACTIVE REVISED BUILT PARKED CLOSED'
+CM_STATES_RE="$(printf '%s' "$CM_LIFECYCLE_STATES" | tr ' ' '|')"
 SPEC_ADDED="$(git -C "$PROJ" diff --cached --unified=0 -- 'specs/*.md' ':(exclude)specs/STATUS.md' ':(exclude)specs/TEMPLATE.md' 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
-if printf '%s\n' "$SPEC_ADDED" | grep -qE '^\+Status:[[:space:]]*(QUEUED|ACTIVE|REVISED|CLOSED|DRAFT)|^\+#+[[:space:]]*Closing report'; then
+if printf '%s\n' "$SPEC_ADDED" | grep -qE "^\+Status:[[:space:]]*(${CM_STATES_RE})|^\+#+[[:space:]]*Closing report"; then
   if ! git -C "$PROJ" diff --cached --name-only | grep -qx 'specs/STATUS.md'; then
     deny "commit gate [CM-STATUS-MISSING]: this commit changes a spec lifecycle state but does not stage specs/STATUS.md; update the STATUS.md inventory line in the same commit."
+  fi
+fi
+
+# Check 4: git identity (BL-007, new in plugin 1.1.0). One machine often holds a
+# work identity and a personal one, and a commit under the wrong one is annoying
+# on a private repo and a compliance problem on a work or public one. Catching it
+# at COMMIT time is earlier and cheaper than at push time, when the fix is a
+# rebase rather than an amend.
+#
+# OPT-IN BY CONSTRUCTION, and that is the whole compatibility story: no
+# `identity` key means no check and no output. Every instance stamped before this
+# release therefore behaves exactly as it did. A project that wants the check
+# adds one key; nothing infers an identity from the machine, because the value of
+# this check is that somebody DECLARED which identity this repo uses, and a
+# gate that guesses would just ratify whatever was already configured.
+# jq is already proven working by this point: this gate fails CLOSED on a missing
+# or broken jq long before check 1, so an empty read here means an absent key
+# rather than a silent parse failure.
+IDENTITY_EMAIL="$(jq -r '.identity.user_email // empty' "$PROJ/.claude/sdd.json" 2>/dev/null || true)"
+if [[ -n "$IDENTITY_EMAIL" ]]; then
+  # The exit status is carried: a git that cannot read its own config yields an
+  # empty value, and an empty value must not silently equal the declared one.
+  if ! ACTUAL_EMAIL="$(git -C "$PROJ" config user.email 2>/dev/null)"; then
+    ACTUAL_EMAIL=""
+  fi
+  if [[ "$ACTUAL_EMAIL" != "$IDENTITY_EMAIL" ]]; then
+    deny "commit gate [CM-IDENTITY]: this repository declares the git identity ${IDENTITY_EMAIL} in .claude/sdd.json, but git is configured to commit as ${ACTUAL_EMAIL:-<unset>}. Fix it with: git config user.email ${IDENTITY_EMAIL}"
   fi
 fi
 

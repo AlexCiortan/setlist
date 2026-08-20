@@ -34,7 +34,11 @@ documentation, never copied into instances.
   facts the framework records about its own machinery are nested blocks that
   sit after them, `plugin` being the first. New framework blocks append rather
   than reorder, so an instance's file grows by addition and every reader can
-  keep treating an absent block as "stamped before that block existed".
+  keep treating an absent block as "stamped before that block existed". The
+  `release` block (edition v1.7) is the second such block and follows the rule:
+  it appends after `plugin`, it carries only the model plus its marker fact, and
+  every reader treats an absent block as `{"model": "none"}` and says so rather
+  than inferring a model for an instance that never declared one.
 
 ## The mapping
 
@@ -56,7 +60,36 @@ documentation, never copied into instances.
 | `hooks/commit-gate.sh` | `.claude/hooks/commit-gate.sh` | always, byte-verbatim |
 | `hooks/close-gate.sh` | `.claude/hooks/close-gate.sh` | always, byte-verbatim |
 | `hooks/regrounding-hook.sh` | `.claude/hooks/regrounding-hook.sh` | always, byte-verbatim |
+| `git-hooks/pre-commit` | `.githooks/pre-commit` | always, byte-verbatim |
+| `git-hooks/pre-merge-commit` | `.githooks/pre-merge-commit` | always, byte-verbatim |
+| `git-hooks/pre-push` | `.githooks/pre-push` | always, byte-verbatim |
+| `git-hooks/setlist-hook-lib.sh` | `.githooks/setlist-hook-lib.sh` | always, byte-verbatim |
 | `docs-design/INDEX.md` | `docs/design/INDEX.md` | design_surface = yes |
+
+## Git config stamp.sh sets (edition v1.7, the enforcement boundary)
+
+Two settings, written to the target's `.git/config`, both required for the git
+hooks to be a boundary rather than a suggestion:
+
+- `core.hooksPath = .githooks`, so git runs the TRACKED hooks above rather than
+  `.git/hooks`, which is not cloned.
+- `merge.ff = false`, because a fast-forward merge fires **no git hook at all**.
+  Measured 2026-08-01: without it, 11 of 60 oracle cases walked unreviewed work
+  onto the trunk on the fast-forward path alone, past an otherwise airtight
+  boundary. The framework already merges spec branches with `--no-ff`, so this
+  makes the config agree with the protocol. The cost, named because git's own
+  error does not name it: the setting implies `--no-ff`, which git refuses in
+  combination with `--squash`, so `git merge --squash` is fatal in every stamped
+  instance. Use `git merge --ff --squash`, which `pre-commit` still gates.
+
+Both are per-clone, because `.git/config` is not cloned. `core.hooksPath` into a
+tracked directory NARROWS the per-clone gap (the hooks themselves are versioned
+and reviewable) rather than closing it, and the edition's Known limitations says
+exactly that rather than implying the hole is gone.
+
+`stamp.sh` also verifies the three git hooks are executable and DIES if any is
+not, because git skips a non-executable hook silently, which is a boundary that
+stops nothing and reports nothing.
 
 ## Created by stamp.sh without a template
 

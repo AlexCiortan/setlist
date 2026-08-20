@@ -26,25 +26,64 @@
 
 set -u
 
-deny() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' \
+# THE close ADVISES, IT DOES NOT VETO (design-advisory-means-advisory.md,
+# RATIFIED 2026-08-04).
+#
+# This function used to emit permissionDecision "deny" and hold a hard veto over
+# the session. It now emits "allow" and reports what it WOULD have decided in a
+# machine-readable field. The guarantee did not move with it: it stayed where
+# edition v1.7 put it, in git's own hooks, which run from git's internal state
+# after argument parsing and ref resolution and have nothing left to spell
+# around.
+#
+# WHY, in one number. Across four hostile legs on 2026-08-03 and 2026-08-04,
+# five of six BLOCKERs and three MAJORs were in parser code written that same
+# day to fix the previous leg: roughly a fifth of parser repairs introduced a
+# new defect. That rate is a property of changing a shell command parser at all,
+# not of any one change, and while the parsers could DENY, every one of those
+# defects was a release blocker. The README has told users this layer only warns
+# since v1.7; the leg filed a finding because it did not. The mechanism is the
+# half that moved.
+#
+# THE CONTRACT, frozen with the parsers:
+#   permissionDecision   ALWAYS "allow"
+#   setlistAdvisory      {gate, verdict: deny|allow, code, reason}
+#   systemMessage        the reason, again, because permissionDecisionReason is
+#                        documented as reaching the USER rather than the model
+#                        when the decision is allow, and the point of a warning
+#                        is that the session sees it.
+#
+# `setlistAdvisory.verdict` is evidence about THIS layer only. Every
+# guarantee-layer check binds to observed repository state instead, because a
+# guarantee that asked the parser whether the parser was right would be the
+# laundering defect this cycle is a record of, one layer up.
+advise() {
+  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":%s},"systemMessage":%s,"setlistAdvisory":{"gate":"close","verdict":"deny","code":%s,"reason":%s}}\n' \
+    "$(printf '%s' "$1" | jq -Rs .)" \
+    "$(printf 'setlist %s' "$1" | jq -Rs .)" \
+    "$(printf '%s' "$ADV_CODE" | jq -Rs .)" \
     "$(printf '%s' "$1" | jq -Rs .)"
-  # fail-open-ok: not a pass at all; exit 0 is how the hook protocol delivers
-  # the deny JSON emitted above.
+  # fail-open-ok: the gate is advisory by design as of 2026-08-04. It has
+  # reported its verdict and the session proceeds; the git hooks carry the
+  # guarantee.
   exit 0
 }
+deny() { advise "$1"; }
 
-# Deny with a fixed literal reason, for the paths where jq is unavailable to
+# Advise with a fixed literal reason, for the paths where jq is unavailable to
 # escape one. The text must contain no double quotes, backslashes, or newlines.
-deny_literal() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
-  # fail-open-ok: not a pass at all; exit 0 delivers the deny JSON above.
+advise_literal() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"close","verdict":"deny","code":"","reason":"%s"}}\n' "$1" "$1" "$1"
+  # fail-open-ok: advisory by design; see advise() above.
   exit 0
 }
+deny_literal() { advise_literal "$1"; }
 
 INPUT=$(cat)
 
-# Fail closed when jq is absent. The raw payload is scanned instead of the
+# Decide WITHOUT jq when it is absent, and report. Advisory since v1.7, so the
+# verdict is emitted with "allow" and the git hooks refuse. The raw payload is scanned instead of the
 # parsed command so that a missing jq gates the merges this hook governs
 # rather than every Bash call in the session.
 #
@@ -70,13 +109,53 @@ if ! command -v jq >/dev/null 2>&1; then
 elif ! printf '{}' | jq -e . >/dev/null 2>&1; then
   JQ_STATE=broken
 fi
+# AND THE REST OF THE TOOLCHAIN, for exactly the same reason (v1.7 gate, F2).
+#
+# The paragraph above states the rule in general terms and this file implemented
+# it for jq alone. awk, sed, tr and grep are equally load-bearing: the lexer that
+# produces CMD_NORM is awk, and when it fails the empty result is again
+# indistinguishable from "nothing to govern", so the applicability test below
+# matches nothing and the gate ALLOWS every merge in silence. Measured: break any
+# one of the four and this gate went from DENY to a silent exit 0.
+#
+# The probes RUN each tool and check its OUTPUT as well as its status, because a
+# tool that exits 0 and prints nothing breaks this gate exactly as thoroughly as
+# one that exits 127. The comparisons use bash builtins only, so the probe itself
+# never depends on the thing it is probing.
+TOOLCHAIN_BROKEN=""
+_probe="$(printf 'x\n' | awk '{ print }' 2>/dev/null)" || _probe=""
+[[ "$_probe" == "x" ]] || TOOLCHAIN_BROKEN="awk"
+if [[ -z "$TOOLCHAIN_BROKEN" ]]; then
+  _probe="$(printf 'x\n' | sed 's/x/y/' 2>/dev/null)" || _probe=""
+  [[ "$_probe" == "y" ]] || TOOLCHAIN_BROKEN="sed"
+fi
+if [[ -z "$TOOLCHAIN_BROKEN" ]]; then
+  _probe="$(printf 'x\n' | tr 'x' 'y' 2>/dev/null)" || _probe=""
+  [[ "$_probe" == "y" ]] || TOOLCHAIN_BROKEN="tr"
+fi
+if [[ -z "$TOOLCHAIN_BROKEN" ]]; then
+  _probe="$(printf 'x\n' | grep -E '^x$' 2>/dev/null)" || _probe=""
+  [[ "$_probe" == "x" ]] || TOOLCHAIN_BROKEN="grep"
+fi
+if [[ -n "$TOOLCHAIN_BROKEN" ]]; then
+  case "$INPUT" in
+    *merge*)
+      deny_literal "close gate [CG-NO-TOOLCHAIN]: $TOOLCHAIN_BROKEN is installed but does not work on this machine, so this gate cannot parse the command or verify the Closing report, the QA verdict and the inventory row, and would otherwise allow every merge unchecked. Run '$TOOLCHAIN_BROKEN --version' to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+      ;;
+    # fail-open-ok: the raw payload names no merge at all, so this is not a
+    # command this gate governs, and gating every Bash call would block the very
+    # command that repairs the broken tool.
+    *) exit 0 ;;
+  esac
+fi
+
 if [[ "$JQ_STATE" != "ok" ]]; then
   case "$INPUT" in
     *merge*)
       if [[ "$JQ_STATE" == "absent" ]]; then
-        deny_literal "close gate [CG-NO-JQ]: jq is not installed, so this gate cannot verify the Closing report, the QA verdict, or the inventory row, and would otherwise allow every merge unchecked. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+        deny_literal "close gate [CG-NO-JQ]: jq is not installed, so this gate cannot verify the Closing report, the QA verdict, or the inventory row, and would otherwise allow every merge unchecked. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
       fi
-      deny_literal "close gate [CG-JQ-BROKEN]: jq is installed but does not run on this machine, so this gate cannot verify the Closing report, the QA verdict, or the inventory row, and would otherwise allow every merge unchecked. Run jq --version to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+      deny_literal "close gate [CG-JQ-BROKEN]: jq is installed but does not run on this machine, so this gate cannot verify the Closing report, the QA verdict, or the inventory row, and would otherwise allow every merge unchecked. Run jq --version to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
       ;;
     # fail-open-ok: without a usable jq the raw payload does not mention
     # merging, so this is not a command the gate governs; gating every Bash call
@@ -91,7 +170,7 @@ fi
 if ! CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/null)"; then
   case "$INPUT" in
     *merge*)
-      deny_literal "close gate [CG-JQ-UNPARSED]: jq could not parse the payload this hook was given, so the command being run cannot be read and this gate cannot tell whether it merges into the trunk. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+      deny_literal "close gate [CG-JQ-UNPARSED]: jq could not parse the payload this hook was given, so the command being run cannot be read and this gate cannot tell whether it merges into the trunk. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
       ;;
     # fail-open-ok: the unparseable payload does not mention merging either, so
     # it is not a command this gate governs.
@@ -143,7 +222,75 @@ fi
 # failed to materialise, empty read as "nothing to govern", and absence read as
 # permission. Here the dependency was not missing or broken, it was STRICTER.
 # A gate whose lexer can fail must not treat lexer failure as a clean parse.
-CMD_NORM="$(printf '%s' "$CMD" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' | tr '\n\r' ';;' | tr -s '[:space:]' ' ' | awk '{
+# A HEREDOC BODY IS A QUOTING CONSTRUCT (1.1.0 hostile leg, F9). Identical
+# treatment to commit-gate.sh, which carries the full reasoning, and this gate
+# has the sharper consequence: a heredoc body line reading `git merge --no-ff
+# spec/0100-good was reverted` was judged as a real trunk merge, ran the
+# branch's close checks, and executed the project's whole gate_command for a
+# command that only writes a commit message. Removed before the join, because
+# after the join a message line is indistinguishable from a command.
+HEREDOC_AWK='
+# A HEREDOC OPENER IS ONLY AN OPENER OUTSIDE QUOTES AND OUTSIDE A COMMENT.
+#
+# The first cut of this pass (1.1.0, F9) matched << anywhere on the raw line and
+# it opened a BLOCKER the very next leg found: `git commit -m "use <<EOF heredoc
+# in the installer"` followed by a real `git merge --no-ff spec/0001-thing`
+# swallowed the merge as heredoc body and the gate allowed it in silence. The
+# oracle confirmed the merge really lands. It reproduced from a quoted message,
+# from a shell comment, and from ordinary prose, and the trunk audit called the
+# result a chore merge at exit 0.
+#
+# The justification that shipped with the broken version was the load-bearing
+# error and is worth quoting: "an unterminated heredoc drops everything after it
+# ... bash would refuse the same command as a syntax error, so nothing the gate
+# stops reading was ever going to run". That is false exactly where it matters.
+# Bash sees NO heredoc inside quotes or after #, and runs every line.
+#
+# So this tracks quote state across lines the way a shell does, skips a comment
+# that starts a word, and treats <<< as the herestring it is. Only a delimiter
+# found outside quotes opens a body.
+function hd_scan(s,   i, c, n, d, j, ch) {
+  n = length(s); i = 1
+  while (i <= n) {
+    c = substr(s, i, 1)
+    if (hdq == "") {
+      if (c == "\\") { i += 2; continue }
+      if (c == "'"'"'" || c == "\"") { hdq = c; i++; continue }
+      if (c == "#" && (i == 1 || substr(s, i-1, 1) ~ /[ \t;&|(]/)) return ""
+      if (c == "(" && substr(s, i+1, 1) == "(") { __d = 0; while (i <= n) { __x = substr(s, i, 1); if (__x == "(") __d++; else if (__x == ")") { __d--; if (__d == 0) { i++; break } } i++ } continue }
+      if (c == "<" && substr(s, i+1, 1) == "<") {
+        if (substr(s, i+2, 1) == "<") { i += 3; continue }
+        j = i + 2
+        if (substr(s, j, 1) == "-") j++
+        while (substr(s, j, 1) == " " || substr(s, j, 1) == "\t") j++
+        d = ""; ch = substr(s, j, 1)
+        if (ch == "'"'"'" || ch == "\"") {
+          j++
+          while (j <= n && substr(s, j, 1) != ch) { d = d substr(s, j, 1); j++ }
+        } else {
+          if (substr(s, j, 1) !~ /[A-Za-z_]/) return ""
+          while (j <= n && substr(s, j, 1) ~ /[A-Za-z0-9_]/) { d = d substr(s, j, 1); j++ }
+        }
+        if (d != "") return d
+        i = j; continue
+      }
+      i++
+    } else {
+      if (hdq == "\"" && c == "\\") { i += 2; continue }
+      if (c == hdq) hdq = ""
+      i++
+    }
+  }
+  return ""
+}
+{
+  if (hdin) { hdl = $0; sub(/^[ \t]+/, "", hdl); if (hdl == hddelim) hdin = 0; next }
+  hdd = hd_scan($0)
+  print $0
+  if (hdd != "") { hddelim = hdd; hdin = 1 }
+}'
+CMD_HD="$(printf '%s' "$CMD" | awk "$HEREDOC_AWK")"
+CMD_NORM="$(printf '%s' "$CMD_HD" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; else print }' | tr '\n\r' ';;' | tr -s '[:space:]' ' ' | awk '{
   out = ""; q = ""; buf = ""
   n = length($0)
   for (i = 1; i <= n; i++) {
@@ -208,7 +355,20 @@ CMD_NORM="$(printf '%s' "$CMD" | awk '{ if (sub(/\\$/, "")) printf "%s", $0; els
   if (q != "") { out = out " @@UNTERMINATED@@" }
   print out
 }')"
-GIT_OPTS='( +-{1,2}[A-Za-z][^ ]*( +[^- ][^ ]*)?)*'
+# ONLY SOME GLOBAL OPTIONS TAKE A SEPARATE VALUE (1.1.0 leg, third run).
+#
+# This used to allow ANY option to swallow the next non-dash word, so the option
+# run ate the SUBCOMMAND itself and any later bare word could satisfy the
+# applicability test. `git --no-pager grep -n merge -- src` was therefore judged
+# as a trunk merge and DENIED with CG-UNNAMEABLE-REF, telling the operator to
+# author a Closing report for a grep. `git --no-pager log --grep merge` did the
+# same. Agents in this harness write `git --no-pager ...` constantly.
+#
+# The subcommand is the first NON-OPTION word after git, so only the options
+# that genuinely take a separate argument may consume one. The attached spellings
+# (`--git-dir=x`, `-c k=v` written as one word) still match the generic branch,
+# which is why that branch keeps no value clause at all.
+GIT_OPTS='( +(-[cC] +[^ ]+|--(exec-path|git-dir|work-tree|namespace|super-prefix|config-env|attr-source) +[^ ]+|-{1,2}[A-Za-z][^ ]*))*'
 
 # THE MARKER IS NOW READ, and until 2026-07-28 it was not.
 #
@@ -270,7 +430,7 @@ SDD_JSON="$PROJ/.claude/sdd.json"
 # multi-document case; nothing else here can see it. The object test rejects the
 # array case. Both hooks carry this, because both read the trunk from it.
 if ! jq -e -s 'length == 1 and (.[0] | type == "object")' "$SDD_JSON" >/dev/null 2>&1; then
-  deny_literal "close gate [CG-SDD-SHAPE]: .claude/sdd.json is not a single JSON OBJECT (it does not parse, or it is an array, or it contains more than one document), so this gate cannot read the trunk name and cannot tell whether this merge lands on the trunk. It would otherwise allow every merge unchecked. Fix the file (jq -s . .claude/sdd.json shows both the syntax and how many documents it holds), then retry. Gates fail closed by design."
+  deny_literal "close gate [CG-SDD-SHAPE]: .claude/sdd.json is not a single JSON OBJECT (it does not parse, or it is an array, or it contains more than one document), so this gate cannot read the trunk name and cannot tell whether this merge lands on the trunk. It would otherwise allow every merge unchecked. Fix the file (jq -s . .claude/sdd.json shows both the syntax and how many documents it holds), then retry. Gates report their verdict and PERMIT: advisory since v1.7, so this warns and the git hooks are what refuse."
 fi
 
 # The trunk branch name is recorded in sdd.json at stamp or upgrade time
@@ -294,7 +454,7 @@ fi
 # and guessing "main" over a stated intention would govern a branch the project
 # did not name.
 TRUNK="$(jq -r 'if (.trunk == null) then "main" elif ((.trunk | type) == "string" and (.trunk | length) > 0) then .trunk else "" end' "$SDD_JSON" 2>/dev/null)" # fail-open-ok: an unreadable value yields the empty string, which the check on the next line refuses
-[[ -n "$TRUNK" ]] || deny "close gate [CG-TRUNK-INVALID]: .claude/sdd.json declares a "trunk" that is not a non-empty string, so the trunk this project protects cannot be determined and every trunk check would silently pass. Set "trunk" to your trunk branch name (for example "main" or "master"), or remove the key to accept the default."
+[[ -n "$TRUNK" ]] || deny "close gate [CG-TRUNK-INVALID]: .claude/sdd.json declares a \"trunk\" that is not a non-empty string, so the trunk this project protects cannot be determined and every trunk check would silently pass. Set \"trunk\" to your trunk branch name (for example \"main\" or \"master\"), or remove the key to accept the default."
 
 # THE TRUNK VALUE MUST NAME A LOCAL BRANCH, not merely be a non-empty string
 # (F1 of the second 1.0.8 leg). The check added earlier today required a
@@ -526,9 +686,65 @@ strip_wrappers() { # strip_wrappers <segment> -> echoes the segment, unwrapped
 # The separator is KEPT, because it says whether the previous segment SUCCEEDED
 # (F7 of the 1.0.8 leg). Only `&&` implies success. Order matters: && before a
 # single &, || before a single |.
-SEGMENTS="$(printf '%s\n' "$CMD_NORM" | awk '{ gsub(/>&/, ">@@FD@@"); gsub(/<&/, "<@@FD@@"); gsub(/&&/, "\n@@AND@@ "); gsub(/\|\|/, "\n@@SEQ@@ "); gsub(/[;|()&]/, "\n@@SEQ@@ "); print }')"
+# A PAREN IS GROUPING, NOT SEQUENCING (1.1.0 hostile leg, F2). `(` and `)` were
+# swept into the same bucket as `;`, `|` and `&`, so a paren adjacent to `&&`
+# emitted a segment consisting of the bare marker, the honored `&&` was lost,
+# and the branch fell through to the UNKNOWN sentinel. The result was a DENY on
+# `git checkout spec/0002-other && (git merge --no-ff spec/0001-thing)`, an
+# ordinary feature-branch merge this gate does not govern, carrying a reason
+# about a shorthand the command does not contain. The oracle confirmed the
+# trunk held and HEAD ended on the feature branch, so the gate was confidently
+# wrong rather than conservatively cautious.
+#
+# Grouping gets its own marker because it means something different: `;` and `|`
+# and `&` say nothing about whether the previous command SUCCEEDED, which is
+# what F7's UNKNOWN sentinel is for, while a paren says nothing at all. Sweeping
+# them together made punctuation weaken a guarantee the separator had given.
+SEGMENTS="$(printf '%s\n' "$CMD_NORM" | awk '{ gsub(/>&/, ">@@FD@@"); gsub(/<&/, "<@@FD@@"); gsub(/&&/, "\n@@AND@@ "); gsub(/\|\|/, "\n@@SEQ@@ "); gsub(/[()]/, "\n@@GRP@@ "); gsub(/[;|&]/, "\n@@SEQ@@ "); print }')"
 
-CUR_BRANCH="$(git -C "$PROJ" branch --show-current 2>/dev/null || true)"
+# A BRANCH NAME IS NOT A STRING, IT IS A REF (1.1.0 hostile leg, second run).
+#
+# On a case-insensitive filesystem `refs/heads/main` is one loose file, so
+# `git checkout MAIN` resolves, HEAD attaches to that same ref, and this gate
+# recorded CUR_BRANCH=MAIN. The trunk test below is a byte comparison against
+# `main`, so it was false, the gate took its "ordinary feature work" exit and
+# allowed the merge in silence while the trunk really moved. Measured on this
+# machine (APFS, CASE-INSENSITIVE) at every layer, not argued from the code.
+#
+# LOCKSTEP: setlist-hook-lib.sh carries the same function as slh_canonical_branch
+# and its header carries the full reasoning, including why comparing OIDs instead
+# would deny all work on a freshly cut feature branch.
+canonical_branch() { # canonical_branch <name> -> git's stored spelling of it
+  local name="$1" ci
+  [[ -n "$name" ]] || return 0
+  if git -C "$PROJ" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null \
+     | grep -qxF -- "$name"; then
+    printf '%s' "$name"; return 0
+  fi
+  ci="$(git -C "$PROJ" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null \
+        | awk -v n="$name" 'tolower($0) == tolower(n) { print; exit }')" # fail-open-ok: no match leaves this empty and the name is returned unchanged, which is the behaviour for any branch that is not a case variant
+  if [[ -n "$ci" ]]; then printf '%s' "$ci"; return 0; fi
+  printf '%s' "$name"
+}
+
+# BOTH SIDES, not just the operand. The first repair of this defect (earlier the
+# same day) canonicalised the checkout OPERAND and left these two raw, so
+# `git checkout MAIN` in an EARLIER tool call still disabled this gate for every
+# later command, and `{"trunk":"MAIN"}` did it with HEAD untouched. A comparison
+# is only as normalised as its weaker side.
+# GIT IS A DEPENDENCY, AND ITS VERSION IS PART OF IT (leg F5).
+# This read `git branch --show-current`, which arrived in git 2.22 (2019). Below
+# that it exits 129, this read empty, the empty value never equalled the trunk,
+# and this gate took its ordinary-feature-work exit in SILENCE: zero bytes, no
+# code, no reason. That is the one thing the fail-open rule sixty lines above
+# forbids, since absence reads as permission, and git was the only dependency
+# never held to it.
+# `symbolic-ref --quiet --short HEAD` predates the floor and is what the git-hook
+# layer has always used. Measured identical on current git in both cases that
+# matter: the branch name on a branch, empty when detached.
+CUR_BRANCH="$(git -C "$PROJ" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" # fail-open-ok: a detached HEAD yields empty here exactly as it did before, and a detached HEAD is not the trunk
+CUR_BRANCH="$(canonical_branch "$CUR_BRANCH")"
+TRUNK="$(canonical_branch "$TRUNK")"
 MERGED_REFS=""
 UNNAMEABLE=""
 AMBIGUOUS_SPEC=""
@@ -541,6 +757,14 @@ UNRESOLVED_TARGET=""
 # A checkout whose success is not implied by the separator (F7). The branch it
 # would move to is held here until the NEXT segment says how it was reached.
 PENDING_BRANCH=""
+# A separator that arrived on a segment of its own, because punctuation sat next
+# to it. Carried to the next segment that actually holds a command (F2).
+HELD_SEP=""
+# Has an earlier segment on THIS line already switched branches, and if so what
+# did it switch away from? A later `-` means that origin rather than the
+# pre-command reflog (F11).
+SWITCHED_ONLINE=""
+ORIGIN_BRANCH=""
 
 while IFS= read -r seg; do
   seg="$(printf '%s' "$seg" | sed -e 's/^ *//' -e 's/ *$//')"
@@ -565,11 +789,33 @@ while IFS= read -r seg; do
   # other branch". `&&` is left exact rather than swept into the same bucket,
   # because denying `git checkout feat/x && git merge ...` would break an
   # ordinary workflow: if that checkout fails the merge never runs at all.
+  #
+  # The marker is matched WITH OR WITHOUT its trailing space, because the trim
+  # at the top of this loop has already removed it from a marker-only segment.
+  # That mismatch is the mechanical cause of F2: the case fell through, SEP
+  # stayed empty, and an honored `&&` was read as no separator at all.
   SEP=""
+  MARKER_ONLY=""
   case "$seg" in
     "@@AND@@ "*) SEP=AND; seg="${seg#@@AND@@ }" ;;
+    "@@AND@@")   SEP=AND; seg=""; MARKER_ONLY=1 ;;
     "@@SEQ@@ "*) SEP=SEQ; seg="${seg#@@SEQ@@ }" ;;
+    "@@SEQ@@")   SEP=SEQ; seg=""; MARKER_ONLY=1 ;;
+    "@@GRP@@ "*) seg="${seg#@@GRP@@ }" ;;
+    "@@GRP@@")   seg=""; MARKER_ONLY=1 ;;
   esac
+  # A segment that is nothing but punctuation carries no command, so it must not
+  # consume a pending branch. A real separator among it is REMEMBERED and handed
+  # to the next segment that does carry one; grouping is remembered as nothing,
+  # which is what makes `X && (Y)` and `(X) && Y` behave like `X && Y`.
+  if [[ -n "$MARKER_ONLY" ]]; then
+    if [[ -n "$SEP" && -z "$HELD_SEP" ]]; then HELD_SEP="$SEP"; fi
+    continue
+  fi
+  if [[ -n "$HELD_SEP" ]]; then
+    SEP="$HELD_SEP"
+    HELD_SEP=""
+  fi
   if [[ -n "$PENDING_BRANCH" ]]; then
     if [[ "$SEP" == "AND" ]]; then
       CUR_BRANCH="$PENDING_BRANCH"
@@ -672,10 +918,48 @@ while IFS= read -r seg; do
     # word after them is a branch by construction and no lookup can confirm it
     # (it does not exist yet). Without this, creating a branch would land in
     # the unresolvable case below and fail closed on ordinary work.
+    #
+    # AND `git switch` HAS ITS OWN CREATION FLAGS (1.1.0 leg, third run). This
+    # list held only checkout's spellings, so `git switch -c feat/x && git merge
+    # --no-ff spec/0001-thing` fell through to the switch path, `refs/heads/feat/x`
+    # did not exist yet, the operand became the UNKNOWN sentinel and the merge was
+    # DENIED as an unresolved switch. The `git checkout -b` spelling of the same
+    # command is allowed, and the oracle confirms the trunk holds for both, so two
+    # spellings of one workflow disagreed and the newer one was the broken one.
+    # `switch` is the spelling git's own documentation now recommends.
+    #
+    # SCANNED ONLY AFTER THE SUBCOMMAND, and that is not tidiness (1.1.0 leg,
+    # fourth run, F15). Adding switch's `-c`/`-C` to this list collided with
+    # GIT'S OWN GLOBAL OPTIONS, which are spelled identically and sit BEFORE the
+    # subcommand: `git -C . checkout main && git merge --no-ff spec/0001-thing`
+    # read `.` as a newly created branch, recorded a switch to it, judged the
+    # merge as ordinary feature work and ALLOWED it, while the same command
+    # without `-C .` denies. A fix for one spelling opening a hole in another is
+    # this file's most repeated failure, and here it was mine from the same day.
     NEWB="$(printf '%s' "$SEG_HEAD" | awk '{
-      for (i = 1; i < NF; i++)
-        if ($i == "-b" || $i == "-B" || $i == "--orphan") { print $(i + 1); exit }
+      f = 0
+      for (i = 1; i < NF; i++) {
+        if (f && ($i == "-b" || $i == "-B" || $i == "--orphan" ||
+                  $i == "-c" || $i == "-C" || $i == "--create" || $i == "--force-create")) { print $(i + 1); exit }
+        if ($i == "checkout" || $i == "switch") f = 1
+      }
     }')"
+
+    # A CREATED BRANCH NAME MUST BE A LITERAL (1.1.0 leg, fourth run, F16). The
+    # creation branch above trusts the word after -b/-c verbatim BECAUSE no lookup
+    # can confirm a branch that does not exist yet, and that reasoning holds only
+    # for a name the gate can actually read. `git checkout -B $V && git merge
+    # --no-ff spec/0001-thing` recorded a switch to the literal text `$V`, which is
+    # not the trunk by string comparison, so the merge read as ordinary feature
+    # work and was allowed. At run time $V may well be the trunk.
+    #
+    # An unreadable creation target becomes the UNKNOWN sentinel, which is the
+    # same fail-closed route an unresolvable switch already takes.
+    if [[ -n "$NEWB" ]]; then
+      case "$NEWB" in
+        *'$'*|*'`'*|*'@@Q@@'*|*'*'*|*'?'*|*'{'*) NEWB="$UNKNOWN_BRANCH" ;;
+      esac
+    fi
 
     # TWO OR MORE OPERANDS IS A PATHSPEC CHECKOUT, separator or not (F7 of the
     # third leg, and the FOURTH spelling of this same class). The block above
@@ -704,13 +988,26 @@ while IFS= read -r seg; do
       }
       print n
     }')"
-    if [[ "${SEG_OPERANDS:-0}" -gt 1 ]]; then
+    if [[ -z "$NEWB" && "${SEG_OPERANDS:-0}" -gt 1 ]]; then
       # fail-open-ok: not a branch switch at all, so the branch this gate is
       # standing on is unchanged and any later merge is still judged against it.
       # Recording no switch is the FAIL-CLOSED direction here: it leaves
       # CUR_BRANCH as the trunk rather than moving it somewhere unguarded.
       continue
     fi
+    # THE `-z "$NEWB"` GUARD IS THE FIX, and the comment above it was already
+    # asserting it (1.1.0 leg, third run). It said "-b/-B/--orphan are handled
+    # above and return before this, so a creating checkout with a start point is
+    # not miscounted". They do NOT return: NEWB is assigned and execution falls
+    # straight into the count. So `git checkout -b feat/z main` counted feat/z
+    # and main as two operands, was classified as a pathspec checkout, and the
+    # creation was DISCARDED; the following merge was then judged against the
+    # trunk and denied with CG-SPEC-NOT-AUTHORED, a reason asserting the merge
+    # carries unreviewed changes onto the trunk when it cannot reach the trunk
+    # at all. The one-operand spelling was allowed, which is the control.
+    #
+    # A creating checkout names its branch explicitly, so the operand count says
+    # nothing about it: a start point is an ordinary second operand there.
 
     if [[ -z "$NEWB" ]]; then
       NEWB="$(printf '%s' "$SEG_HEAD" | awk '{
@@ -735,13 +1032,37 @@ while IFS= read -r seg; do
           # a person and an agent both go back. This hook runs BEFORE the
           # command, so `@{-1}` still resolves to the pre-command previous
           # branch, which is exactly what `-` is about to become.
-          NEWB="$(git -C "$PROJ" rev-parse --abbrev-ref '@{-1}' 2>/dev/null || true)" # fail-open-ok: an unresolvable previous branch is converted to the UNKNOWN sentinel on the next line, which makes any later merge fail closed rather than read as "some other branch"
+          #
+          # THAT JUSTIFICATION HOLDS FOR ONE CHECKOUT ONLY (1.1.0 hostile leg,
+          # F11). When an EARLIER segment of the same line already switched, `-`
+          # at run time means THAT segment's origin, not the pre-command
+          # reflog, and the gate read the stale one:
+          #
+          #     git checkout spec/0002-other && git checkout - && git merge --no-ff spec/0001-thing
+          #
+          # resolved `-` to the pre-command @{-1} (a spec branch), concluded the
+          # merge ran on feature work, and exited 0 in silence. Run for real,
+          # `-` returned to main and the merge landed on the TRUNK: measured,
+          # main moved and the single-command control denies against the same
+          # fixture. The suite tests this family but pins @{-1} to the trunk
+          # first, asserting the one configuration in which the gate is right.
+          #
+          # The gate already knows the answer, so it uses it rather than asking
+          # the reflog a question that is no longer about this command.
+          if [[ -n "$SWITCHED_ONLINE" ]]; then
+            NEWB="$ORIGIN_BRANCH"
+          else
+            NEWB="$(git -C "$PROJ" rev-parse --abbrev-ref '@{-1}' 2>/dev/null || true)" # fail-open-ok: an unresolvable previous branch is converted to the UNKNOWN sentinel on the next line, which makes any later merge fail closed rather than read as "some other branch"
+          fi
           [[ -n "$NEWB" ]] || NEWB="$UNKNOWN_BRANCH"
           ;;
         *)
           if [[ "$IS_SWITCH" -eq 0 ]]; then
             if git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$NEWB" >/dev/null 2>&1; then
-              : # a real local branch: the switch is real, record it
+              # A real local branch: the switch is real, record it under the
+              # name GIT stores rather than the one the command typed, or a case
+              # variant of the trunk is tracked as some other branch entirely.
+              NEWB="$(canonical_branch "$NEWB")"
             elif [[ -e "$PROJ/$NEWB" || -e "$NEWB" ]]; then
               # An existing path and not a branch: this discards changes and
               # switches nothing. `.` lands here, and so does any file or
@@ -774,6 +1095,10 @@ while IFS= read -r seg; do
             # and returns before this.
             if ! git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$NEWB" >/dev/null 2>&1; then
               NEWB="$UNKNOWN_BRANCH"
+            else
+              # Same canonicalisation as the checkout path: `git switch MAIN`
+              # reaches the trunk exactly as `git checkout MAIN` does.
+              NEWB="$(canonical_branch "$NEWB")"
             fi
           fi
           ;;
@@ -781,7 +1106,14 @@ while IFS= read -r seg; do
     fi
     # Held, not applied. The next segment's separator decides whether this
     # checkout may be believed; see the loop head.
-    [[ -n "$NEWB" ]] && PENDING_BRANCH="$NEWB"
+    if [[ -n "$NEWB" ]]; then
+      PENDING_BRANCH="$NEWB"
+      # Where this switch came FROM, which is what a later `-` on the same line
+      # actually means at run time (F11). Recorded here rather than derived
+      # later, because by then CUR_BRANCH has already moved.
+      ORIGIN_BRANCH="$CUR_BRANCH"
+      SWITCHED_ONLINE=1
+    fi
     continue
   fi
 
@@ -953,6 +1285,24 @@ while IFS= read -r seg; do
     # ordinary no-op syncs. Harm is unreviewed work ARRIVING; a merge that
     # brings nothing cannot do it.
     if git -C "$PROJ" merge-base --is-ancestor "$SEG_SHA" "$TRUNK" 2>/dev/null; then
+      # AND THE EXEMPTION HAS TO CLEAR THE SPEC-SHAPED FLAG, or it applies to
+      # every branch name EXCEPT the ones it was written for (1.1.0 leg, third
+      # run). SEG_LOOKS_SPEC is set above from the word's SHAPE, before anything
+      # is resolved. This `continue` then skipped the assignment of SEG_REF, and
+      # the post-loop refusal at the bottom fired on the stale flag, so
+      # re-merging an already-closed spec branch was denied with
+      # CG-UNNAMEABLE-REF: a message saying the gate could not resolve the
+      # branch, produced by the code path that had just resolved it and found it
+      # an ancestor. git itself prints "Already up to date." for the same
+      # command.
+      #
+      # There was no user remedy: the refusal fires before any close check, so
+      # adding a Closing report cannot clear it, and the only escapes were
+      # deleting the branch or removing the hook. An already-merged branch whose
+      # name is NOT spec-shaped was correctly allowed throughout, which is the
+      # control that shows this is a flag-clearing bug and not the rule.
+      SEG_LOOKS_SPEC=""
+      WORD_LOOKS_SPEC=""
       continue
     fi
     # WHICH ref at this commit is the merge being judged?
@@ -1102,7 +1452,15 @@ SEGEOF
 # conditions are about a specific branch's artifacts, so with no branch there
 # is nothing to check and the gate refuses rather than guessing.
 if [[ -n "$UNRESOLVED_TARGET" ]]; then
-  deny "close gate [CG-UNRESOLVED-SWITCH]: this command switches branches by a shorthand this gate cannot resolve (git checkout - or @{-1} with no previous branch recorded), so it cannot establish which branch [$UNRESOLVED_TARGET] would run on, and cannot tell whether it merges into the trunk. Name the branch you are switching to."
+  # THE MESSAGE HAS TO NAME THE ACTUAL CAUSE (1.1.0 hostile leg, F2). This said
+  # "switches branches by a shorthand this gate cannot resolve (git checkout -
+  # or @{-1} ...)" for EVERY route to the sentinel, including the commonest one,
+  # where the branch is named in full and the problem is the SEPARATOR: after
+  # `;`, `|` or `||` the shell does not know the checkout succeeded, so the
+  # branch a later merge runs on is genuinely unknown. An operator reading the
+  # old text looked for a shorthand that was not in their command and had
+  # nothing to act on. Both causes are named, and the remedy for each is given.
+  deny "close gate [CG-UNRESOLVED-SWITCH]: this gate cannot establish which branch [$UNRESOLVED_TARGET] would run on, so it cannot tell whether it merges into the trunk. Either the switch used a shorthand with no previous branch recorded (git checkout - or @{-1}), in which case name the branch in full; or the switch was reached by a separator that does not imply it succeeded (; or | or ||), in which case a failed checkout leaves the shell on the trunk and the merge lands there. Join them with && so the merge runs only if the switch did, or run the switch as its own command first."
 fi
 
 # Two different specs on one commit. The gate cannot establish whose close it
@@ -1211,13 +1569,44 @@ for MERGED_REF in $MERGED_REFS; do
     #
     # Fenced content is stripped ONCE here rather than in each check, so the
     # four cannot drift apart the way the report checker's three readers did.
-    SPEC_TEXT="$(printf '%s\n' "$SPEC_TEXT" | awk '
-      /^[[:space:]]*```/ { fence = !fence; next }
-      !fence
-    ')"
+    #
+    # ...BUT A PASTED QA REPORT IS NOT A TEMPLATE QUOTE (1.1.0 hostile leg, F6),
+    # and the first cut of this stripper could not tell them apart. It dropped
+    # EVERY fenced span, and Appendix C's own field is "QA Pass 1 report (pasted
+    # verbatim)". Pasting a verifier's output inside a fence is what "verbatim"
+    # means for tool output, so the rule aimed at a quoted template was refusing
+    # the exact population the edition tells authors to paste. Measured: two spec
+    # files differing by two lines, both of them fences, one merged and one was
+    # refused at all three layers, and the audit's copy is new in 1.1.0 so an
+    # upgrade from 1.0.9 condemned history that merged legitimately.
+    #
+    # The narrowed rule, and the reason it is not merely tighter but RIGHT: a
+    # fenced block is a TEMPLATE QUOTE exactly when its own body carries a
+    # Closing-report section heading. That is what leg 5's F7 spec had ("here is
+    # the template I am going to fill in later") and it is what a pasted
+    # verifier report never has. The rule is self-consistent: a heading can never
+    # reach the check from inside a fence, because carrying one is precisely what
+    # gets a block dropped.
+    #
+    # What it deliberately still allows: a real "## Closing report" heading
+    # outside any fence, with the fields pasted below it. That author has MADE
+    # the claim, and checking a claim is made is all this gate has ever done.
+    #
+    # LOCKSTEP: setlist-hook-lib.sh and trunk-audit.sh carry this same program
+    # byte for byte and the suite asserts all three are identical. Narrowing one
+    # alone is leg 5's F8, where a gate and its only backstop went blind together.
+    TEMPLATE_FENCE_AWK='function __f(k,  i){ if(k) for(i=1;i<=n;i++) print b[i]; n=0 } { __l=$0; sub(/\r$/,"",__l); sub(/^[[:space:]]*/,"",__l); if (incmt) { __cb[++__cn]=$0; if (index(__l, "-->")) { incmt = 0; __cn=0 } next } if (!fence && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; __cn=0; __cb[++__cn]=$0; next } __c=substr(__l,1,1); if ((__c=="`" || __c=="~") && $0 ~ /^ ? ? ?[`~]/) { __m=0; while(substr(__l,__m+1,1)==__c) __m++; __raw=substr(__l,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { if (!fence) { fence=1; fch=__c; flen=__m; n=0; t=0; b[++n]=$0; next } else if (__c==fch && __m>=flen && __r=="") { fence=0; b[++n]=$0; __f(!t); next } } } if (fence) { b[++n]=$0; if($0 ~ /^ ? ? ?#+[ \t]+Closing report/) t=1; next } print } END { if(fence) __f(!t); if(incmt) for(__ci=1;__ci<=__cn;__ci++) print __cb[__ci] }'
+    SPEC_TEXT="$(printf '%s\n' "$SPEC_TEXT" | awk "$TEMPLATE_FENCE_AWK")"
+    # LIVE TEXT for the spec-file field readers below too (F6, plugin-2.0.0 leg).
+    # The diagram-field reader read this SPEC_TEXT raw while its sibling STATUS-row
+    # reader stripped it, so a fenced "Architecture diagram:" example satisfied the
+    # mandatory field. Assigned here, above the first consumer, so the diagram check
+    # and the STATUS-row check share the one frozen reader. LOCKSTEP with setlist-
+    # hook-lib.sh and trunk-audit.sh; the suite compares all three byte-identical.
+    SLH_LIVE_TEXT_AWK='{ __l=$0; sub(/\r$/,"",__l); __para=PARA; PARA=0; if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (inhtml) { if (index(tolower(__l), htag)) inhtml = 0; next } if (!fence) { while ((__ci=index(__l, "<!--")) > 0) { __after=substr(__l, __ci+2); __cj=index(__after, "-->"); if (__cj > 0) { __l = substr(__l, 1, __ci-1) substr(__after, __cj+3) } else { __l = substr(__l, 1, __ci-1); incmt = 1; break } } } __t=__l; __d=0; while (1) { __save=__t; sub(/^ ? ? ?/,"",__t); if (__t ~ /^>/) { sub(/^> ?/,"",__t); __d++ } else { __t=__save; break } } if (fence) { if (__d==fbq && !(__t ~ /^(    |\t)/)) { __x=__t; sub(/^[[:space:]]*/,"",__x); __c=substr(__x,1,1); if (__c==fch) { __m=0; while(substr(__x,__m+1,1)==__c) __m++; __raw=substr(__x,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=flen && __r=="") fence=0 } } next } __hx=tolower(__t); sub(/^[[:space:]]*/,"",__hx); if (__hx ~ /^<(script|style|textarea|pre)([ \t>]|$)/) { if (__hx ~ /^<script/) htag="</script>"; else if (__hx ~ /^<style/) htag="</style>"; else if (__hx ~ /^<textarea/) htag="</textarea>"; else htag="</pre>"; if (index(__hx, htag)) { next } inhtml=1; next } __ic=__t; __peeled=0; while (1) { __s2=__ic; sub(/^ ? ? ?/,"",__ic); if (__ic ~ /^([-*+]|[0-9]+[.)])[ \t]/) { sub(/^([-*+]|[0-9]+[.)]) ?/,"",__ic); __peeled=1 } else if (__ic ~ /^>/) { sub(/^> ?/,"",__ic); __peeled=1 } else { __ic=__s2; break } } if (__peeled && __ic ~ /^(    |\t)/) { next } if (__d>0 && __t ~ /^(    |\t)/) { next } if (__d==0 && __t ~ /^(    |\t)/) { if (!__para) next } __o=__t; sub(/^([-*+]|[0-9]+[.)])[[:space:]]+/,"",__o); sub(/^[[:space:]]*/,"",__o); __c=substr(__o,1,1); if (__c=="`" || __c=="~") { __m=0; while(substr(__o,__m+1,1)==__c) __m++; __raw=substr(__o,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { fence=1; fch=__c; flen=__m; fbq=__d; next } } print __l; if (__l ~ /^[[:space:]]*$/) { intable=0 } else if (__d==0) { __ps=__t; sub(/^[[:space:]]*/,"",__ps); if (__ps ~ /^\|?[ \t|:-]*-[ \t|:-]*$/ && index(__ps,"|")) { intable=1 } else if (index(__ps,"|") && intable) { } else { intable=0; if (!(__ps ~ /^#+([ \t]|$)/) && !(__ps ~ /^[-=]+[ \t]*$/) && !(__ps ~ /^[*_]+[ \t]*$/)) PARA=1 } } }'
 
     # The Closing report section exists (Appendix C: "## Closing report ...").
-    if ! printf '%s\n' "$SPEC_TEXT" | grep -qE '^#+[[:space:]]*Closing report'; then
+    if ! printf '%s\n' "$SPEC_TEXT" | grep -qE $'^ {0,3}#{1,6}[ \t]+Closing report'; then
       deny "close gate [CG-NO-CLOSING-REPORT]: the spec file for $MERGED_REF has no Closing report section on the branch; complete it, commit it to the branch, then merge."
     fi
 
@@ -1228,35 +1617,112 @@ for MERGED_REF in $MERGED_REFS; do
     # line. The bare "QA Pass 2" test ended the block at the first sentence of
     # QA-1 prose that merely cross-referenced QA Pass 2, truncating the verdict
     # out of the block and denying a compliant merge in the field.
-    QA_BLOCK="$(printf '%s\n' "$SPEC_TEXT" | awk '
-      /^[-*+[:space:]]*QA Pass 1 report/ { inqa = 1 }
-      /^[-*+[:space:]]*QA Pass 2/        { inqa = 0 }
-      inqa')"
-    # A VERDICT SITS AT THE END OF ITS LINE (F5 of the third leg). This matched
-    # PASS, PARTIAL or FAIL ANYWHERE in the QA block, so ordinary prose satisfied
-    # it: "the browser tests PASS on my machine but I could not run the mobile
-    # ones" is not a pasted verdict, and neither is a sentence explaining why a
-    # criterion could not be judged.
+    # THE VERDICT IS A STRUCTURE, NOT PROSE (2026-08-05 leg, F5).
     #
-    # Appendix C's shape is `criterion N: VERDICT`, one per line, so the verdict
-    # ends its line. Requiring that is narrow enough to reject prose and wide
-    # enough for every real shape: a bare `PASS`, `- criterion 2: FAIL.`, and a
-    # trailing parenthesis all still pass. The false-denial direction is the
-    # dangerous one here, which is why this is anchored at the END rather than
-    # tightened into a full line format nobody actually writes.
-    if ! printf '%s\n' "$QA_BLOCK" | grep -qE '(^|[^A-Za-z])(PASS|PARTIAL|FAIL)[[:space:]]*[.);:]?[[:space:]]*$'; then
-      deny "close gate [CG-NO-QA-VERDICT]: the Closing report for $MERGED_REF carries no pasted QA Pass 1 PASS/PARTIAL/FAIL block; run QA Pass 1, paste the report, commit it to the branch, then merge."
+    # The rule this replaces was a regular expression over English, and it was
+    # closed by one line: `Criteria that did not PASS: 2, 5 and 7.` A sentence
+    # saying the OPPOSITE of a pass satisfied the gate, the git hook and the
+    # trunk audit, and the merge landed. Three siblings did the same, including
+    # `Blocked on staging: FAIL to reach the host, so QA Pass 1 never ran.`
+    #
+    # The previous comment here defended a boundary (tallies are not verdicts)
+    # in prose, which was the tell: a pattern wide enough to admit the shapes
+    # real verifiers emit is wide enough to admit a sentence containing one.
+    # Widening it again would have been the sixth repair of the same anchor.
+    #
+    # So the language got smaller instead. Part 6 requires a fenced qa-pass-1
+    # block whose every line is `<criterion>: PASS|PARTIAL|FAIL` with a
+    # space-free criterion. The payload above is not refused there, it is
+    # UNWRITEABLE: the criterion field admits no spaces and the verdict field
+    # admits three tokens. The tally boundary is unexpressible for the same
+    # reason rather than defended by hand.
+    #
+    # A non-verdict line inside the block is a REFUSAL, not a skip, because
+    # skipping is how a sentence gets back in. The pasted verifier report stays
+    # required beside it and is read by humans only; no gate parses it now.
+    #
+    # SCOPED (2.0.0 leg, F8/F3). The previous comment here claimed the block's
+    # content cannot contain a fence delimiter "which is what keeps this reader
+    # trivial: no nesting and no info-string rule", and that sentence was the
+    # defect: the trivial reader matched the first qa-pass-1 opener ANYWHERE,
+    # so a block nested inside a pasted verifier report satisfied the check
+    # (F8, and the trunk audit was blind in lockstep) while an illustrative
+    # shape-quote in another section poisoned a real verdict (F3). Third
+    # fence-vs-QA-block collision, so the fix is structural: the reader tracks
+    # fences the way the template stripper does, reads headings only at fence
+    # depth zero, and the block that decides is the LAST qa-pass-1 fence at
+    # depth zero inside a Closing report section ("last wins" is the diagram
+    # field's revision convention). An opener inside another fence is content.
+    # The suite asserts the three layers agree BY OUTCOME over a corpus,
+    # beside the byte-identity lockstep.
+    #
+    # A HEADING IS WHAT MARKDOWN SAYS A HEADING IS (second 2.0.0 leg, F1): at
+    # most three spaces of indent, one to six hashes, then space, tab or end
+    # of line. The first cut of the scoping entered its heading branch on
+    # "first char is #" after stripping indentation, so an issue reference
+    # (#1234), an indented shell snippet and a pasted verifier banner each
+    # closed the section and a COMPLIANT close was refused at all three layers
+    # with a reason naming a block that was present. The Closing-report OPEN
+    # branch now requires the SAME strict ATX shape as the close branch to agree with
+    # the section-exists grep above. The cheap adversary then priced the
+    # asymmetry the first refinement left: a LOOSE open beside a STRICT close
+    # builds sections nothing can ever leave (##Closing report opened and ran
+    # to EOF, accepting any later example fence), so the OPEN branch now
+    # requires the same ATX shape and the section-exists greps in all three
+    # files carry the identical definition. Lines are CR-stripped at ingest,
+    # so a CRLF empty heading still scopes. SETEXT headings (underlined) are a
+    # KNOWN, PINNED limitation: markdown calls them headings, this reader
+    # reads ATX only, and the pin in the suite makes any future widening a
+    # judged decision rather than drift. A tab-indented heading is a code
+    # block per markdown AND has always failed the column-anchored
+    # section-exists grep, so its refusal reason is the section code, honest
+    # at both layers.
+    #
+    # LOCKSTEP: templates/git-hooks/setlist-hook-lib.sh and scripts/trunk-audit.sh
+    # carry this same program byte for byte and the suite asserts it. The
+    # lockstep is why F5 reached the backstop, and it is kept because the answer
+    # to a gate and its backstop agreeing on a WRONG rule is a right rule, not
+    # two rules.
+    QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; qa_seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } } else { if (__r == "qa-pass-1" && inclose) { inb = 1; qch = __c; qlen = __m; n = 0; bad = 0; next } fence = 1; fch = __c; flen = __m; next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "") next; if (l ~ /^[A-Za-z0-9._-]+[[:space:]]*:[[:space:]]*(PASS|PARTIAL|FAIL)$/) n++; else bad = 1; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) inclose = 0 } } END { if (incmt) print "unclosed-comment"; else if (inb) print "unclosed"; else if (!qa_seen) print "none"; else if (bad) print "malformed"; else if (n == 0) print "empty"; else print "ok" }'
+    QA_STATE="$(printf '%s\n' "$SPEC_TEXT" | awk "$QA_PASS1_AWK")"
+    if [[ "$QA_STATE" != "ok" ]]; then
+      deny "close gate [CG-NO-QA-VERDICT]: the Closing report for $MERGED_REF carries no usable QA Pass 1 verdict block ($QA_STATE). Part 6 requires a fenced qa-pass-1 block whose every line is <criterion>: PASS|PARTIAL|FAIL, the criterion a bare identifier with no spaces, sitting inside the Closing report section at fence depth zero. none: no such block there; a block nested inside a pasted-report fence is content, and a fenced example in another section neither satisfies nor poisons this check. unclosed-comment: an HTML comment (<!--) was opened and never closed before the end of the spec, so what follows it cannot be read; close the comment with -->. unclosed: no closing fence. malformed: a line inside is not a verdict line, and a sentence is not a verdict however it reads. empty: the block has no criteria. Write the block at the left margin (three spaces of indent at most): this reader reads the document FLAT, so a block or fence indented four or more spaces, including inside a numbered list item, is indented code and is not read. Run QA Pass 1, write one line per criterion, paste the report below it, commit, then merge."
     fi
 
     # The architecture-diagram field (Appendix C, exact label "Architecture
     # diagram:") is answered: "updated in this commit" or "no impact", never the
     # template placeholder (which still carries angle brackets).
-    DIAG_LINE="$(printf '%s\n' "$SPEC_TEXT" | grep -E 'Architecture diagram:' | tail -n1)"
+    # A FIELD, NOT A SUBSTRING (1.1.0 hostile leg, F8), which is the third time
+    # this release has had to make that same correction: the STATUS row went
+    # from "grep the row for CLOSED" to "field 4 must BE CLOSED" (leg 5 F8), the
+    # QA verdict from "the word anywhere" to "the word as a field" (B6), and this
+    # one was left reading a bare substring anywhere in the document. Measured
+    # wrong in BOTH directions: an unanswered placeholder ALLOWED because a later
+    # sentence happened to say "Architecture diagram: no impact was the
+    # conclusion", and a correctly answered field DENIED because a follow-up note
+    # said "revisit the Architecture diagram: <the auth box is now wrong>".
+    #
+    # Anchored at line start past any list bullet, exactly as its two siblings
+    # are. `tail -n1` is KEPT deliberately: a revised spec carries a second
+    # Closing report and the later one is the current one, which is what the
+    # original choice was for. Anchoring is what stops prose deciding the check;
+    # taking the last ANCHORED field still prefers the revision.
+    DIAG_LINE="$(printf '%s\n' "$SPEC_TEXT" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | tail -n1)"
     if [[ -z "$DIAG_LINE" ]]; then
       deny "close gate [CG-NO-DIAGRAM-FIELD]: the Closing report for $MERGED_REF is missing the mandatory field 'Architecture diagram: updated in this commit | no impact'."
     fi
     DIAG_ANSWER="${DIAG_LINE#*Architecture diagram:}"
-    if [[ "$DIAG_ANSWER" == *"<"* ]] || ! printf '%s' "$DIAG_ANSWER" | grep -qE 'updated in this commit|no impact'; then
+    # PLACEHOLDER SHAPE, NOT THE CHARACTER '<' (leg F11). This blanked the answer
+    # on any '<', which was written for the template's own
+    # `<updated in this commit | no impact>` and fired on ordinary prose: a
+    # comparison, a generic, an HTML comment. Measured:
+    # `updated in this commit (added <auth> box)` was refused.
+    # Stripping <...> spans and THEN requiring the answer settles both directions,
+    # because the genuine unfilled template strips to nothing and stays refused.
+    # Asserted across the value space rather than at a spelling: this field has
+    # been corrected three times, twice by repairing only the case reported.
+    DIAG_ANSWER="$(printf '%s' "$DIAG_ANSWER" | sed 's/<[^>]*>//g')"
+    if ! printf '%s' "$DIAG_ANSWER" | grep -qE 'updated in this commit|no impact'; then
       deny "close gate [CG-DIAGRAM-UNANSWERED]: the architecture-diagram field for $MERGED_REF is unanswered; answer it 'updated in this commit' or 'no impact', commit to the branch, then merge."
     fi
 
@@ -1275,8 +1741,16 @@ for MERGED_REF in $MERGED_REFS; do
     # it blinded the gate on the one field that says whether the work is done.
     # The row has a shape, so the shape is read: field 4 of the pipe-delimited
     # row is the status, and it must BE closed rather than contain the word.
-    STATUS_TEXT="$(git -C "$PROJ" show "${MERGED_REF}:specs/STATUS.md" 2>/dev/null || true)"
-    if ! printf '%s\n' "$STATUS_TEXT" | awk -F'|' -v num="$SPEC_NUM" '
+    # LIVE TEXT ONLY (2026-08 consolidation, blocker F2 and its mid-line
+    # sibling). This gate reads STATUS.md's inventory row too, and read it RAW
+    # while the guarantee layer stripped it: a fenced or commented `| NNNN | ...
+    # | CLOSED |` example row satisfied CG-NO-STATUS-ROW here alone. Routed
+    # through the same rule, so the advisory layer and the guarantee layer read
+    # the row a human sees. LOCKSTEP: byte-identical to setlist-hook-lib.sh and
+    # trunk-audit.sh; the agreement audit and the suite compare all three.
+    STATUS_TEXT="$(git -C "$PROJ" show "${MERGED_REF}:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK" || true)"
+    # sed: a GFM \|-escaped pipe is literal, not a field separator (round 11).
+    if ! printf '%s\n' "$STATUS_TEXT" | sed 's/\\|/ /g' | awk -F'|' -v num="$SPEC_NUM" '
       function trim(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return x }
       NF >= 5 && trim($2) == num && trim($4) == "CLOSED" { found = 1 }
       END { exit found ? 0 : 1 }

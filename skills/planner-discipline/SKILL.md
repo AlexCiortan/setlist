@@ -34,6 +34,14 @@ code, one structured round for genuine forks, propose the spec), branch via
 against the criteria, QA Pass 2 human acceptance, close through the gate,
 repeat. Chores run between specs, never during a build.
 
+**Every planning precondition reads the STATUS STATE, never the spec number.**
+Close order does not follow spec order. A spec can sit BUILT or PARKED on its
+branch while later specs merge past it, so "0044 is done, therefore 0045 can
+build on it" is false whenever 0044 is parked, and that exact sentence has been
+written in the field and acted on. Before asserting that a dependency exists,
+read its inventory row: only CLOSED means the work is on the trunk. BUILT and
+PARKED both mean it is not.
+
 ## Park, do not improvise
 
 A genuine ambiguity found mid-build goes to specs/STATUS.md under "Open

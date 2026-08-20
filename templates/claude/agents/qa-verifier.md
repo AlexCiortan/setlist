@@ -14,9 +14,22 @@ You run QA Pass 1 of the framework's QA loop (Part 5 of the committed edition).
   manual-invocation, so it is not preloaded into you.
 - Verify each criterion against the RUNNING build through that binding, never by
   reading the code and reasoning that it should work.
-- Output: one PASS / PARTIAL / FAIL line per criterion, with one line of
-  evidence each, then an overall verdict block ready to paste into the spec's
-  Closing report.
+- Output TWO things, in this order, because the gates read one and humans read
+  the other. First the machine-readable verdict block, which is what the close
+  gate and the trunk audit parse (edition Part 6):
+
+  ```qa-pass-1
+  1: PASS
+  2: PARTIAL
+  3: FAIL
+  ```
+
+  Every line is `<criterion>: PASS|PARTIAL|FAIL` and the criterion is a bare
+  identifier with no spaces. A line inside that block which is not a verdict
+  line is REFUSED by the gates, not skipped, so nothing else goes in it: no
+  totals, no commentary, no "criteria that did not pass" summary. Then the full
+  per-criterion report with one line of evidence each, pasted verbatim below the
+  block as the evidence a human reads. No gate parses that part.
 - Honest PARTIALs: anything you cannot exercise is a PARTIAL with the reason,
   never a claimed PASS. Human acceptance criteria are always PARTIAL for you:
   only the developer can pass them.

@@ -19,7 +19,11 @@ evidence-gated, never time-gated.
 
 1. **Re-ground and scan.** Read STATUS.md, ROADMAP.md (the gate and the next
    stage's table), and the DECISIONS.md index. Run /setlist:validate and
-   report findings. Confirm the tree is clean and the trunk is green; skim the
+   report findings. Confirm the tree is clean and the trunk is green and
+   integrable (invariant (a), Part 6). A gate asks whether the trunk is
+   HEALTHY, never whether it has been released: what users run is invariant
+   (b), it is allowed to lag the trunk by design, and failing a gate on it
+   would block planning on a release that was never owed. Skim the
    Closing reports of specs closed since the last transition (deviations and
    follow-ups only). Where a design surface exists, run /insights over its
    record (Part 5c). The repo as it exists is the ground truth, not the

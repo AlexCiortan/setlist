@@ -72,6 +72,30 @@ if [[ "$TARGET" == "--list" ]]; then
   exit 0
 fi
 
+# The canonical spec-lifecycle enumeration, extracted rather than restated.
+#
+# This is what makes the lifecycle lockstep REAL rather than a convention. The
+# commit gate enumerates the lifecycle vocabulary literally, so a state the
+# protocol gains and the gate does not is a transition the gate silently fails
+# to notice. Binding the gate to the edition by grepping prose would be the same
+# defect one layer up (a check reporting a result it did not earn), so the
+# edition carries a marked, fenced block and THIS is the mechanism that reads
+# it, the same extractor that already builds every instance's specs/TEMPLATE.md
+# from Appendix C.
+#
+# Prints one state per line. Emptiness is an ERROR, not an empty list: a caller
+# that got zero states would compare against nothing and pass.
+if [[ "$TARGET" == "lifecycle-states" ]]; then
+  STATES="$(awk '
+    /<!-- SDD-LIFECYCLE-STATES:BEGIN -->/ { inblock = 1; next }
+    /<!-- SDD-LIFECYCLE-STATES:END -->/   { inblock = 0 }
+    inblock && !/^```/ && NF { print $1 }
+  ' "$EDITION")"
+  [[ -n "$STATES" ]] || die "no SDD-LIFECYCLE-STATES block found in $EDITION; the canonical lifecycle enumeration is missing or its markers were renamed"
+  printf '%s\n' "$STATES"
+  exit 0
+fi
+
 set +e
 OUTPUT="$(run_awk extract "$(printf '%s' "$TARGET" | tr '[:upper:]' '[:lower:]')")"
 STATUS=$?

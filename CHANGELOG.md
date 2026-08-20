@@ -9,6 +9,87 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.0.0
+
+**Edition v1.8 (the boundary edition).** A MAJOR release because the guarantee's
+semantics change, not because the mechanism was rewritten: the same hooks refuse the
+same things, and what moves is which layer the project calls its guarantee.
+
+- **The guarantee is the push-time trunk audit.** `pre-commit` and `pre-merge-commit`
+  keep refusing at commit and merge time, with the same reasons, as early warning inside
+  the boundary. The audit at `pre-push` is what stands between unreviewed work and a
+  shared trunk. A route past a per-merge hook is a MAJOR in this project's severity
+  model rather than a release blocker: the work is refused later than intended, at push,
+  rather than not at all. This is the same reclassification v1.7 made for the session
+  gates, one layer in, and for the same measured reason.
+- **The audit decides by identity and ancestry, never by shape.** Its last shape-decided
+  outcome is gone: a merge's parent count no longer decides whether the pre-rule
+  exemption applies. Nothing was relaxed, and pre-adoption history keeps the exemption
+  every pre-rule merge keeps.
+- **`/setlist:retrofit` no longer switches off a hook layer it does not own.** The stamp
+  wrote `core.hooksPath` unconditionally, so retrofitting into a project already using
+  husky, lefthook or pre-commit disabled that project's own hooks, secret scanning
+  included, with no warning. It now refuses before its first write, decides ownership by
+  the CONTENT of the hooks directory rather than by its name, and keeps
+  `SETLIST_ADOPT_HOOKSPATH=1` as the deliberate override. **If you retrofit into a
+  project with an existing hook layer, this release will stop and tell you, where the
+  previous one silently continued.**
+- **The model bindings in Part 2 are re-verified against the live harness**, with the
+  verification date and method recorded in the table.
+- **First push to a brand-new EMPTY remote now audits every pushed branch as a trunk
+  candidate.** An empty remote has no default branch yet and forges adopt the first pushed
+  branch as the default, so the push-time audit cannot tell which pushed ref is about to
+  become the trunk and audits them all. The clean trunk pushed on its own passes; a spec
+  branch pushed first, or alongside the trunk, is refused, because unclosed feature code
+  must not become a remote's default by a raw push. Push the trunk first, or use
+  `SETLIST_SKIP_TRUNK_AUDIT=1` for a deliberate exception. This closes a case where such a
+  branch was previously allowed while the audit read the local trunk instead.
+- **The mandatory Architecture-diagram close field is read from live text only.** A line
+  that appears only inside a fenced code block no longer answers it, at any layer including
+  the push-time audit, matching how the inventory row and QA verdict are already read.
+
+## 1.1.0
+
+**Edition v1.7 (the convergence edition).** The enforcement boundary moves from
+the Claude Code hooks to GIT hooks, and one setting changes behaviour you will
+notice on day one.
+
+**Read this first: `merge.ff = false`.** The stamp now sets it, alongside
+`core.hooksPath`. Merges that used to fast-forward will create merge commits.
+This is not cosmetic and it is not optional: a fast-forward merge fires no git
+hook at all, so without it a plain `git merge spec/0001-x` walks unreviewed work
+onto your trunk past everything else. If you have tooling that assumes
+fast-forward merges, this is the change to plan for.
+
+**What moved and why.** The three PreToolUse gates decided what a command would
+do by reading the command's text. Across five releases every hardening pass
+closed one spelling and the next release found another, because a shell command
+can compute its own arguments. Then 1.0.8 died on macOS for a reason that had
+nothing to do with command text and allowed everything in silence, while a git
+hook on the same machine in the same run was untouched.
+
+So the guarantee moved. `pre-commit`, `pre-merge-commit` and `pre-push` are
+stamped into a tracked `.githooks/` directory and git runs them from its own
+state, after argument parsing and after `$(...)` is expanded. The PreToolUse
+gates remain, are still useful, and are now described as ADVISORY: they warn
+before the command runs, which no git hook can do. A new bypass spelling of that
+layer is now a MAJOR rather than a release blocker, because the work still
+cannot reach the trunk.
+
+**The release rail.** Projects declare how they record a version in a `release`
+block in `.claude/sdd.json`: `none` (the default, and the right answer if you
+ship nothing yet), `tags`, or `version-file`. `/setlist:checkpoint` grows the cut
+ceremony, with approval bound to OUTWARDNESS rather than to versioning.
+
+**Also**: BUILT and PARKED join the spec lifecycle; a Closing report can now
+record a criterion that is structurally blocked rather than merely unrun; the
+QA-verdict rule was widened after it was measured rejecting 15 of 18 real specs
+in a live project; and the edition gained a Known limitations section that says
+plainly where the mechanical layer ends, including `--no-verify` and the fact
+that the config pointing at your hooks is per-clone.
+
+`/setlist:upgrade` performs all of it and will tell you about `merge.ff`.
+
 ## 1.0.9
 
 Edition unchanged (v1.6). **If you are on macOS and running 1.0.8, update now.**

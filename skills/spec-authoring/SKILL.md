@@ -11,7 +11,9 @@ specs/TEMPLATE.md, which is the same text, stamped at bootstrap.
 ## Authoring
 
 - Every spec starts as a copy of specs/TEMPLATE.md, numbered sequentially
-  (spikes are 0000). Statuses: QUEUED, ACTIVE, REVISED, CLOSED, DRAFT.
+  (spikes are 0000). Statuses: DRAFT, QUEUED, ACTIVE, REVISED, BUILT, PARKED,
+  CLOSED (Part 5 carries the canonical list; BUILT and PARKED are v1.7, and
+  both mean the work is NOT on the trunk).
 - A spike's output is a decision, and it lands as a citable artifact, never as
   prose: an ADR (the usual case), or a Decision section in the spike file's
   Closing report. Dependent specs cite it by path, so the dependency is a file
@@ -40,7 +42,9 @@ verifies it mechanically:
 
 - What was built; deviations and whether each was ratified; test counts
   (before -> after).
-- The QA Pass 1 PASS/PARTIAL/FAIL report, pasted verbatim. A QA pass that is
+- The QA Pass 1 verdict block (a fenced `qa-pass-1` block, one
+  `<criterion>: PASS|PARTIAL|FAIL` line each), which is what the gates read, and
+  below it the full report pasted verbatim, which is what people read. A QA pass that is
   not in the repo did not happen. Honest PARTIALs, never claimed PASSes.
 - QA Pass 2: confirmed by the developer, with the spot-checked criterion named.
 - Design QA: punch list state, or "n/a (functional)".
@@ -56,3 +60,23 @@ verifies it mechanically:
   was the prober passing the wrong argument shape to the API under test;
   the code was correct. Ground-truth the surface a criterion drives (the real
   signature, the real flag, the real endpoint) before filing the failure.
+- Pre-agree the SPLIT at approval, not mid-build. If a spec might run big, name
+  the boundary and the sibling number now ("the WSL2 half parks as 0002b if the
+  session overruns"). Otherwise the Builder invents a scope boundary under
+  pressure, at the moment its judgment is worst. The sibling's STATUS row uses
+  the SUFFIXED number; the close gate greps the number literally, so a `0002b`
+  spec with a `0002` row does not close.
+- A spec approved with no friction, in a session that raised a concern, is a
+  concern that got dropped. Approval is not agreement. If you raised something
+  and it is not in the spec, in an ADR, or in an open question, it was lost, not
+  resolved. Say so once, with a recommendation; the human decides and the
+  decision gets recorded.
+- Name the confirmation affordance for any DESTRUCTIVE action at authoring time,
+  even if the answer is "none, and here is why". A delete shipped
+  confirmation-free because the design contract specified a sheet for the
+  harmless action and said nothing about the destructive one, and an
+  unremembered click wiped a server.
+- A fact about mounting, ordering, or lifecycle established for one surface says
+  something about every OTHER surface in the spec. Ask what, in the spec, before
+  the build. Three QA Pass 2 defects and two live production bugs in one arc
+  shared exactly that signature.

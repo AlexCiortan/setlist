@@ -21,6 +21,22 @@ once, after phase 2 of the bootstrap; a repo that is already scaffolded gets
    runs the FULL suite in .claude/sdd.json as "gate_command" (the close gate and
    /setlist:checkpoint run it verbatim).
 
+   **The command must run in a BARE shell, with no environment activated
+   first.** The close gate and the git hooks run it in their own subshell, which
+   inherits whatever git or the harness happened to have on PATH, not your
+   interactive shell. So a project whose toolchain lives in a virtualenv, an nvm
+   or rbenv shim, or a Conda env records the activation as part of the command
+   (`. .venv/bin/activate && ...`, `poetry run ...`, `npm exec -- ...`), or
+   calls the tools by their in-project paths. VERIFY it before recording it:
+
+       ( eval "$(jq -r .gate_command .claude/sdd.json)" ) >/dev/null 2>&1; echo $?
+
+   A non-zero here means the gate is not runnable by the hooks even when the
+   suite itself is green. The refusal that follows is indistinguishable from a
+   real failure, and the operator who knows their suite passes is then one step
+   from disabling the boundary to get past it. Get this right at scaffold time
+   and that never comes up.
+
 3. Flip "scaffolded" to true in .claude/sdd.json. This arms the scope hook:
    from the next write on, feature code on the trunk branch (the "trunk"
    field in .claude/sdd.json) is blocked, so finish the scaffold before
@@ -37,3 +53,22 @@ once, after phase 2 of the bootstrap; a repo that is already scaffolded gets
    with the trunk named in .claude/sdd.json as the initial branch
    (git init -b <trunk>) and make this the repo's first commit, covering the
    uncommitted session-zero output. Do not push.
+
+   ARM THE GIT-HOOK BOUNDARY IMMEDIATELY AFTER git init, BEFORE that first
+   commit, and verify it took:
+
+       git config core.hooksPath .githooks
+       git config merge.ff false
+       git config --get core.hooksPath    # must print .githooks
+
+   This is not optional and it is not cosmetic. /setlist:new runs in an EMPTY
+   directory, so stamp.sh could not set these: there was no repository yet, and
+   it says so in its own output. Until they are set the hooks sit in .githooks/
+   and git never runs them, which means the project has NO enforcement at all
+   while appearing fully set up. Measured before this step existed: a secret
+   committed, an unclosed spec merged to the trunk, and both reached a remote,
+   every command exiting 0 with no hook output (v1.7 claims audit, R3-1).
+
+   If .githooks/ is absent, stop and say so rather than continuing: the
+   instance was not stamped with the git-hook boundary and /scaffold cannot
+   invent it.

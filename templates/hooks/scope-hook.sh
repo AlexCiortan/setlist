@@ -20,21 +20,59 @@
 
 set -u
 
-deny() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s}}\n' \
+# THE scope ADVISES, IT DOES NOT VETO (design-advisory-means-advisory.md,
+# RATIFIED 2026-08-04).
+#
+# This function used to emit permissionDecision "deny" and hold a hard veto over
+# the session. It now emits "allow" and reports what it WOULD have decided in a
+# machine-readable field. The guarantee did not move with it: it stayed where
+# edition v1.7 put it, in git's own hooks, which run from git's internal state
+# after argument parsing and ref resolution and have nothing left to spell
+# around.
+#
+# WHY, in one number. Across four hostile legs on 2026-08-03 and 2026-08-04,
+# five of six BLOCKERs and three MAJORs were in parser code written that same
+# day to fix the previous leg: roughly a fifth of parser repairs introduced a
+# new defect. That rate is a property of changing a shell command parser at all,
+# not of any one change, and while the parsers could DENY, every one of those
+# defects was a release blocker. The README has told users this layer only warns
+# since v1.7; the leg filed a finding because it did not. The mechanism is the
+# half that moved.
+#
+# THE CONTRACT, frozen with the parsers:
+#   permissionDecision   ALWAYS "allow"
+#   setlistAdvisory      {gate, verdict: deny|allow, code, reason}
+#   systemMessage        the reason, again, because permissionDecisionReason is
+#                        documented as reaching the USER rather than the model
+#                        when the decision is allow, and the point of a warning
+#                        is that the session sees it.
+#
+# `setlistAdvisory.verdict` is evidence about THIS layer only. Every
+# guarantee-layer check binds to observed repository state instead, because a
+# guarantee that asked the parser whether the parser was right would be the
+# laundering defect this cycle is a record of, one layer up.
+advise() {
+  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":%s},"systemMessage":%s,"setlistAdvisory":{"gate":"scope","verdict":"deny","code":%s,"reason":%s}}\n' \
+    "$(printf '%s' "$1" | jq -Rs .)" \
+    "$(printf 'setlist %s' "$1" | jq -Rs .)" \
+    "$(printf '%s' "$ADV_CODE" | jq -Rs .)" \
     "$(printf '%s' "$1" | jq -Rs .)"
-  # fail-open-ok: not a pass at all; exit 0 is how the hook protocol delivers
-  # the deny JSON emitted above.
+  # fail-open-ok: the gate is advisory by design as of 2026-08-04. It has
+  # reported its verdict and the session proceeds; the git hooks carry the
+  # guarantee.
   exit 0
 }
+deny() { advise "$1"; }
 
-# Deny with a fixed literal reason, for the paths where jq is unavailable to
+# Advise with a fixed literal reason, for the paths where jq is unavailable to
 # escape one. The text must contain no double quotes, backslashes, or newlines.
-deny_literal() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"%s"}}\n' "$1"
-  # fail-open-ok: not a pass at all; exit 0 delivers the deny JSON above.
+advise_literal() {
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"scope","verdict":"deny","code":"","reason":"%s"}}\n' "$1" "$1" "$1"
+  # fail-open-ok: advisory by design; see advise() above.
   exit 0
 }
+deny_literal() { advise_literal "$1"; }
 
 INPUT=$(cat)
 # Normalize to an absolute path so the prefix strip below works whether
@@ -52,7 +90,8 @@ SDD_JSON="$PROJ/.claude/sdd.json"
 # repo that never opted in would make the plugin unusable outside instances.
 [[ -f "$SDD_JSON" ]] || exit 0
 
-# Fail closed when jq is absent: sdd.json is unreadable, so the branch rule
+# Decide WITHOUT jq when it is absent, and report. Advisory since v1.7, so this
+# emits "allow" and the git hooks refuse. sdd.json is unreadable, so the branch rule
 # cannot be evaluated at all. Scoped to stamped instances by the check above.
 #
 # JQ PRESENT IS NOT JQ USABLE (leg 4, F1). `command -v jq` tests only whether a
@@ -63,10 +102,40 @@ SDD_JSON="$PROJ/.claude/sdd.json"
 # not broken, so the gate stays down for as long as it takes them to work that
 # out. jq is RUN here rather than merely located.
 if ! command -v jq >/dev/null 2>&1; then
-  deny_literal "scope hook [SH-NO-JQ]: jq is not installed, so this gate cannot read .claude/sdd.json and cannot tell whether this write lands on the trunk; it would otherwise allow feature code straight onto the trunk unchallenged. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+  deny_literal "scope hook [SH-NO-JQ]: jq is not installed, so this gate cannot read .claude/sdd.json and cannot tell whether this write lands on the trunk; it would otherwise allow feature code straight onto the trunk unchallenged. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
 fi
 if ! printf '{}' | jq -e . >/dev/null 2>&1; then
-  deny_literal "scope hook [SH-JQ-BROKEN]: jq is installed but does not run on this machine, so this gate cannot read .claude/sdd.json and cannot tell whether this write lands on the trunk. Run jq --version to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Your .claude/sdd.json is not the problem. Gates fail closed by design; removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+  deny_literal "scope hook [SH-JQ-BROKEN]: jq is installed but does not run on this machine, so this gate cannot read .claude/sdd.json and cannot tell whether this write lands on the trunk. Run jq --version to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Your .claude/sdd.json is not the problem. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+fi
+
+# AND THE REST OF THE TOOLCHAIN, which this hook never received (1.1.0 leg,
+# fourth run, F19). commit-gate.sh and close-gate.sh have carried this block
+# since the v1.7 gate's F2; scope-hook.sh got the jq probe and not this one, so
+# a broken `tr` made `REL="$(printf '%s' "$FILE_PATH" | tr -s '/')"` yield the
+# EMPTY STRING, the path matched no role, and the hook exited 0 in silence while
+# feature code landed on the trunk. Measured, not reasoned: silent exit 0, no
+# output, the write allowed.
+#
+# Each probe RUNS its tool and checks the OUTPUT as well as the status, because a
+# tool that exits 0 and prints nothing disables this hook just as thoroughly. The
+# comparisons are bash builtins, so a probe never depends on the thing it probes.
+SH_TOOLCHAIN_BROKEN=""
+_shp="$(printf 'x\n' | awk '{ print }' 2>/dev/null)" || _shp=""
+[[ "$_shp" == "x" ]] || SH_TOOLCHAIN_BROKEN="awk"
+if [[ -z "$SH_TOOLCHAIN_BROKEN" ]]; then
+  _shp="$(printf 'x\n' | sed 's/x/y/' 2>/dev/null)" || _shp=""
+  [[ "$_shp" == "y" ]] || SH_TOOLCHAIN_BROKEN="sed"
+fi
+if [[ -z "$SH_TOOLCHAIN_BROKEN" ]]; then
+  _shp="$(printf 'x\n' | tr 'x' 'y' 2>/dev/null)" || _shp=""
+  [[ "$_shp" == "y" ]] || SH_TOOLCHAIN_BROKEN="tr"
+fi
+if [[ -z "$SH_TOOLCHAIN_BROKEN" ]]; then
+  _shp="$(printf 'x\n' | grep -E '^x$' 2>/dev/null)" || _shp=""
+  [[ "$_shp" == "x" ]] || SH_TOOLCHAIN_BROKEN="grep"
+fi
+if [[ -n "$SH_TOOLCHAIN_BROKEN" ]]; then
+  deny_literal "scope hook [SH-NO-TOOLCHAIN]: $SH_TOOLCHAIN_BROKEN is installed but does not work on this machine, so this gate cannot normalise the path it is meant to check and would otherwise allow feature code straight onto the trunk unchallenged. Run '$SH_TOOLCHAIN_BROKEN --version' to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
 fi
 
 # The config must PARSE. jq being installed is not the same as sdd.json being
@@ -94,7 +163,7 @@ fi
 # multi-document case; nothing else here can see it. The object test rejects the
 # array case. Both hooks carry this, because both read the trunk from it.
 if ! jq -e -s 'length == 1 and (.[0] | type == "object")' "$SDD_JSON" >/dev/null 2>&1; then
-  deny_literal "scope hook [SH-SDD-SHAPE]: .claude/sdd.json is not a single JSON OBJECT (it does not parse, or it is an array, or it contains more than one document), so this gate cannot read the trunk name or the role paths and cannot tell whether this write lands on the trunk. It would otherwise allow feature code straight onto the trunk unchallenged. Fix the file (jq -s . .claude/sdd.json shows both the syntax and how many documents it holds), then retry. Gates fail closed by design."
+  deny_literal "scope hook [SH-SDD-SHAPE]: .claude/sdd.json is not a single JSON OBJECT (it does not parse, or it is an array, or it contains more than one document), so this gate cannot read the trunk name or the role paths and cannot tell whether this write lands on the trunk. It would otherwise allow feature code straight onto the trunk unchallenged. Fix the file (jq -s . .claude/sdd.json shows both the syntax and how many documents it holds), then retry. Gates report their verdict and PERMIT: advisory since v1.7, so this warns and the git hooks are what refuse."
 fi
 
 # Active only after /scaffold flips the flag, so the one-time bootstrap
@@ -123,7 +192,7 @@ fi
 # and guessing "main" over a stated intention would govern a branch the project
 # did not name.
 TRUNK="$(jq -r 'if (.trunk == null) then "main" elif ((.trunk | type) == "string" and (.trunk | length) > 0) then .trunk else "" end' "$SDD_JSON" 2>/dev/null)" # fail-open-ok: an unreadable value yields the empty string, which the check on the next line refuses
-[[ -n "$TRUNK" ]] || deny "scope hook [SH-TRUNK-INVALID]: .claude/sdd.json declares a "trunk" that is not a non-empty string, so the trunk this project protects cannot be determined and every trunk check would silently pass. Set "trunk" to your trunk branch name (for example "main" or "master"), or remove the key to accept the default."
+[[ -n "$TRUNK" ]] || deny "scope hook [SH-TRUNK-INVALID]: .claude/sdd.json declares a \"trunk\" that is not a non-empty string, so the trunk this project protects cannot be determined and every trunk check would silently pass. Set \"trunk\" to your trunk branch name (for example \"main\" or \"master\"), or remove the key to accept the default."
 
 # THE TRUNK VALUE MUST NAME A LOCAL BRANCH, not merely be a non-empty string
 # (F1 of the second 1.0.8 leg). The check added earlier today required a
@@ -167,7 +236,43 @@ if [[ -n "$TRUNK" ]] && ! git -C "$PROJ" show-ref --verify --quiet "refs/heads/$
     deny "scope hook [SH-TRUNK-NOT-A-BRANCH]: .claude/sdd.json records trunk \"$TRUNK\", which is not a local branch in this repository, so the trunk this project protects cannot be established and every trunk check would silently pass. Record the plain branch NAME (for example \"main\"), not a ref path such as refs/remotes/origin/main, which is what the upgrade skill's own detection command returns."
   fi
 fi
-BRANCH="$(git -C "$PROJ" branch --show-current 2>/dev/null || true)"
+# A BRANCH NAME IS NOT A STRING, IT IS A REF (1.1.0 leg, second run, then again
+# in the third when the first repair proved partial). On a case-insensitive
+# filesystem `refs/heads/main` is one file, so after `git checkout MAIN` this
+# reads "MAIN", the byte comparison below is false, and the scope gate exits 0
+# on every write to the trunk. One ordinary command in an EARLIER tool call is
+# enough to disable it for the rest of the session, which is what makes this
+# worse than a spelling trick: nothing in the governed command looks unusual.
+#
+# The trunk side is normalised too, because `{"trunk":"MAIN"}` reaches the same
+# fail-open with HEAD untouched. Both sides through the same function or the
+# comparison is only half fixed, which is exactly how the first repair of this
+# defect left the session gates open while the git hooks were closed.
+canonical_branch() { # canonical_branch <name> -> git's stored spelling of it
+  local name="$1" ci
+  [[ -n "$name" ]] || return 0
+  if git -C "$PROJ" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null \
+     | grep -qxF -- "$name"; then
+    printf '%s' "$name"; return 0
+  fi
+  ci="$(git -C "$PROJ" for-each-ref --format='%(refname:short)' refs/heads/ 2>/dev/null \
+        | awk -v n="$name" 'tolower($0) == tolower(n) { print; exit }')" # fail-open-ok: no match leaves this empty and the name is returned unchanged, which is the behaviour for any branch that is not a case variant
+  if [[ -n "$ci" ]]; then printf '%s' "$ci"; return 0; fi
+  printf '%s' "$name"
+}
+# GIT IS A DEPENDENCY, AND ITS VERSION IS PART OF IT (leg F5).
+# This read `git branch --show-current`, which arrived in git 2.22 (2019). Below
+# that it exits 129, this read empty, the empty value never equalled the trunk,
+# and this gate took its ordinary-feature-work exit in SILENCE: zero bytes, no
+# code, no reason. That is the one thing the fail-open rule sixty lines above
+# forbids, since absence reads as permission, and git was the only dependency
+# never held to it.
+# `symbolic-ref --quiet --short HEAD` predates the floor and is what the git-hook
+# layer has always used. Measured identical on current git in both cases that
+# matter: the branch name on a branch, empty when detached.
+BRANCH="$(git -C "$PROJ" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" # fail-open-ok: a detached HEAD yields empty here exactly as it did before, and a detached HEAD is not the trunk
+BRANCH="$(canonical_branch "$BRANCH")"
+TRUNK="$(canonical_branch "$TRUNK")"
 # fail-open-ok: off the trunk, writes are the point of a spec branch; this
 # gate only guards the trunk. (Detached HEAD reads as empty, never equals the
 # trunk, and passes: named in Known limitations.)
@@ -203,7 +308,7 @@ fi
 if [[ "$(jq -r 'if (.roles == null) then "absent" elif ((.roles | type) == "object") then "ok" else "bad" end' "$SDD_JSON" 2>/dev/null)" == "bad" ]]; then
   deny "scope hook [SH-ROLES-SHAPE]: .claude/sdd.json has a \"roles\" value that is not an object, so the role paths this hook guards cannot be read and every write to the trunk would silently pass. Set \"roles\" to an object such as {\"src\": \"src\", \"tests\": \"tests\"}, or remove the key to accept the defaults."
 fi
-ROLE_PATHS="$(jq -r '[.roles.src // "src", .roles.tests // "tests"] | flatten | .[]' "$SDD_JSON")"
+ROLE_PATHS="$(jq -r 'if ((.roles // {}) | length) == 0 then ["src","tests"] else [(.roles // {}) | .[]] end | flatten | .[] | select(type == "string")' "$SDD_JSON")"
 
 # Canonicalize before comparing. A path that is merely SPELLED differently
 # (`./src/app.js`, `src//app.js`, a project root reached with a trailing slash)
@@ -285,9 +390,35 @@ if [[ -n "$CANON" ]]; then
     # verdict is invented from it.
   esac
 fi
+# THE ROLE PATH IS NORMALISED, NOT JUST TRIMMED (1.1.0 hostile leg, second run).
+#
+# The WRITE path above is canonicalised hard (duplicate slashes squeezed, ./ and
+# ../ resolved, symlinked role directories resolved physically) because this file
+# already knows that "two spellings of the SAME file were reaching two different
+# verdicts" is the defect class. The ROLE path it is compared against got only
+# `${ROLE%/}`, so a role recorded as "./src" never matched "src/App.js" and the
+# trunk-write rule silently did nothing: measured, a Write of src/App.js on the
+# trunk exited 0 in silence where the canonical spelling denies SH-TRUNK-WRITE,
+# the commit landed on the trunk, and trunk-audit.sh then reported it clean at
+# exit 0 so pre-push allowed the push. "/src" reproduces it identically.
+#
+# The value comes from an interview into {{SRC_ROLE}}, produces no error
+# anywhere, and defeats every layer at once, so it is normalised rather than
+# trusted: strip any leading "./" repeatedly, squeeze duplicate slashes, drop a
+# leading "/" (a role path is repo-relative and there is no other reading of it),
+# and drop a trailing "/". A value that normalises to nothing is skipped by the
+# emptiness test that already guards this loop.
+#
+# LOCKSTEP: scripts/trunk-audit.sh and setlist-hook-lib.sh normalise identically.
+# Fixing only this file would leave the backstop blind in the same way, which is
+# leg 5's F8 exactly.
 while IFS= read -r ROLE; do
   [[ -n "$ROLE" && "$ROLE" != "." ]] || continue
+  while [[ "$ROLE" == ./* ]]; do ROLE="${ROLE#./}"; done
+  ROLE="$(printf '%s' "$ROLE" | tr -s '/')"
+  ROLE="${ROLE#/}"
   ROLE="${ROLE%/}"
+  [[ -n "$ROLE" && "$ROLE" != "." ]] || continue
   if [[ "$REL" == "$ROLE"/* || "$REL" == "$ROLE" ]] \
      || [[ -n "$REL_PHYS" && ( "$REL_PHYS" == "$ROLE"/* || "$REL_PHYS" == "$ROLE" ) ]]; then
     deny "[SH-TRUNK-WRITE] feature code never lands directly on $TRUNK; open a spec or chore branch via /setlist:checkpoint."

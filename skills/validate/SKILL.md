@@ -67,7 +67,7 @@ Checks:
     (their duties ship as /setlist:checkpoint and /setlist:validate);
     report any survivor with the removal step from the upgrade protocol.
 11. Binding dependencies are installed: `jq` resolves on PATH (all four
-    stamped hooks need it; since plugin 1.0.1 the three gates FAIL CLOSED
+    stamped hooks need it; since plugin 1.0.1 the three gates report their verdict and PERMIT (advisory since v1.7; the GIT hooks are what refuse, and they fail closed without jq)
     without it, denying the writes, commits, and merges they govern rather
     than allowing them unchecked, and the re-grounding pointer says so at
     session start, so a missing jq presents as a blocked session rather than
@@ -84,6 +84,62 @@ Checks:
     nothing yet: the instance was refreshed by a newer plugin than this session
     holds, so this session is the stale party, and any refresh it ran would
     reinstall older hooks over newer ones.
+13. The `release` block is COHERENT (Part 6, the release rail). An absent block
+    is NOT a finding: it reads as `model: none`, which is the default and the
+    right answer for an instance that ships nothing yet. What is checked is that
+    a DECLARED model has the marker it claims:
+    - `model` is one of `none`, `tags`, `version-file`. Any other value is a
+      finding: the skills cannot act on a model they do not know, and guessing
+      one would govern a release nobody described.
+    - `tags` with no tag matching the declared pattern: report as INFORMATION
+      before the first release, a finding after one. A project that declared the
+      model and has not yet cut anything is in a normal state, and a check that
+      cannot tell those apart trains people to ignore it.
+    - `version-file` with no file at the declared path: a finding, always. That
+      model's whole claim is that the file at that path identifies what users
+      run, so an absent file makes invariant (b) unsatisfiable rather than
+      merely unexercised. The asymmetry with `tags` is deliberate.
+    - A marker fact that is present but EMPTY (an empty tag pattern, an empty
+      path) is a finding rather than an absent marker: it is a declaration
+      somebody started and did not finish.
+14. Every PARKED row in the STATUS inventory states BOTH a reason and a revisit
+    trigger in its note (Part 5). A PARKED row missing either is a finding: the
+    state exists to record a decision, and a row with no trigger is an abandoned
+    branch with a label on it, which is exactly what the state was introduced to
+    stop being invisible. Report the row and what it is missing; do not invent
+    the trigger.
+15. If `.claude/sdd.json` declares `identity.user_email`, report it beside the
+    machine's current `git config user.email` as INFORMATION when they match.
+    When they DIFFER, say so plainly: the commit gate will WARN on the next
+    commit, and NOTHING refuses it: the identity comparison exists only in the advisory
+    commit gate, and no git hook or the trunk audit reads `user.email` at all. Say that
+    plainly, because this declaration has no enforcing layer; learning
+    that during a health check is cheaper than learning it mid-close. An absent key is not a finding; the check is opt-in and most
+    projects will not want it.
+16. The ACTIVE spec carries a `Spec-hash:` field (Part 6). Its ABSENCE is
+    INFORMATION, not a finding: specs authored before edition v1.7 do not have
+    one and acquire it on their next REVISED cycle. Do not recompute or write
+    the value here; that is checkpoint's job at a lifecycle transition, and a
+    health check that silently re-stamps a hash would erase the very drift the
+    field exists to surface.
+
+17. **The git-hook boundary is LIVE** (Part 6). The guarantee is the push-time
+    trunk audit, the per-merge hooks are its early warning, and all three parts
+    below have to hold for either to run at all:
+    - `.githooks/` exists and carries `pre-commit`, `pre-merge-commit`,
+      `pre-push` and `setlist-hook-lib.sh`, and the three hooks are
+      EXECUTABLE. Git skips a non-executable hook silently, so a mode bit is
+      the difference between a boundary and a decoration.
+    - `git config core.hooksPath` is `.githooks`. Without it git runs
+      `.git/hooks` and every file above is inert.
+    - `git config merge.ff` is `false`. Without it a fast-forward merge fires
+      NO hook at all and walks unreviewed work onto the trunk.
+    Any of the three missing is a FINDING, not information: unlike the release
+    block or the identity key, this is not opt-in, and an instance that has lost
+    it is running with the advisory layer only while the edition says otherwise.
+    Both config settings live in `.git/config`, which is not cloned, so a fresh
+    clone legitimately lacks them and the fix is to re-run the refresh.
+    Report what is missing and the exact command that restores it.
 
 ## Gotchas (field-observed)
 

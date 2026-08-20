@@ -40,7 +40,7 @@ opener: "what has changed since this framework edition was written" comes
 first.
 
 Verify the environment in this round too: the `opusplan` live probe, and
-`command -v jq`. The three stamped gates fail closed without jq, so a retrofit
+`command -v jq`. The three stamped gates are advisory and PERMIT without jq; the GIT hooks fail closed without it, so a retrofit
 onto a machine that lacks it will deny its own first commits. Report the
 install command and let the user run it; install nothing yourself.
 
