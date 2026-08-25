@@ -109,6 +109,84 @@ jobs:
       - name: Report the bash version under test
         run: bash --version | head -n 1
 
+      # THE LEG SELF-TEST'S ONE PREREQUISITE, PINNED (spec 0108, 2026-08-21).
+      #
+      # Its section 2 asserts `command -v claude` and calls an absent CLI a
+      # FAILURE rather than skipping the three manifest-validation cases, which is
+      # the shellcheck step's doctrine below: a gate that quietly does not run
+      # reports a green it did not earn. So the prerequisite is PROVISIONED here
+      # rather than assumed, exactly as jq is above.
+      #
+      # THE CHECK IS VERSION EQUALS PIN, NOT MERE PRESENCE, and that is the whole
+      # point of this step. A presence check preserves whatever a runner already
+      # happens to have, and the two platforms then drift apart silently. They
+      # already had: on 2026-08-21 fw-macos carried 2.1.221 and a freshly
+      # provisioned fw-linux took 2.1.238, and the self-test's `validate b` went
+      # red on Linux alone. That is not a portability bug, it is UPSTREAM
+      # BEHAVIOUR CHANGE: `claude plugin validate --strict` stopped refusing an
+      # unparseable skill frontmatter somewhere between those versions. Measured
+      # both ways, same fixture: 2.1.221 reports "YAML frontmatter failed to
+      # parse", 2.1.238 reports "both validate targets pass".
+      #
+      # 2.1.221 is therefore the MEASURED-GOOD pin rather than a convenient one:
+      # it is the version on which the fixture refusal is known to hold. The
+      # consequence is filed, not hidden, in backlog-post-2.0.0.md: the staging
+      # gate's frontmatter check depends on this pinned behaviour, so the refusal
+      # is re-verified on every deliberate bump, and on machines running newer
+      # CLIs that gate over-claims until upstream restores the refusal.
+      #
+      # IT INSTALLS INTO A CI-PRIVATE PREFIX AND NEVER CLOBBERS THE HOST'S OWN
+      # CLI. These runners are persistent and fw-macos runs as a real user whose
+      # HOME is a person's home directory; a bare install on a version mismatch
+      # would silently downgrade that person's own claude the next time they
+      # upgraded it. So a host CLI that already matches the pin is used as-is, and
+      # a mismatch installs the pin under a CI-owned prefix that is prepended to
+      # PATH for later steps only.
+      #
+      # GATED ON dogfood/, so the public repo installs nothing: the self-test does
+      # not exist there, and this file is exported wholesale. CONDITIONAL, so the
+      # download happens once per runner per pin and every later run touches the
+      # network not at all. AND IT FAILS LOUDLY if the pin cannot be obtained,
+      # rather than handing the self-test a prerequisite it has been told is
+      # missing and dying 300 assertions later behind a worse message.
+      - name: Ensure the pinned claude CLI is present (the leg self-test asserts it)
+        run: |
+          CLAUDE_PIN=2.1.221
+          if [ ! -f dogfood/hostile-leg-selftest.sh ]; then
+            echo "SKIPPED: dogfood/ is absent, which is expected in the public repo. Nothing here needs the CLI."
+            exit 0
+          fi
+          claude_ver() { command -v claude >/dev/null 2>&1 && claude --version 2>/dev/null | awk '{print $1}'; }
+          have="$(claude_ver || true)"
+          if [ "$have" != "$CLAUDE_PIN" ]; then
+            echo "claude on PATH is ${have:-absent}; the pin is $CLAUDE_PIN. Installing the pin into a CI-owned prefix."
+            PIN_HOME="$HOME/.setlist-ci/claude-$CLAUDE_PIN"
+            mkdir -p "$PIN_HOME"
+            if [ ! -x "$PIN_HOME/.local/bin/claude" ]; then
+              curl -fsSL https://claude.ai/install.sh | HOME="$PIN_HOME" bash -s "$CLAUDE_PIN" || true
+            fi
+            if [ -x "$PIN_HOME/.local/bin/claude" ]; then
+              echo "$PIN_HOME/.local/bin" >> "$GITHUB_PATH"
+              PATH="$PIN_HOME/.local/bin:$PATH"
+              export PATH
+            fi
+            have="$(claude_ver || true)"
+          fi
+          if [ "$have" != "$CLAUDE_PIN" ]; then
+            echo "::error::the pinned claude CLI $CLAUDE_PIN could not be obtained (PATH has: ${have:-none})."
+            echo "Failing here rather than letting the self-test fail later on its own prerequisite"
+            echo "assertion: a gate that silently does not run reports a green it did not earn, and a"
+            echo "gate running an UNPINNED CLI reports a green about a different program than the one"
+            echo "this pin was measured against."
+            exit 1
+          fi
+          echo "claude:  $(claude --version 2>&1 | head -n 1)  [pinned at $CLAUDE_PIN]"
+          if command -v node >/dev/null 2>&1; then
+            echo "node:    $(node --version 2>&1 | head -n 1)"
+          else
+            echo "node:    not installed (the native installer ships its own runtime; no node on PATH)"
+          fi
+
       # The shellcheck baseline (backlog item 33b, cut worklist 4.5). The four
       # stamped hooks are the most safety-critical bash this project ships, they are
       # the files two consecutive releases found defects in, and until 2026-08-01 the
@@ -380,6 +458,53 @@ jobs:
             echo "SKIPPED: dogfood/watchdog.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
           fi
 
+      # THE LEG SELF-TEST (spec 0108, plan B2). 3,600-odd lines, every assertion in
+      # both directions, and until this wiring landed they gated QUOTA and nothing
+      # else: the hostile leg's preflight refuses to spend money over a red
+      # self-test, so a regression in the leg tooling was caught by the next PAID
+      # run, or by whoever remembered to invoke the file. A push could break the
+      # instrument that decides whether a release is fit to publish, and stay
+      # green.
+      #
+      # BOTH PLATFORM LEGS, like the four private steps above and unlike the four
+      # Linux-only steps below, and this file is the strongest case in the workflow
+      # for it. Its own header records 23 of 186 assertions red on macOS from a
+      # single GNU-only `sed -i`, which passed on Linux and would have gone on
+      # passing there forever: the mutation silently did not apply, the fixture
+      # stayed valid, the checker correctly accepted it, and the case failed. That
+      # is an INTERPRETER defect, the exact class the Linux-only guard below exists
+      # to keep ON the macOS runner rather than off it.
+      #
+      # NOT wrapped in the watchdog, unlike the suite. The watchdog earns its place
+      # around a step that once went ninety minutes silent; this one prints a line
+      # per assertion, so a hang here is already visible as a stalled log, and the
+      # wrapper would add a failure mode rather than remove one.
+      #
+      # THE COUNT CAN LEGITIMATELY DIFFER BY HOST, and the file says so on its
+      # totals line rather than letting the difference read as a regression. On
+      # fw-macos /usr/bin/nohup cannot execute anything at all ("can't detach from
+      # console"), which is host-structural and not provisionable from here, so
+      # three oracle cases announce a PROVEN skip and the summary states it asserts
+      # 349 of 352. A skip that is not proven in the same run never happens; see
+      # the probe in the self-test.
+      #
+      # Cost measured 2026-08-21 on run 32499457813, the same runners: 49s on
+      # fw-linux, 1m42s on fw-macos. It does not become the critical path and needs
+      # no concurrency treatment of its own: the Linux leg is 18 minutes of
+      # mutation check and oracle, the macOS leg is dominated by the suite, and the
+      # workflow-level concurrency group at the top of this file plus the scoping
+      # step above already cover it, since `dogfood/*.sh` is in the scoped path set
+      # and a push touching no tested path does not pay for this at all.
+      - name: Leg self-test (private; do the hostile leg's mechanical parts still hold?)
+        run: |
+          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
+            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
+          elif [ -f dogfood/hostile-leg-selftest.sh ]; then
+            bash dogfood/hostile-leg-selftest.sh
+          else
+            echo "SKIPPED: dogfood/hostile-leg-selftest.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
+          fi
+
       # The three private legs. dogfood/ is NOT exported, so these files exist
       # only in the source repo, and this workflow is copied wholesale into the
       # public one. The guard is FILE EXISTENCE rather than a repository-name
@@ -431,24 +556,30 @@ jobs:
           elif [ "$(uname -s)" = "Darwin" ]; then
             echo "SKIPPED on the macOS leg by design: oracle-diff.sh tests gate decisions, not the interpreter, and runs on the Linux leg."
           elif [ -f dogfood/oracle-diff.sh ]; then
-            # Bounded rather than --all: the full corpus is 242,437 cases and
-            # roughly twelve hours, measured 2026-08-01 by `--gate both --list`.
-            # The sample is every Nth line of the generated cross product, and a
-            # stride ALIASES against the corpus generator's inner loops, so at a
-            # given --cases value whole dimension values can go unexecuted (the
-            # 2.0.0 hostile leg measured 256 of 517 commit cases, both of the
-            # ';'-family separators, unreachable at exactly this --cases value,
-            # and the reach is not monotonic in the sample size). This bounded
-            # run is a smoke over PART of the space; only --all crosses all of
-            # it. A non-aliasing subsampler with a per-dimension reachability
-            # control is on the backlog, recorded in the 2026-08-14 leg triage.
+            # Bounded rather than --all: `--gate both` generates 284,022 cases
+            # (close 283,500, commit 515, scope 7) and running all of them takes
+            # hours. This bounded run is a smoke over PART of the space and only
+            # --all crosses all of it, which is unchanged and is stated first
+            # because it is the claim that matters.
             #
-            # This comment previously claimed the stride "still crosses the
-            # whole space", and before 2026-08-01 it said "about eleven
-            # minutes": both wrong, both in an EXPORTED file, and two hostile
-            # legs quoted the first without anyone checking. Recorded rather
-            # than quietly corrected, because the failure both times was taking
-            # a claim on report.
+            # WHAT CHANGED (spec 0106, backlog OS). The sample used to be every
+            # Nth line of the generated cross product, and a fixed stride ALIASES
+            # against the generator's inner loops: at this exact --cases value the
+            # commit corpus sampled both ';'-family separators zero times, and the
+            # close corpus sampled two of the four SUFFIXES zero times, those two
+            # being the trailing comment and the abbreviated option value, which
+            # are the leg-5 findings that axis was added to hold. The sample is
+            # now reserved-then-spread: one case for every axis value first, then
+            # a coprime walk fills the rest, so no axis value can be dark. The
+            # step below ASSERTS that rather than claiming it, and it is ordered
+            # first because a clean sheet over an aliased sample is worth nothing.
+            #
+            # This comment has been wrong twice before, in an EXPORTED file, and
+            # two hostile legs quoted it without checking: it once claimed the
+            # stride "still crosses the whole space" and once said "about eleven
+            # minutes". Recorded rather than quietly corrected, because the
+            # failure both times was taking a claim on report.
+            bash dogfood/oracle-diff.sh --axis-coverage --gate both --cases 300
             bash dogfood/oracle-diff.sh --gate both --cases 300
           else
             echo "SKIPPED: dogfood/oracle-diff.sh is absent, which is expected in the public repo (dogfood/ is not exported)."

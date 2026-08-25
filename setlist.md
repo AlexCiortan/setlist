@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.8 (the boundary edition)**
+**Edition v1.9 (the reckoning edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -1250,7 +1250,7 @@ beside `0002-first.md` is a different spec and both close independently.
 
 ### Doctrine for anything that checks anything (new in v1.7)
 
-These three are one family: a check reporting a result it did not earn. They are stated here
+These are one family: a check reporting a result it did not earn. They are stated here
 because an instance writes QA gates and automated checks of its own, and they generalise.
 
 - **A gate that cannot evaluate its predicate DENIES and says why. It never passes through.**
@@ -1280,6 +1280,24 @@ because an instance writes QA gates and automated checks of its own, and they ge
   setting the variable, with a control proving the refusal happens without it. This is worse
   than an assertion that tests nothing: an empty one is silent, a source-shape one is
   confident and wrong.
+- **A comparison asserts the size of what it compares, and refuses on zero (new in
+  v1.9).** An empty list matches anything: a coverage check whose extraction fails
+  silently compares nothing to the ledger and reports every row covered, and two
+  printed totals can agree while the records beneath them differ both ways and cancel.
+  Two obligations. Assert the size of each side before comparing, and treat zero as a
+  refusal, not a pass. Then mutate the thing under test once and watch the check go
+  red, because a comparison that has never been seen to fail has not yet been shown to
+  compare anything: a check that rebuilds its input path from its own directory can
+  spend every assertion on the pristine copy while the mutant sits unread.
+- **Label every green with what it is evidence OF (new in v1.9).** The attribution
+  defect is the more dangerous cousin of the vacuous comparison because it survives
+  the negative test: the check is real, it goes red under mutation, and its result is
+  filed under a claim it does not test, so genuine evidence of one property is read as
+  proof of another. No mechanical guard exists for it, since the defect sits one level
+  above the check, in what the green is said to mean. The habit that catches it: state
+  what each green is evidence of, in the report itself, and when every row passes,
+  construct the input that should fail. If you cannot construct one, the name of the
+  check is what is wrong.
 
 ### Scanning staged content: provenance and path scoping (new in v1.7)
 
@@ -1634,8 +1652,19 @@ where that layer ends. Everything below is a real hole, known and accepted, not 
   design; hooks bind the agent, and for teams the same checks move into CI.
 - **The secret scan is a first cut.** Token-shaped, connection-string-shaped and
   password-shaped strings. It will miss things. It is a seatbelt, not a vault.
-- **The pathspec hole.** A commit against a named index file or inside a nested repository is
-  not scanned by the staged-content checks.
+- **The pathspec hole.** `git commit <file>` commits the working-tree copy of that file
+  without staging it, so the staged-content scan has nothing to look at. The suite
+  asserts this hole deliberately rather than hiding it, so the day it closes, the suite
+  says so.
+- **The scans read this project's own index.** A commit aimed somewhere else is not
+  scanned: `git -C some/nested/repo commit ...` commits THAT repository's index (the
+  nested-repo hole), and `GIT_INDEX_FILE=...` names a different index outright (the
+  index-scope hole). These are distinct from the pathspec hole above, and the fix for
+  one is not the fix for another: that one is about what git STAGES, these two are
+  about WHICH INDEX is read. Following the target index instead would mean re-deriving
+  which repository each command line means, in every spelling, which is parser-chasing
+  this project has priced and refused. A nested repository is a different project; if
+  it should be governed it wants its own instance.
 - **`jq` is a hard dependency** of the stamped hooks, and the GIT hooks fail CLOSED without it
   while the three session gates report their verdict and PERMIT (advisory since v1.7): an
   absent jq, and a jq that exists and exits nonzero, both route to a refusal rather than a
@@ -1644,8 +1673,9 @@ where that layer ends. Everything below is a real hole, known and accepted, not 
 - **A headless BUILD has no integrity chain.** Nothing mechanically stops a `claude -p`
   session from building against a spec that was edited after approval, or never approved.
   BL-005's `Spec-hash` makes the drift VISIBLE at session start, which is a warning and not
-  a gate, and SessionStart has no deny mechanic. The designed fix is drafted in Part 7c and
-  designed in `design-attestation-v1.7.md`; it is not built in v1.7.
+  a gate, and SessionStart has no deny mechanic. The designed fix, an attestation binding
+  the QA verdict to the spec's `Spec-hash` as signed data, is drafted in Part 7c; it is
+  not built in v1.7.
 - **The set of tested platforms is a list, not a proof.** The suite runs on Linux and on
   macOS under bash 3.2 with the BWK awk, which is where the 1.0.8 fault would have been
   caught. A platform absent from that list is untested, and the release notes say which list
@@ -2148,8 +2178,10 @@ on the TUI. How they bind:
   edition: a spec is verified and approved; an attestation binds that verdict to the
   spec's `Spec-hash` as SIGNED DATA rather than as prose a checker greps; a headless
   executor refuses to build without a valid one, and an unreadable or unverifiable
-  attestation is a refusal rather than a warning. The reasoning, the decision record and
-  the implementation trigger are in `design-attestation-v1.7.md`. Until it is built, this
+  attestation is a refusal rather than a warning. The full reasoning, the decision record
+  and the implementation trigger live in the framework's own design records, which are
+  not part of the published set; the DRAFT shape stated here is the whole of what this
+  edition commits to. Until it is built, this
   is a KNOWN LIMITATION and not a guarantee: a named hole beats an unexercised mechanism,
   and a DRAFT section that reads as shipped is exactly the failure this edition spent its
   cycle removing.
@@ -2371,8 +2403,13 @@ action.
   the text catches up.
 - **Upgrades deliver stamp parity.** Whatever the current stamp emits for a new instance
   and the repo lacks (a hook, the `.claude/agents/qa-verifier.md` stub, a config key) is
-  stamped in by the upgrade, subject to the unmodified-copies rule above. An upgraded
-  instance and a freshly stamped one end at the same surface.
+  stamped in by the upgrade, subject to the unmodified-copies rule above. The git-hook
+  boundary is the concrete case worth naming rather than leaving to that generic list:
+  an upgrade of a pre-v1.8 instance delivers `.githooks/` (`pre-commit`,
+  `pre-merge-commit`, `pre-push`, `setlist-hook-lib.sh`) plus `trunk-audit.sh` into
+  `.claude/hooks/` (the advisory tool `pre-push` runs), and sets `core.hooksPath` and
+  `merge.ff = false`. An upgraded instance and a freshly stamped one end at the same
+  surface.
 - **Accepted deviations are recorded, not erased.** If the repo keeps a non-canonical
   layout (paths are roles), say so inside the umbrella ADR; a future chore can relocate.
 - **Close like any chore:** gates pass (docs-only, so results must match pre-migration), a

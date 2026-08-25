@@ -9,6 +9,30 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.1.0
+
+**Edition v1.9 (the reckoning edition).** A corrections-and-doctrine release: the
+framework document is edited for accuracy and gains one new principle. No command,
+hook, or gate behaviour changes.
+
+- The Part 8c upgrade description now names the git-hook boundary explicitly (which
+  files a pre-v1.8 upgrade delivers, and the two git settings it turns on) instead of
+  a generic description.
+- The Known limitations "pathspec hole" is restored to its narrow, original meaning
+  (`git commit <file>` only); the nested-repository index hole and the
+  `GIT_INDEX_FILE` hole are named as their own, separate limitations instead of being
+  folded into it.
+- Two references to a private design document that was never published are removed
+  from the edition text; the affected passages now name the mechanism directly.
+- A stale README bullet claiming the shipped gate messages still promise a denial is
+  corrected to match the shipped, advisory wording.
+- This changelog's own 1.1.0 entry below gains a one-line note that it was an
+  internal milestone, never tagged in this repository.
+- **New doctrine (Part 6):** a comparison should assert the size of what it is
+  comparing and refuse on zero rather than pass an empty comparison silently, and
+  every green result should be labelled with what it is evidence of rather than
+  assumed to mean more than it tested.
+
 ## 2.0.0
 
 **Edition v1.8 (the boundary edition).** A MAJOR release because the guarantee's
@@ -49,6 +73,8 @@ same things, and what moves is which layer the project calls its guarantee.
   the push-time audit, matching how the inventory row and QA verdict are already read.
 
 ## 1.1.0
+
+*An internal milestone: this version was never tagged in this repository and shipped as part of 2.0.0.*
 
 **Edition v1.7 (the convergence edition).** The enforcement boundary moves from
 the Claude Code hooks to GIT hooks, and one setting changes behaviour you will
