@@ -9,6 +9,44 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.1.1
+
+**Edition v1.9 (the reckoning edition), unchanged.** A documentation release. No
+command, hook, or gate behaviour changes, and the framework document is not edited:
+the only executable change is five new test assertions that pin an existing defect
+so the release that fixes it cannot ship with stale documentation.
+
+- **Known limitations is now three lists instead of one.** The section carried 29
+  bullets as a single undifferentiated wall, so sixteen deliberate design decisions
+  read as defects while the genuinely open holes were buried among them. It now
+  splits into **design boundaries** (decisions, each with its date and reason),
+  **open limitations** (real defects and gaps, each carrying a status line naming
+  what closes it), and **upstream conditions** (things this project does not
+  control, each naming what would lift it and the check that re-measures it). An
+  orientation paragraph carries the count per class. Every pre-existing bullet was
+  MOVED, not rewritten: no claim, measurement or workaround changed.
+- **Four limitations that were true but undocumented are now listed.** Three are
+  routes the session gates do not read and the push-time trunk audit refuses:
+  `git rebase` onto a spec branch, `git reset --hard` onto one, and the pathspec
+  form of `git checkout`. Each was re-measured for this release with controls in
+  both directions: all three put role-path code on the local trunk and all three
+  are refused at push, remote untouched. The fourth discloses a false denial that
+  is still present: a spec that QUOTES the closing-report template inside a fence
+  is refused an ordinary commit, because the detector reads the raw staged diff and
+  does not strip fenced blocks. That bullet names the workaround that actually
+  works and, explicitly, the plausible one that does not.
+- **The list shrinks by fixing, never by editing.** No bullet was deleted or
+  softened in this release, and that is now the stated policy for the section. The
+  fenced-template bullet above is scheduled to be deleted by the commit that fixes
+  the defect, which is the intended shape.
+- **An honest positioning note** in the Claude Code-native bullet: the enforcement
+  guarantee itself is harness-agnostic, because it lives in git hooks that git runs
+  from its own state and travels with the repository. What is Claude Code-specific
+  is the ceremony that installs and tailors it, plus the advisory session layer.
+- Housekeeping: the opening paragraph of Known limitations no longer restates a
+  finding it now links to, and no longer ends by pointing at the section it is
+  already inside.
+
 ## 2.1.0
 
 **Edition v1.9 (the reckoning edition).** A corrections-and-doctrine release: the

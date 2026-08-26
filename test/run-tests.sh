@@ -3432,11 +3432,15 @@ expect_script "interpreter: the trunk audit CATCHES the outcome the gate let pas
 # hole: The Bash escape hatch. | asserted
 # hole: The remote-merge bypass. | unassertable | needs a forge; verify by opening a PR and merging it in the web UI, confirming the close gate never runs
 # hole: Sideways routes to the trunk. | asserted
+# hole: `git rebase` onto a spec branch brings that branch's commits to the trunk with no closing merge. | asserted
+# hole: `git reset --hard <spec-branch>` moves the trunk onto unclosed work outright. | asserted
+# hole: `git checkout <spec-branch> -- <path>` copies role-path files onto the trunk without any merge to read. | asserted
 # hole: The pathspec hole. | asserted
 # hole: The secret scan is a first cut. | asserted
 # hole: A broken or missing `jq` is handled by the GIT hooks, not by the session gates. | asserted
 # hole: A timed-out hook is a skipped gate. | unassertable | harness behaviour, not hook behaviour; verified live 2026-07-25 with a sleeping hook under timeout 1 and 10, recorded in close-gate.sh's header
 # hole: The staged-content scans read every staged line. | asserted
+# hole: A spec that QUOTES the closing-report template inside a fence is refused an ordinary commit. | asserted
 # hole: The scans read this project's own index. | asserted
 # hole: `--no-verify` skips git hooks | asserted
 # hole: Git hooks are per-clone, and the tracked directory narrows that without closing it. | asserted
@@ -6233,6 +6237,123 @@ if gh_landed "$GH"; then
   bad "git hooks w: a Closing report that exists only inside a fence is REFUSED" \
       "it landed: quoted example text satisfied every close condition"
 else ok "git hooks w: a Closing report that exists only inside a fence is REFUSED"; fi
+
+# ===========================================================================
+# THE FENCED TEMPLATE FALSE DENIAL (V19-F2), PINNED AS A DOCUMENTED HOLE.
+#
+# pre-commit's lifecycle detector reads the RAW staged diff:
+#   grep -qE "^\+Status:[[:space:]]*(STATES)|^\+#+[[:space:]]*Closing report"
+# with no fence handling. So a spec that QUOTES the closing-report template,
+# changing no lifecycle state of its own, reads as a real close and is refused
+# SLH-STATUS-MISSING. That is a CONFIRMED FALSE DENIAL: it refuses honest work.
+#
+# It is pinned here in the REFUSE direction rather than left to prose, because
+# the public Known-limitations bullet that discloses it is only honest while the
+# behaviour stands. When the next cycle fence-strips this detector (aligning it
+# with the three sibling readers that already do), THIS ASSERTION GOES RED and
+# says the docs are now wrong, which is the whole contract of the hole ledger.
+#
+# Every case stages a file under specs/ and does NOT stage specs/STATUS.md. The
+# discriminating variable is the CONTENT and nothing else, which is what makes
+# the subject readable: a first cut of this measurement varied the PATH too and
+# "reproduced" nothing.
+f2_fixture() { # f2_fixture <dir> -- an armed instance sitting on the trunk
+  local d="$1"; rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude" "$d/.githooks"
+  git_init "$d"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$d/specs/STATUS.md"
+  cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" \
+     "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
+  chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm seed >/dev/null 2>&1
+  git -C "$d" config core.hooksPath .githooks
+}
+
+f2_commits() { # f2_commits <label> <spec-body> -> 0 if the commit LANDED
+  local d="$WORK/f2-$1"
+  f2_fixture "$d"
+  printf '%s' "$2" > "$d/specs/9001-case.md"
+  git -C "$d" add specs/9001-case.md >/dev/null 2>&1
+  git -C "$d" commit -qm "docs: $1" >/dev/null 2>&1
+}
+
+# CONTROL a (the allow direction): an ordinary spec edit that moves no lifecycle
+# state must COMMIT. Without this the refusals below would pass against a hook
+# that refuses everything.
+if f2_commits control-quiet '# Spec 9001
+
+Ordinary prose about a spec that is not closing.
+'; then
+  ok "f2 control a: an ordinary spec edit that moves no lifecycle state commits"
+else
+  bad "f2 control a: an ordinary spec edit that moves no lifecycle state commits" \
+      "the hook refused a spec edit with no lifecycle line, so every refusal below proves nothing"
+fi
+
+# CONTROL b (the deny direction): a REAL close without specs/STATUS.md staged
+# must be REFUSED. This is the behaviour the detector exists for.
+if f2_commits control-realclose '# Spec 9001
+
+Status: CLOSED
+
+## Closing report
+
+Architecture diagram: no impact
+'; then
+  bad "f2 control b: a REAL close without specs/STATUS.md staged is refused" \
+      "it committed, so the harness cannot observe this refusal and the subject below is unreadable"
+else
+  ok "f2 control b: a REAL close without specs/STATUS.md staged is refused"
+fi
+
+# THE SUBJECT. A quotation of the template, inside a fence, changing nothing.
+if f2_commits fenced-template '# Spec 9001
+
+This spec is ACTIVE. It shows readers what a closing report looks like:
+
+```markdown
+Status: CLOSED
+
+## Closing report
+
+Architecture diagram: no impact
+```
+
+Nothing above is this spec own lifecycle state: it is a quotation.
+'; then
+  bad "documented hole: a FENCED quotation of the close template is still refused (V19-F2)" \
+      "it committed. The false denial is FIXED, which is good news and makes the public Known-limitations bullet wrong: delete that bullet, its ledger row and this assertion together"
+else
+  ok "documented hole: a FENCED quotation of the close template is still refused (V19-F2)"
+fi
+
+# THE MIRROR DEFECT, same finding, opposite direction: an INDENTED heading is
+# not matched at all, while the release's three other readers accept
+# "^ {0,3}#{1,6}[ \t]+Closing report". Isolated to the indent by a control that
+# differs in nothing else, because the first cut of this case carried a Status
+# line too and so proved nothing about indentation.
+if f2_commits mirror-indented '# Spec 9001
+
+  ## Closing report
+
+Architecture diagram: no impact
+'; then
+  ok "documented hole: an INDENTED closing-report heading is not seen by this detector (V19-F2 mirror)"
+else
+  bad "documented hole: an INDENTED closing-report heading is not seen by this detector (V19-F2 mirror)" \
+      "it was refused, so the detector now indent-allows; align the docs and this assertion with the sibling readers"
+fi
+if f2_commits mirror-control '# Spec 9001
+
+## Closing report
+
+Architecture diagram: no impact
+'; then
+  bad "f2 mirror control: an UNINDENTED closing-report heading IS seen" \
+      "it committed, so the indent case above is not discriminating: the detector is missing the heading for some other reason"
+else
+  ok "f2 mirror control: an UNINDENTED closing-report heading IS seen"
+fi
 
 # THE GUARANTEE LAYER ALSO DEPENDS ON THE TOOLCHAIN, and F2 measured this half
 # separately: with grep broken, the git hooks landed the merge at rc=0 in silence
