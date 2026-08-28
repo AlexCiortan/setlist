@@ -98,19 +98,41 @@ STAGED="$(slh_staged_files "$PROJ")"
 # (F1 of the 2026-08-05 leg). See the library for what commit-time layers
 # cannot cover and which layer catches it instead.
 # ---------------------------------------------------------------------------
-slh_scan_added "$(git -C "$PROJ" diff --cached --unified=0 2>/dev/null)" "staged content"
+slh_scan_added "$PROJ" "$(git -C "$PROJ" diff --cached --unified=0 --no-ext-diff --src-prefix=a/ --dst-prefix=b/ 2>/dev/null)" "staged content"
 
 # ---------------------------------------------------------------------------
 # Cheap check 3: a staged spec lifecycle transition stages specs/STATUS.md too.
 # The vocabulary is the canonical enumeration from the edition (Part 5); the
 # suite asserts this list matches it and matches commit-gate.sh's.
+#
+# THE READING ITSELF LIVES IN THE LIBRARY (V19-F2). This hook used to grep the
+# raw staged diff here, with no fence handling and no indent allowance, and it
+# was the one reader of four that did: a quoted template refused an honest
+# commit and an indented heading was invisible. The enumeration stays here,
+# because the suite pins it against the edition and commit-gate.sh from this
+# file; the QUESTION moved to slh_lifecycle_added, beside the readers it now
+# agrees with.
 # ---------------------------------------------------------------------------
 SLH_LIFECYCLE_STATES='DRAFT QUEUED ACTIVE REVISED BUILT PARKED CLOSED'
 STATES_RE="$(printf '%s' "$SLH_LIFECYCLE_STATES" | tr ' ' '|')"
-# fail-open-ok: as above, a non-zero grep here means no staged spec lines, so
-# there is no lifecycle transition to pair with an inventory row.
-SPEC_ADDED="$(git -C "$PROJ" diff --cached --unified=0 -- 'specs/*.md' ':(exclude)specs/STATUS.md' ':(exclude)specs/TEMPLATE.md' 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
-if printf '%s\n' "$SPEC_ADDED" | grep -qE "^\+Status:[[:space:]]*(${STATES_RE})|^\+#+[[:space:]]*Closing report"; then
+# The exclusions are the two framework-owned files: STATUS.md is the inventory
+# itself, TEMPLATE.md is a template by definition.
+# Collected into an ARRAY rather than word-split out of a string: a spec path
+# containing a space would otherwise arrive as two paths, both unreadable, and
+# the detector would go quiet on exactly the file it was asked about. The
+# pathspec this replaced had no such problem, so preserving it is a fix keeping
+# its own promise rather than an improvement.
+# fail-open-ok: a grep that filters everything out means this commit stages no
+# spec file, so there is no lifecycle transition to pair with an inventory row.
+SPEC_LIST="$(printf '%s\n' "$STAGED" | grep -E '^specs/.*\.md$' | grep -vx 'specs/STATUS.md' | grep -vx 'specs/TEMPLATE.md' || true)"
+SPEC_PATHS=()
+while IFS= read -r __sp; do
+  [ -n "$__sp" ] || continue
+  SPEC_PATHS+=("$__sp")
+done <<EOF
+$SPEC_LIST
+EOF
+if [ "${#SPEC_PATHS[@]}" -gt 0 ] && slh_lifecycle_added "$PROJ" "$STATES_RE" "${SPEC_PATHS[@]}"; then
   if ! printf '%s\n' "$STAGED" | grep -qx 'specs/STATUS.md'; then
     slh_refuse "SLH-STATUS-MISSING" "this commit changes a spec lifecycle state but does not stage specs/STATUS.md; update the inventory row in the same commit."
   fi

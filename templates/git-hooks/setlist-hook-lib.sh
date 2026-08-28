@@ -21,7 +21,7 @@
 # silent pass. That rule is not general caution: plugin 1.0.8 shipped a
 # fail-open to every Mac because an awk that exited 2 produced an empty string
 # and an empty string read as "nothing to govern"
-# (design-pipeline-redesign.md sections 10 and 12a).
+# (the pipeline redesign that made every awk stage carry its own status).
 #
 # THE SCOPE OF THAT SENTENCE IS THIS LAYER, and it was overstated until the
 # v1.7 claims audit. Two corrections, both measured rather than argued. The
@@ -74,6 +74,76 @@
 # are just three readers wrong together.
 SLH_QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; qa_seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } } else { if (__r == "qa-pass-1" && inclose) { inb = 1; qch = __c; qlen = __m; n = 0; bad = 0; next } fence = 1; fch = __c; flen = __m; next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "") next; if (l ~ /^[A-Za-z0-9._-]+[[:space:]]*:[[:space:]]*(PASS|PARTIAL|FAIL)$/) n++; else bad = 1; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) inclose = 0 } } END { if (incmt) print "unclosed-comment"; else if (inb) print "unclosed"; else if (!qa_seen) print "none"; else if (bad) print "malformed"; else if (n == 0) print "empty"; else print "ok" }'
 
+# A FENCED EXAMPLE IS NOT A CLOSING REPORT, and the rule is stated ONCE here
+# because it now has two callers rather than one. It was assigned inside
+# slh_verify_close until 2026-08-26; the value is unchanged, byte for byte, and
+# the reasoning for what it strips stays at its use site in that function.
+# Hoisting it is what let the lifecycle detector below become a sibling of the
+# three readers that already carry it instead of a fourth private copy (A9).
+#
+# LOCKSTEP: byte-identical to close-gate.sh and trunk-audit.sh, asserted.
+SLH_TEMPLATE_FENCE_AWK='function __f(k,  i){ if(k) for(i=1;i<=n;i++) print b[i]; n=0 } { __l=$0; sub(/\r$/,"",__l); sub(/^[[:space:]]*/,"",__l); if (incmt) { __cb[++__cn]=$0; if (index(__l, "-->")) { incmt = 0; __cn=0 } next } if (!fence && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; __cn=0; __cb[++__cn]=$0; next } __c=substr(__l,1,1); if ((__c=="`" || __c=="~") && $0 ~ /^ ? ? ?[`~]/) { __m=0; while(substr(__l,__m+1,1)==__c) __m++; __raw=substr(__l,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { if (!fence) { fence=1; fch=__c; flen=__m; n=0; t=0; b[++n]=$0; next } else if (__c==fch && __m>=flen && __r=="") { fence=0; b[++n]=$0; __f(!t); next } } } if (fence) { b[++n]=$0; if($0 ~ /^ ? ? ?#+[ \t]+Closing report/) t=1; next } print } END { if(fence) __f(!t); if(incmt) for(__ci=1;__ci<=__cn;__ci++) print __cb[__ci] }'
+
+# A HEADING IS WHAT MARKDOWN SAYS A HEADING IS, IN THE FOURTH READER TOO
+# (v1.9 leg, V19-F2). One definition, used by every reader in this file.
+SLH_CLOSING_REPORT_RE=$'^ {0,3}#{1,6}[ \t]+Closing report'
+
+# THE LIFECYCLE DETECTOR, MADE A SIBLING OF THE THREE READERS IT DISAGREED WITH
+# (v1.9 leg, V19-F2: a CONFIRMED FALSE DENIAL, disclosed at 2.1.0 under a dated
+# owner ruling and promised to this cycle by that release's notes).
+#
+# pre-commit asked "does this commit move a spec lifecycle state" by grepping
+# the RAW staged diff for `^\+Status:...|^\+#+[[:space:]]*Closing report`. Two
+# defects, one cause, measured in both directions on a stamped fixture:
+#
+#   - A spec that QUOTES the closing-report template inside a ```markdown fence,
+#     changing no lifecycle state of its own, was refused SLH-STATUS-MISSING.
+#     The quotation is ordinary authoring: the template ships fenced in the
+#     edition, is stamped to specs/TEMPLATE.md, and the authoring skill tells
+#     authors to copy it.
+#   - The mirror: `  ## Closing report` with two spaces of indent was not matched
+#     AT ALL, while the three other readers in the same release accept
+#     `^ {0,3}#{1,6}[ \t]+Closing report`. Three readers, one release, three
+#     different opinions about what a Closing report heading is. That is the
+#     class this repository's leg 2 through 4 blockers came from.
+#
+# THE FIX IS THE SIBLING RULE, NOT A FOURTH SPELLING (A9). The detector reads
+# the spec FROM THE INDEX, strips template quotes with the same
+# SLH_TEMPLATE_FENCE_AWK the close verification uses, and matches the same
+# heading form. Reading the index rather than the diff text is deliberate and is
+# the half a diff-only repair gets wrong: `--unified=0` yields no context, so a
+# fence opened by an earlier commit is invisible and the stripper cannot know it
+# is inside one. The DIFF still decides WHICH lines are new, so an untouched
+# Status line in a file edited for other reasons does not fire the check; the
+# INDEX decides whether that line is live text or a quotation. Both questions
+# get asked of the surface that can answer them.
+slh_lifecycle_added() { # slh_lifecycle_added <proj> <states-re> <spec-path...> -> 0 when this change ADDS a live lifecycle line
+  local proj="$1" states_re="$2"; shift 2
+  local f live added
+  for f in "$@"; do
+    [ -n "$f" ] || continue
+    # A path with no index version (a deletion) has no live text, and a removed
+    # Status line was never an added one. The old detector read added lines only
+    # for the same reason.
+    # fail-open-ok: no live lifecycle line in this spec is nothing to pair with an inventory row.
+    live="$(slh_index_show "$proj" "$f" | awk "$SLH_TEMPLATE_FENCE_AWK" | grep -E "^Status:[[:space:]]*(${states_re})|${SLH_CLOSING_REPORT_RE}" || true)"
+    [ -n "$live" ] || continue
+    # fail-open-ok: a file whose staged diff adds nothing adds no lifecycle line.
+    added="$(git -C "$proj" diff --cached --unified=0 -- "$f" 2>/dev/null \
+             | grep -E '^\+' | grep -vE '^\+\+\+' | sed 's/^+//' || true)"
+    [ -n "$added" ] || continue
+    # A multi-line `live` cannot be passed to grep -F as one pattern argument
+    # without matching the JOINED text, so the set test is done line by line.
+    while IFS= read -r __lline; do
+      [ -n "$__lline" ] || continue
+      if printf '%s\n' "$added" | grep -qxF -- "$__lline"; then return 0; fi
+    done <<EOF
+$live
+EOF
+  done
+  return 1
+}
+
 # ===========================================================================
 # CONTENT SCANNING, BOUND TO CONTENT RATHER THAN TO AN OPERATION (F1, 2026-08-05).
 #
@@ -111,9 +181,309 @@ SLH_QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l)
 SLH_EMDASH="$(printf '\342\200\224')"
 SLH_SECRET_RE='(api[_-]?key|secret|passw(or)?d|token)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{16,}|[a-z][a-z0-9+.-]*://[^/@[:space:]]+:[^@[:space:]]+@'
 
-# slh_scan_added <diff-text> <what-it-is>
+# ===========================================================================
+# PATH-SCOPED SCANS: THE DECLARED EXCLUSION SET, NAMED OUT LOUD (KL4, spec 0122).
+#
+# The two scans above read every added line, which is right for the author's own
+# writing and wrong for a vendored tree, a fixture carrying a dummy credential,
+# or quoted external text. Splitting the commit does not help (measured): the
+# scan follows the content, so isolating the foreign file isolates it WITH the
+# scanner. So the projects that carry such content declare an exclusion set:
+#
+#   .claude/sdd.json  ->  "scan_exclusions": ["vendor/**", "test/fixtures/**"]
+#
+# FOUR PROPERTIES, each of which is the reason a different failure cannot happen
+# here, and each asserted by the suite rather than promised by this comment.
+#
+# 1. EVERY SKIP IS ANNOUNCED, EVERY TIME. A scan that silently declines to read
+#    a path is the vacuous green this whole layer exists to remove, wearing a
+#    feature's name. The notice carries the path AND the glob that matched it,
+#    at whichever layer did the skipping, so "why did this pass" is answerable
+#    from the output rather than from the config. The honest price: a push that
+#    walks two hundred commits over an excluded tree prints the notice two
+#    hundred times, once per commit, because each is a distinct true statement
+#    about a distinct commit and deduplicating them would be this file deciding
+#    which truths the operator needs.
+#
+# 2. ABSENCE IS BYTE-IDENTICAL TO THE PRE-FEATURE BEHAVIOUR, BY CONSTRUCTION.
+#    With nothing declared, slh_scan_added takes the SAME two greps over the
+#    SAME input it has always taken; the scoped path is not entered at all. That
+#    is deliberate: reproducing the old behaviour carefully inside the new code
+#    path is how a rewrite ships a difference nobody meant, and the suite's
+#    differential against the pinned pre-feature blobs would only tell us
+#    afterwards.
+#
+# 3. IT SCOPES THE CONTENT SCANS AND NOTHING ELSE. The set lives inside this one
+#    function, so role-path judgment, the trunk audit, lifecycle detection and
+#    every close check are out of its reach structurally rather than by
+#    agreement. A glob covering specs/ or .claude/ changes no verdict anywhere
+#    but here. That is what keeps this a seatbelt rather than a general ignore
+#    file: an exclusion set that can hide anything is not one.
+#
+# 4. ATTRIBUTION COMES FROM DIFF STRUCTURE, NOT FROM LINE TEXT. A path is read
+#    only from a `+++` header seen OUTSIDE a hunk, and hunk state is tracked from
+#    `diff --git` / `diff --cc` and `@@`. Every line inside a hunk carries a
+#    prefix column, so none of those three can be forged by content: a
+#    diff-of-a-diff carrying the line `+++ b/vendor/x` cannot point the scanner
+#    at an excluded path and walk a secret through under its name. Without this
+#    rule any excluded glob is a universal exemption for anyone who can write
+#    one line, which is the shape of the hole this feature would otherwise open
+#    while looking like it closed one.
+#
+# WHERE THE MATCH FAILS, THE SCAN RUNS. Every unreadable, unmatched or ambiguous
+# case degrades to scanning, never to skipping: a path git had to quote (non
+# ASCII, control characters) is scanned and said so, a case-variant spelling on
+# a case-insensitive filesystem does not match and is scanned, a glob naming
+# nothing changes nothing. Failing to exclude costs a false refusal the operator
+# can see; failing to scan costs a published secret.
+
+# The glob charset. A pattern is interpolated into a `case` pattern, which is
+# what makes shell globbing available at all, and an unrestricted string there
+# would be config-driven code: a value containing `)` or `;` ends the pattern and
+# starts a command, and an unbalanced `[` is a syntax error inside the hook. So
+# the charset is closed to what a repo-relative path glob actually needs, and
+# anything else is REFUSED rather than sanitised. The cost is that a path with a
+# space or a quote in it cannot be excluded; the direction of that cost is the
+# safe one (it gets scanned), and it is named in the refusal.
+SLH_SCAN_GLOB_BAD='[!A-Za-z0-9._/*?-]'
+
+# The diff reader. ONE program, two modes, because the path census and the line
+# filter must agree about what a header is: two readers of one structure is the
+# defect this file has paid for repeatedly.
+# THE EXCLUDED SET ARRIVES THROUGH THE ENVIRONMENT, NOT THROUGH -v, and this is
+# a measured correction rather than a preference. `awk -v x="a\nb"` is an ERROR
+# on BWK awk ("newline in string"), which is the awk macOS ships and therefore
+# the awk most operators run. The failure was silent in the worst possible
+# direction: awk exited non-zero having printed nothing, the caller read the
+# empty output as "no added lines to judge", and a commit carrying a secret on a
+# SCANNED path was allowed as soon as any OTHER path in the same change was
+# excluded. That is the 1.0.8 fail-open shape (an empty string reading as
+# "nothing to govern") reintroduced by a new feature, and the mixed-change
+# fixture is what caught it. ENVIRON carries newlines on every awk this project
+# supports, and the status of every awk stage is now checked by its caller.
+SLH_SCAN_SCOPE_AWK='
+BEGIN { if ("SLH_SCAN_EXLIST" in ENVIRON && ENVIRON["SLH_SCAN_EXLIST"] != "") { __n = split(ENVIRON["SLH_SCAN_EXLIST"], __a, "\n"); for (__i = 1; __i <= __n; __i++) if (__a[__i] != "") ex[__a[__i]] = 1 } }
+{
+  if ($0 ~ /^diff --git / || $0 ~ /^diff --cc /) { inhunk = 0; path = ""; known = 0; next }
+  if (!inhunk && $0 ~ /^@@/) { inhunk = 1; next }
+  if (!inhunk) {
+    if ($0 ~ /^\+\+\+ /) {
+      if ($0 ~ /^\+\+\+ b\//) { path = substr($0, 7); known = 1 }
+      else if ($0 == "+++ /dev/null") { path = ""; known = 1 }
+      else { path = ""; known = 0; unreadable = 1 }
+    }
+    next
+  }
+  if ($0 !~ /^\+/) next
+  if (mode == "paths") {
+    if (known && path != "") { if (!(path in seen)) { seen[path] = 1; print path } }
+    else if (!known) unattributed = 1
+    next
+  }
+  if (known && path != "" && (path in ex)) next
+  print
+}
+END { if (mode == "paths" && (unreadable || unattributed)) print "\001unreadable" }
+'
+
+# THE ONE READER (A9). Both layers, both scans, one implementation.
+#
+# It sets globals rather than printing its result, and that is not a style
+# choice: `x="$(f)"` runs f in a SUBSHELL, so a refusal recorded by slh_refuse
+# inside it sets SLH_REFUSED in a process that then exits, which is the exact
+# defect slh_verify_close carries a comment about. Setting globals also lets the
+# read happen ONCE per hook run rather than once per commit in the push walk,
+# so an unreadable config refuses with one message instead of two hundred.
+SLH_SCAN_EXCLUSIONS=""
+SLH_SCAN_EXCLUSIONS_STATE=""
+slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCAN_EXCLUSIONS set, 1 after refusing
+  # THE ENTRIES ARE PREFIXED AND COUNTED, and that is a measured correction
+  # rather than defensiveness. The first cut passed them as bare lines after an
+  # "ok" verdict, and `x="$(jq ...)"` STRIPS TRAILING NEWLINES: an empty array
+  # and an array holding one empty string both arrived as the single line "ok",
+  # so a project that declared nothing was refused SLH-SCAN-EXCLUSION-INVALID
+  # for an entry it never wrote. That reached the shipped sdd.json template,
+  # where "scan_exclusions": [] made every commit in a freshly stamped instance
+  # refuse. It was NOT caught by this feature's own empty-array assertion, which
+  # only checked that the commit was refused and got a refusal for the wrong
+  # reason: a green labelled with the verdict instead of with the evidence, the
+  # exact shape A8 exists for, committed by the test for the class.
+  #
+  # So each entry now arrives as ">" plus its text, which survives the strip
+  # because it is never empty, and the verdict carries the DECLARED COUNT so the
+  # reader can assert it read as many as jq wrote rather than assuming.
+  local proj="$1" raw verdict pat lit out="" declared="" seen=0
+  if [ -n "$SLH_SCAN_EXCLUSIONS_STATE" ]; then
+    [ "$SLH_SCAN_EXCLUSIONS_STATE" = "ok" ] && return 0
+    return 1
+  fi
+  # jq's STATUS is carried, not discarded, for the same reason slh_trunk carries
+  # it: a jq that exists and fails yields an empty string indistinguishable from
+  # a legitimate absent key, and here that empty string would read as "nothing
+  # excluded" while the truth is "the configuration was not read".
+  if ! raw="$(jq -r '
+        if (.scan_exclusions == null) then "absent"
+        elif ((.scan_exclusions | type) != "array") then "shape"
+        elif ([.scan_exclusions[] | select(type != "string")] | length) > 0 then "shape"
+        elif ([.scan_exclusions[] | select(contains("\n") or contains("\r"))] | length) > 0 then "shape"
+        else ((["ok " + (.scan_exclusions | length | tostring)]) + [.scan_exclusions[] | ">" + .] | join("\n")) end' "$proj/.claude/sdd.json" 2>/dev/null)"; then
+    SLH_SCAN_EXCLUSIONS_STATE="bad"
+    slh_refuse "SLH-UNREADABLE-CONFIG" "jq ran and failed while reading the scan exclusion set from .claude/sdd.json, so which paths this scan may skip could not be determined. THE LIKELIER CAUSE IS THE TOOLCHAIN, NOT THE FILE: the trunk was read from this same file moments ago. Check 'jq --version' and 'jq . .claude/sdd.json' in that order. Refusing rather than scanning against a configuration nobody read."
+    return 1
+  fi
+  verdict="$(printf '%s\n' "$raw" | head -n1)"
+  case "$verdict" in
+    "ok "*) declared="${verdict#ok }" ;;
+  esac
+  case "$verdict" in
+    ok*) verdict="ok" ;;
+  esac
+  case "$verdict" in
+    absent)
+      SLH_SCAN_EXCLUSIONS_STATE="ok"
+      SLH_SCAN_EXCLUSIONS=""
+      return 0
+      ;;
+    ok) ;;
+    shape)
+      SLH_SCAN_EXCLUSIONS_STATE="bad"
+      slh_refuse "SLH-SCAN-EXCLUSIONS-SHAPE" ".claude/sdd.json has a \"scan_exclusions\" that is not an array of plain strings, so which paths the em-dash and secret scans may skip cannot be read. Refusing rather than guessing in either direction: scanning everything would ignore a set this project declared, and scanning nothing would turn an unreadable line into a silent exemption. Set \"scan_exclusions\" to an array of repo-relative globs, for example [\"vendor/**\"], or remove the key to scan every path."
+      return 1
+      ;;
+    *)
+      # An empty or unrecognised verdict means the reader did not read. That is
+      # a refusal, never a default: this is the one place where "no evidence of
+      # an exclusion" and "no exclusion" must not be conflated.
+      SLH_SCAN_EXCLUSIONS_STATE="bad"
+      slh_refuse "SLH-UNREADABLE-CONFIG" "the scan exclusion set in .claude/sdd.json could not be read (the reader returned no verdict), so the em-dash and secret scans have no configuration to honour. Refusing rather than scanning against an unread file."
+      return 1
+      ;;
+  esac
+  while IFS= read -r pat; do
+    # An empty line here is the heredoc's own trailing newline, never an entry:
+    # a real entry always carries the ">" prefix, including an empty one.
+    [ -n "$pat" ] || continue
+    case "$pat" in
+      ">"*) pat="${pat#>}" ;;
+      *)
+        SLH_SCAN_EXCLUSIONS_STATE="bad"
+        slh_refuse "SLH-UNREADABLE-CONFIG" "the scan exclusion set in .claude/sdd.json was read in a form this hook does not recognise, so which paths the scans may skip is not established. Refusing rather than proceeding on a partial read."
+        return 1
+        ;;
+    esac
+    seen=$((seen + 1))
+    # NORMALISED, NOT USED RAW, and normalised the way role paths already are in
+    # this file. A set recorded as "./vendor", "/vendor" or "vendor/" names the
+    # same directory a human means, and four spellings of one value is how the
+    # guarantee layer went blind on "./src" once already.
+    pat="$(printf '%s' "$pat" | tr -s '/')"
+    pat="${pat#/}"
+    while [ "${pat#./}" != "$pat" ]; do pat="${pat#./}"; done
+    while [ "${pat%/}" != "$pat" ]; do pat="${pat%/}"; done
+    case "$pat" in
+      *$SLH_SCAN_GLOB_BAD*)
+        SLH_SCAN_EXCLUSIONS_STATE="bad"
+        slh_refuse "SLH-SCAN-EXCLUSION-INVALID" ".claude/sdd.json declares a scan exclusion containing a character a repo-relative path glob does not use. A glob here is letters, digits and . _ - / * ?; anything else is refused rather than sanitised, because these patterns are matched as shell globs and a value carrying shell syntax would be configuration deciding what this hook runs. A path that needs one of those characters cannot be excluded and will be scanned."
+        return 1
+        ;;
+    esac
+    case "/$pat/" in
+      *//*|*/./*|*/../*)
+        SLH_SCAN_EXCLUSIONS_STATE="bad"
+        slh_refuse "SLH-SCAN-EXCLUSION-INVALID" ".claude/sdd.json declares a scan exclusion that is empty, or that contains a . or .. path segment. Git paths are repo-relative and carry neither, so such a pattern can never match anything: it would sit in the config reading as coverage while excluding nothing. Write the path as git records it, for example \"vendor/**\"."
+        return 1
+        ;;
+    esac
+    # A PATTERN MUST NAME SOMETHING. Strip the wildcards and the separators; if
+    # nothing is left, the pattern matches every path in the repository, and an
+    # exclusion set that can hide anything is not a seatbelt. Decided by what the
+    # pattern IS rather than by a list of spellings: "*", "**", "*/*" and "?" all
+    # fail this one test, and any pattern carrying a single literal character
+    # passes it.
+    lit="$(printf '%s' "$pat" | tr -d '*?/')"
+    if [ -z "$lit" ]; then
+      SLH_SCAN_EXCLUSIONS_STATE="bad"
+      slh_refuse "SLH-SCAN-EXCLUSION-CATCHALL" ".claude/sdd.json declares a scan exclusion made only of wildcards, which matches every path in the repository and would switch the em-dash and secret scans off entirely while looking like a scoping decision. The exclusion set scopes these scans to make foreign content committable; it is not an off switch. Name the tree you mean, for example \"vendor/**\"."
+      return 1
+    fi
+    out="$out$pat
+"
+  done <<EOF
+$(printf '%s\n' "$raw" | tail -n +2)
+EOF
+  # THE COUNT IS ASSERTED BEFORE THE SET IS USED. A reader that silently saw
+  # fewer entries than the file declares would scan paths the project believes
+  # are excluded, which is the safe direction, and would ALSO mean the reader is
+  # wrong about a file it just parsed. The second fact is the one that matters:
+  # this is the same "assert the fixture count before comparing" rule the suite
+  # runs on itself, applied to the reader.
+  if [ -n "$declared" ] && [ "$seen" != "$declared" ]; then
+    SLH_SCAN_EXCLUSIONS_STATE="bad"
+    slh_refuse "SLH-SCAN-EXCLUSIONS-SHAPE" ".claude/sdd.json declares $declared scan exclusions but this hook read $seen of them, so the set it would honour is not the set the file records. Refusing rather than scanning against a partial read of a configuration."
+    return 1
+  fi
+  SLH_SCAN_EXCLUSIONS="$out"
+  SLH_SCAN_EXCLUSIONS_STATE="ok"
+  return 0
+}
+
+# slh_path_excluded <path> <globs> -> prints the glob that matched, or nothing.
+# `$g` is deliberately unquoted: that is the glob match. The charset check in the
+# reader above is what makes it safe, and the two belong together.
+slh_path_excluded() { # slh_path_excluded <path> <globs>
+  local p="$1" g
+  while IFS= read -r g; do
+    [ -n "$g" ] || continue
+    # shellcheck disable=SC2254  # The unquoted expansion IS the mechanism: these
+    # patterns are declared globs and quoting them would match them literally, so
+    # "vendor/**" would exclude a file actually named `vendor/**` and nothing else.
+    # What makes it safe is not quoting but the CHARSET check in the reader above,
+    # which refuses any pattern outside [A-Za-z0-9._/*?-] before it ever reaches
+    # here: without that, a value carrying `)` or `;` would be configuration
+    # deciding what this hook runs. The two belong together and neither is
+    # sufficient alone.
+    case "$p" in
+      $g|$g/*) printf '%s' "$g"; return 0 ;;
+    esac
+  done <<EOF
+$2
+EOF
+  return 1
+}
+
+# The scoped filter. Announcements go to STDERR from inside here on purpose:
+# they are notices rather than refusals, so nothing has to survive the command
+# substitution this function is called through, and the operator sees them
+# interleaved with the refusals they explain.
+slh_scan_scoped_added() { # slh_scan_scoped_added <diff-text> <globs> <what-it-is>
+  local diff_text="$1" globs="$2" where="$3" paths p g ex=""
+  # EVERY AWK STAGE CARRIES ITS OWN STATUS. An awk that exits non-zero prints
+  # nothing, and nothing is indistinguishable from a clean diff to the caller's
+  # `[ -n "$added" ]` test. The caller turns a non-zero return here into a
+  # refusal with a named code; it must never turn it into a pass.
+  paths="$(printf '%s\n' "$diff_text" | awk -v mode=paths "$SLH_SCAN_SCOPE_AWK")" || return 2
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    if [ "$p" = "$(printf '\001unreadable')" ]; then
+      printf 'setlist [SLH-SCAN-PATH-UNREADABLE]: %s: at least one file path could not be read from the diff header (git quotes paths carrying non-ASCII or control characters), so its added lines were SCANNED rather than matched against the exclusion set. That is the safe direction and it is reported rather than assumed.\n' "$where" >&2
+      continue
+    fi
+    g="$(slh_path_excluded "$p" "$globs")" || continue
+    ex="$ex$p
+"
+    printf 'setlist [SLH-SCAN-EXCLUDED]: %s: %s was NOT scanned (matched "%s" in .claude/sdd.json scan_exclusions). Nothing in that file was read by the em-dash or secret scan.\n' "$where" "$p" "$g" >&2
+  done <<EOF
+$paths
+EOF
+  printf '%s\n' "$diff_text" | SLH_SCAN_EXLIST="$ex" awk -v mode=filter "$SLH_SCAN_SCOPE_AWK"
+}
+
+# slh_scan_added <proj> <diff-text> <what-it-is>
 # Reads a unified diff and refuses on added lines only, so pre-existing content
-# is never re-judged by a later layer.
+# is never re-judged by a later layer. <proj> is the first argument because the
+# scan now has a configuration to read; every layer that sees content passes its
+# own project root, and there is no path through this function that reaches the
+# greps without the exclusion set having been read or refused.
 # slh_rows_newly_closed <status-new> <status-old> -> spec numbers whose row
 # flipped to CLOSED in this change, whether or not the spec FILE was touched.
 # This is the set the documentation has always described (v1.7 claims audit,
@@ -146,9 +516,48 @@ slh_spec_path_for() {
   printf '%s\n' "$hits"
 }
 
+# THE HEADER STRIP IS ANCHORED TO THE HEADER (SC sub-hole 6).
+#
+# It was `grep -vE '^\+\+\+'`, which drops the diff's own `+++ b/path` line and
+# also drops any ADDED LINE whose content begins with `++`. That is not a
+# contrived shape: `+++` opens a conflict marker, and diff-of-a-diff content and
+# some generated files carry it too. A secret on such a line was removed from the
+# scan's input by the scan itself.
+#
+# The exact forms git emits are `+++ b/<path>` and `+++ /dev/null`, and the
+# prefix is pinned at the call sites (`--src-prefix=a/ --dst-prefix=b/`) so a
+# repository configuring `diff.noprefix` or a custom prefix cannot change the
+# header out from under this anchor. Both ends are set together on purpose: an
+# anchor without a pinned prefix eats content on some repositories, and a pinned
+# prefix without an anchor eats content on all of them.
+SLH_DIFF_HEADER_RE='^\+\+\+ (b/|/dev/null)'
+
 slh_scan_added() {
-  local diff_text="$1" where="$2" added
-  added="$(printf '%s\n' "$diff_text" | grep -E '^\+' | grep -vE '^\+\+\+' || true)" # fail-open-ok: no added lines makes both greps below find nothing, which is the correct answer for a diff that adds nothing
+  local proj="$1" diff_text="$2" where="$3" added
+  # The exclusion set is read ONCE per hook run and refuses for the whole run if
+  # it cannot be read. Called from here rather than from each hook so no layer
+  # can scan without having asked (A9), and called OUTSIDE a command
+  # substitution so its refusal survives.
+  if ! slh_scan_exclusions_load "$proj"; then
+    SLH_REFUSED=1
+    return 1
+  fi
+  if [ -z "$SLH_SCAN_EXCLUSIONS" ]; then
+    # NOTHING DECLARED: the pre-feature path, entered verbatim rather than
+    # reproduced. This line is the whole of "the feature is invisible until
+    # asked for", and the suite proves it by differential against the pinned
+    # pre-feature hook blobs rather than by reading it.
+    added="$(printf '%s\n' "$diff_text" | grep -E '^\+' | grep -vE "$SLH_DIFF_HEADER_RE" || true)" # fail-open-ok: no added lines makes both greps below find nothing, which is the correct answer for a diff that adds nothing
+  else
+    # NOT fail-open-ok, and deliberately the only branch here that is not: the
+    # scoped filter can FAIL, and a failed filter prints nothing, which the
+    # emptiness test below would read as a clean diff. A scan that could not run
+    # has not passed.
+    if ! added="$(slh_scan_scoped_added "$diff_text" "$SLH_SCAN_EXCLUSIONS" "$where")"; then
+      slh_refuse "SLH-SCAN-FILTER-FAILED" "the path-scoped scan of $where could not read the change, so it read nothing and has judged nothing. A scan that could not run has not passed. This points at the toolchain rather than at the content: check 'awk --version'. Remove \"scan_exclusions\" from .claude/sdd.json to fall back to scanning every path, or push with SETLIST_SKIP_HOOKS=1 if this is an exception you are willing to own."
+      return 1
+    fi
+  fi
   [ -n "$added" ] || return 0
   if printf '%s\n' "$added" | grep -q "$SLH_EMDASH"; then
     slh_refuse "SLH-EMDASH" "$where contains an em-dash; replace it with a comma, colon, parentheses, or separate sentences."
@@ -242,7 +651,7 @@ SLH_CHORE_DONE_RE='^[-*+>[:space:]]*(CHORE-[0-9]+)[[:space:]]*:[[:space:]]*DONE(
 # those exist to find a specific block and must keep real content they are not
 # stripping FOR; this one exists to delete anything that is not live prose before
 # a plain grep runs over what remains, and needs none of that block-finding state.
-SLH_LIVE_TEXT_AWK='{ __l=$0; sub(/\r$/,"",__l); __para=PARA; PARA=0; if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (inhtml) { if (index(tolower(__l), htag)) inhtml = 0; next } if (!fence) { while ((__ci=index(__l, "<!--")) > 0) { __after=substr(__l, __ci+2); __cj=index(__after, "-->"); if (__cj > 0) { __l = substr(__l, 1, __ci-1) substr(__after, __cj+3) } else { __l = substr(__l, 1, __ci-1); incmt = 1; break } } } __t=__l; __d=0; while (1) { __save=__t; sub(/^ ? ? ?/,"",__t); if (__t ~ /^>/) { sub(/^> ?/,"",__t); __d++ } else { __t=__save; break } } if (fence) { if (__d==fbq && !(__t ~ /^(    |\t)/)) { __x=__t; sub(/^[[:space:]]*/,"",__x); __c=substr(__x,1,1); if (__c==fch) { __m=0; while(substr(__x,__m+1,1)==__c) __m++; __raw=substr(__x,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=flen && __r=="") fence=0 } } next } __hx=tolower(__t); sub(/^[[:space:]]*/,"",__hx); if (__hx ~ /^<(script|style|textarea|pre)([ \t>]|$)/) { if (__hx ~ /^<script/) htag="</script>"; else if (__hx ~ /^<style/) htag="</style>"; else if (__hx ~ /^<textarea/) htag="</textarea>"; else htag="</pre>"; if (index(__hx, htag)) { next } inhtml=1; next } __ic=__t; __peeled=0; while (1) { __s2=__ic; sub(/^ ? ? ?/,"",__ic); if (__ic ~ /^([-*+]|[0-9]+[.)])[ \t]/) { sub(/^([-*+]|[0-9]+[.)]) ?/,"",__ic); __peeled=1 } else if (__ic ~ /^>/) { sub(/^> ?/,"",__ic); __peeled=1 } else { __ic=__s2; break } } if (__peeled && __ic ~ /^(    |\t)/) { next } if (__d>0 && __t ~ /^(    |\t)/) { next } if (__d==0 && __t ~ /^(    |\t)/) { if (!__para) next } __o=__t; sub(/^([-*+]|[0-9]+[.)])[[:space:]]+/,"",__o); sub(/^[[:space:]]*/,"",__o); __c=substr(__o,1,1); if (__c=="`" || __c=="~") { __m=0; while(substr(__o,__m+1,1)==__c) __m++; __raw=substr(__o,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { fence=1; fch=__c; flen=__m; fbq=__d; next } } print __l; if (__l ~ /^[[:space:]]*$/) { intable=0 } else if (__d==0) { __ps=__t; sub(/^[[:space:]]*/,"",__ps); if (__ps ~ /^\|?[ \t|:-]*-[ \t|:-]*$/ && index(__ps,"|")) { intable=1 } else if (index(__ps,"|") && intable) { } else { intable=0; if (!(__ps ~ /^#+([ \t]|$)/) && !(__ps ~ /^[-=]+[ \t]*$/) && !(__ps ~ /^[*_]+[ \t]*$/)) PARA=1 } } }'
+SLH_LIVE_TEXT_AWK='{ __l=$0; sub(/\r$/,"",__l); __para=PARA; PARA=0; if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (inhtml) { if (index(tolower(__l), htag)) inhtml = 0; next } if (!fence) { while ((__ci=index(__l, "<!--")) > 0) { __after=substr(__l, __ci+2); __cj=index(__after, "-->"); if (__cj > 0) { __l = substr(__l, 1, __ci-1) substr(__after, __cj+3) } else { __l = substr(__l, 1, __ci-1); incmt = 1; break } } } __t=__l; __d=0; while (1) { __save=__t; sub(/^ ? ? ?/,"",__t); if (__t ~ /^>/) { sub(/^> ?/,"",__t); __d++ } else { __t=__save; break } } if (fence) { if (__d==fbq && !(__t ~ /^(    |\t)/)) { __x=__t; sub(/^[[:space:]]*/,"",__x); __c=substr(__x,1,1); if (__c==fch) { __m=0; while(substr(__x,__m+1,1)==__c) __m++; __raw=substr(__x,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=flen && __r=="") fence=0 } } next } __hx=tolower(__t); sub(/^[[:space:]]*/,"",__hx); if (__hx ~ /^<(script|style|textarea|pre)([ \t>]|$)/) { if (__hx ~ /^<script/) htag="</script>"; else if (__hx ~ /^<style/) htag="</style>"; else if (__hx ~ /^<textarea/) htag="</textarea>"; else htag="</pre>"; if (index(__hx, htag)) { next } inhtml=1; next } __ic=__t; __peeled=0; while (1) { __s2=__ic; sub(/^ ? ? ?/,"",__ic); if (__ic ~ /^([-*+]|[0-9]+[.)])[ \t]/) { sub(/^([-*+]|[0-9]+[.)]) ?/,"",__ic); __peeled=1 } else if (__ic ~ /^>/) { sub(/^> ?/,"",__ic); __peeled=1 } else { __ic=__s2; break } } if (__peeled && __ic ~ /^(    |\t)/) { next } if (__d>0 && __t ~ /^(    |\t)/) { next } if (__d==0 && __t ~ /^(    |\t)/) { if (!__para) next } __o=__t; sub(/^([-*+]|[0-9]+[.)])[[:space:]]+/,"",__o); sub(/^[[:space:]]*/,"",__o); __c=substr(__o,1,1); if (__c=="`" || __c=="~") { __m=0; while(substr(__o,__m+1,1)==__c) __m++; __raw=substr(__o,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { fence=1; fch=__c; flen=__m; fbq=__d; next } } if ((__d>0 || __peeled) && __ic ~ /^[[:space:]]*[|]/) next; print __l; if (__l ~ /^[[:space:]]*$/) { intable=0 } else if (__d==0) { __ps=__t; sub(/^[[:space:]]*/,"",__ps); if (__ps ~ /^\|?[ \t|:-]*-[ \t|:-]*$/ && index(__ps,"|")) { intable=1 } else if (index(__ps,"|") && intable) { } else { intable=0; if (!(__ps ~ /^#+([ \t]|$)/) && !(__ps ~ /^[-=]+[ \t]*$/) && !(__ps ~ /^[*_]+[ \t]*$/)) PARA=1 } } }'
 
 SLH_REFUSED=0
 
@@ -256,7 +665,7 @@ slh_refuse() { # slh_refuse <code> <message...>
 # somebody else's repo and none of our business.
 slh_is_instance() { [ -f "$1/.claude/sdd.json" ]; }
 
-# THE TOOLS THIS FILE RUNS ON MUST ACTUALLY WORK (v1.7 gate, hostile leg F2).
+# THE TOOLS THIS FILE RUNS ON MUST ACTUALLY WORK (v1.7 gate, adversarial review F2).
 #
 # The banner above promises EVERYTHING HERE FAILS CLOSED, and jq was the only
 # dependency anyone checked. Measured: with grep broken, a merge of an unclosed
@@ -318,7 +727,7 @@ slh_trunk() { # slh_trunk <proj>  -> prints the REDUCED trunk, or refuses
   # broken link, an OOM kill, the wrong architecture) would otherwise yield an
   # empty string indistinguishable from a legitimate absent key.
   if ! v="$(jq -r 'if (.trunk == null) then "main" elif ((.trunk | type) == "string" and (.trunk | length) > 0) then .trunk else "" end' "$proj/.claude/sdd.json" 2>/dev/null)"; then
-    slh_refuse "SLH-UNREADABLE-CONFIG" ".claude/sdd.json could not be parsed. Refusing rather than defaulting."
+    slh_refuse "SLH-UNREADABLE-CONFIG" "jq ran and failed while reading .claude/sdd.json, so the trunk could not be determined. THE LIKELIER CAUSE IS THE TOOLCHAIN, NOT THE FILE: jq exists here (it was probed above), so a jq that then fails is usually a broken link, the wrong architecture, or an OOM kill, and the config is usually fine. Check 'jq --version' and 'jq . .claude/sdd.json' in that order. Refusing rather than defaulting."
     return 1
   fi
   if [ -z "$v" ]; then
@@ -387,7 +796,7 @@ slh_role_paths() { # slh_role_paths <proj>
   # indistinguishable from a legitimate absent key.
   local shape
   if ! shape="$(jq -r 'if (.roles == null) then "absent" elif ((.roles | type) == "object") then "ok" else "bad" end' "$proj/.claude/sdd.json" 2>/dev/null)"; then
-    slh_refuse "SLH-UNREADABLE-CONFIG" ".claude/sdd.json could not be parsed while reading the role paths. Refusing rather than treating an unreadable config as a project with no feature code."
+    slh_refuse "SLH-UNREADABLE-CONFIG" "jq ran and failed while reading the role paths from .claude/sdd.json. THE LIKELIER CAUSE IS THE TOOLCHAIN, NOT THE FILE: the trunk was read from this same file moments ago, so a failure here points at jq (a broken link, the wrong architecture, an OOM kill) rather than at the config. Check 'jq --version' and 'jq . .claude/sdd.json' in that order. Refusing rather than treating an unreadable config as a project with no feature code."
     return 1
   fi
   if [ "$shape" = "bad" ]; then
@@ -406,7 +815,7 @@ slh_role_paths() { # slh_role_paths <proj>
     | grep -v '^$' | grep -v '^\.$' || true
 }
 
-# A BRANCH NAME IS NOT A STRING, IT IS A REF (1.1.0 hostile leg, second run).
+# A BRANCH NAME IS NOT A STRING, IT IS A REF (1.1.0 adversarial review, second run).
 #
 # On a case-insensitive filesystem (APFS by default, and NTFS) `refs/heads/main`
 # is one loose file, so `git checkout MAIN` succeeds, attaches HEAD to that same
@@ -645,7 +1054,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
   # NORMALISED, not used raw. A role recorded as "./src" or "/src" makes this
   # anchor `^./src/` or `^//src/`, which matches no staged path, so carries_code
   # stays 0 and the closes-no-spec refusal cannot fire: the guarantee layer goes
-  # blind on a value nothing rejects (1.1.0 hostile leg, second run). The same
+  # blind on a value nothing rejects (1.1.0 adversarial review, second run). The same
   # normalisation is applied in scope-hook.sh and trunk-audit.sh, which is the
   # point: a role path has to mean the same thing in all three or the layers
   # stop covering each other.
@@ -698,7 +1107,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
     # A FENCED EXAMPLE IS NOT A CLOSING REPORT. Ported from close-gate.sh, which
     # learned it as leg 5's F7; this layer never got it, so a spec whose entire
     # Closing report was a quoted ```markdown example satisfied all four checks
-    # below at once and really merged (v1.7 gate, hostile leg F9).
+    # below at once and really merged (v1.7 gate, adversarial review F9).
     #
     # Not a contrived input: the template ships in setlist.md as a fenced block
     # carrying exactly these markers, it is stamped to specs/TEMPLATE.md, and the
@@ -708,7 +1117,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
     # Stripped ONCE here rather than inside each check, so the four cannot drift
     # apart the way the report checker's readers did.
     #
-    # NARROWED for the 1.1.0 hostile leg's F6: dropping EVERY fenced span also
+    # NARROWED for the 1.1.0 adversarial review F6: dropping EVERY fenced span also
     # dropped a QA Pass 1 report pasted inside a fence, which is what Appendix
     # C's "(pasted verbatim)" means for tool output. This layer is the guarantee
     # rather than the advisory one, so it was the layer refusing compliant work
@@ -716,10 +1125,11 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
     # body carries a Closing-report heading; anything else in a fence is content.
     #
     # LOCKSTEP: byte-identical to close-gate.sh and trunk-audit.sh, asserted.
-    SLH_TEMPLATE_FENCE_AWK='function __f(k,  i){ if(k) for(i=1;i<=n;i++) print b[i]; n=0 } { __l=$0; sub(/\r$/,"",__l); sub(/^[[:space:]]*/,"",__l); if (incmt) { __cb[++__cn]=$0; if (index(__l, "-->")) { incmt = 0; __cn=0 } next } if (!fence && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; __cn=0; __cb[++__cn]=$0; next } __c=substr(__l,1,1); if ((__c=="`" || __c=="~") && $0 ~ /^ ? ? ?[`~]/) { __m=0; while(substr(__l,__m+1,1)==__c) __m++; __raw=substr(__l,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { if (!fence) { fence=1; fch=__c; flen=__m; n=0; t=0; b[++n]=$0; next } else if (__c==fch && __m>=flen && __r=="") { fence=0; b[++n]=$0; __f(!t); next } } } if (fence) { b[++n]=$0; if($0 ~ /^ ? ? ?#+[ \t]+Closing report/) t=1; next } print } END { if(fence) __f(!t); if(incmt) for(__ci=1;__ci<=__cn;__ci++) print __cb[__ci] }'
+    # The value is defined once at the top of this file, because the lifecycle
+    # detector reads it too (V19-F2).
     text="$(printf '%s\n' "$text" | awk "$SLH_TEMPLATE_FENCE_AWK")"
 
-    if ! printf '%s\n' "$text" | grep -qE $'^ {0,3}#{1,6}[ \t]+Closing report'; then
+    if ! printf '%s\n' "$text" | grep -qE "$SLH_CLOSING_REPORT_RE"; then
       slh_refuse "SLH-NO-CLOSING-REPORT" "spec $num has no Closing report section; complete it and stage it before closing."
       continue
     fi
@@ -729,7 +1139,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
     fi
 
     local diag answer
-    # A FIELD, NOT A SUBSTRING (1.1.0 hostile leg, F8). Anchored past any list
+    # A FIELD, NOT A SUBSTRING (1.1.0 adversarial review, F8). Anchored past any list
     # bullet so ordinary prose repeating the label cannot decide the check, which
     # it did in both directions. `tail -n1` is kept so a revised spec's later
     # report still wins. Same change as close-gate.sh, which carries the reasoning.

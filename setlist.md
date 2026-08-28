@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.9 (the reckoning edition)**
+**Edition v1.10 (the scoping edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -1382,6 +1382,24 @@ skill of their own (upgrading repos remove them; the Changelog is the delta list
   (below). Both failure classes were observed repeatedly in the field; a scan at commit
   time costs less than the cleanup commits it prevents. Fix findings rather than argue
   with the hook.
+- **The scans can be PATH-SCOPED, by declaration.** Vendored trees, fixtures carrying
+  dummy credentials and quoted external text are not the author's writing, and splitting
+  the commit does not separate them from the scanner. A project that carries such content
+  declares the paths in `.claude/sdd.json`:
+  `"scan_exclusions": ["vendor/**", "test/fixtures/**"]`, repo-relative globs, honoured by
+  both scans at the commit layer and the push layer alike. Four properties are part of the
+  mechanism rather than incidental to it. Every skip is ANNOUNCED in the hook's output,
+  naming the file and the glob that matched it, because an exclusion nobody is told about
+  is a hole one directory over. The set scopes the two CONTENT scans and nothing else: it
+  does not reach role-path judgment, the trunk audit, lifecycle detection or any close
+  check, so it cannot become a way to close a spec quietly. A set that cannot be read, or
+  one made only of wildcards, is REFUSED with a named code rather than resolved in either
+  direction, because a config error that quietly scans everything ignores a declaration
+  and one that quietly scans nothing is an exemption nobody wrote. And declaring nothing
+  is the default: with no key present the scans behave exactly as they always have. Where
+  a match cannot be decided, the scan RUNS: a case-variant spelling and a path git had to
+  quote are scanned and said so. This is scoping, not an off switch; `vendor/**` is a
+  decision about foreign content, and there is deliberately no pattern that means "all".
 - **At spec close, it is the gatekeeper.** It refuses to merge unless: the full test suite
   passes; the Closing report is complete, including the pasted Pass 1 QA report and the
   answered architecture-diagram field; and STATUS.md carries the one-line inventory update
@@ -2704,6 +2722,41 @@ judgment. Appendix A is the part worth keeping; everything else is implementatio
 ---
 
 ## Changelog
+
+- **v1.10 (the scoping edition).** This delta list is authoritative for
+  `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases
+  (this edition ships as plugin 2.2.0), the edition counts revisions of this document.
+  v1.10 revises the document in one place, and the reason it moves the edition at all is
+  that the place is a MECHANISM the release ships: an upgrader whose delta list does not
+  name a new configuration key has no way to learn it exists.
+
+  **THE TWO CONTENT SCANS CAN BE PATH-SCOPED, BY DECLARATION (Part 6).** The em-dash and
+  secret scans read every added line, which is right for the author's own writing and
+  wrong for a vendored tree, a fixture carrying a dummy credential, or quoted external
+  text. A project declares the paths in `.claude/sdd.json` as repo-relative globs
+  (`"scan_exclusions": ["vendor/**", "test/fixtures/**"]`), honoured at the commit layer
+  and the push layer alike. Four properties are part of the mechanism rather than
+  incidental to it, and Part 6 states each: every skip is ANNOUNCED, naming the file and
+  the glob; the set reaches those two scans and NOTHING else, so it cannot quiet the
+  trunk audit, lifecycle detection, role-path judgment or any close check; an unreadable
+  set, or one made only of wildcards, is REFUSED with a named code rather than resolved
+  in either direction; and declaring nothing leaves the scans exactly as they were. This
+  is scoping, not an off switch, and there is deliberately no pattern that means "all".
+
+  **NO OTHER PART OF THE DOCUMENT MOVED**, which is stated rather than left to a diff:
+  the rest of plugin 2.2.0 is hook and script bytes repairing behaviour the document
+  already described, so it changes what the gates DO without changing what the protocol
+  SAYS. Where those repairs narrowed a published limitation, the change is in the
+  Known limitations list rather than here.
+
+  **v1.9 (the reckoning edition) carried no entry of its own**, and this is the delta
+  list an upgrader reads, so it is named here rather than left as a hole. v1.9 was a
+  corrections edition: five places where the document's text said something the shipped
+  bytes did not, plus two new bullets in Part 6's doctrine for anything that checks
+  anything (a comparison asserts the size of what it compares and refuses on zero; label
+  every green with what it is evidence OF). It shipped as plugin 2.1.0. Its omission
+  here is recorded as a defect of the v1.9 turn, not repaired into a full entry after
+  the fact.
 
 - **v1.8 (the boundary edition).** This delta list is authoritative for
   `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases

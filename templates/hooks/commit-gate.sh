@@ -17,8 +17,7 @@
 
 set -u
 
-# THE commit ADVISES, IT DOES NOT VETO (design-advisory-means-advisory.md,
-# RATIFIED 2026-08-04).
+# THE commit ADVISES, IT DOES NOT VETO (the advisory-gate decision, RATIFIED 2026-08-04).
 #
 # This function used to emit permissionDecision "deny" and hold a hard veto over
 # the session. It now emits "allow" and reports what it WOULD have decided in a
@@ -27,7 +26,7 @@ set -u
 # after argument parsing and ref resolution and have nothing left to spell
 # around.
 #
-# WHY, in one number. Across four hostile legs on 2026-08-03 and 2026-08-04,
+# WHY, in one number. Across four adversarial reviews on 2026-08-03 and 2026-08-04,
 # five of six BLOCKERs and three MAJORs were in parser code written that same
 # day to fix the previous leg: roughly a fifth of parser repairs introduced a
 # new defect. That rate is a property of changing a shell command parser at all,
@@ -172,7 +171,7 @@ fi
 # cannot trip it, and git's own global options are tolerated between the binary
 # and the subcommand.
 # A HEREDOC BODY IS A QUOTING CONSTRUCT, AND THE LEXER DID NOT KNOW IT
-# (1.1.0 hostile leg, F9). The line-joining below turns every newline into a
+# (1.1.0 adversarial review, F9). The line-joining below turns every newline into a
 # separator, and a heredoc body is not inside quotes as far as the quote scan
 # is concerned, so every LINE OF THE COMMIT MESSAGE became its own segment
 # judged at command position. A message reading "git add . is no longer needed
@@ -601,7 +600,7 @@ while IFS= read -r seg; do
       HAS_STAGE="$STAGE_PENDING"
     fi
   elif printf '%s' "$seg" | grep -qE "^([^ ]*/)?git${GIT_OPTS} +($INDEX_VERBS)( |$)"; then
-    # POSITION IS THE WHOLE POINT (1.1.0 hostile leg, F1). This recorded any
+    # POSITION IS THE WHOLE POINT (1.1.0 adversarial review, F1). This recorded any
     # index writer ANYWHERE on the line and check 0 denied on its presence
     # alone, so `git commit -m "x" && git checkout -` was refused: the canonical
     # spec-branch workflow this framework prescribes, commit on the branch and
@@ -647,7 +646,7 @@ fi
 # -a on the same line is not this commit's auto-staging flag.
 #
 # GIT ACCEPTS ABBREVIATIONS, and this check matched fixed strings (1.1.0
-# hostile leg, F14). `git commit --inc src/a.txt -m "x"` ALLOWED while
+# adversarial review, F14). `git commit --inc src/a.txt -m "x"` ALLOWED while
 # `--include` denied; so did `--incl`, `--inclu`, `--includ` and `--interacti`,
 # all of them accepted by real git. close-gate.sh learned this exact class as
 # leg 5's F5 and closed it by matching a PREFIX rather than a list, and its own
@@ -656,7 +655,7 @@ fi
 # repository's signature failure, so the close gate's approach is ported here
 # rather than reinvented.
 #
-# AN OPTION'S VALUE IS NOT AN OPTION (1.1.0 hostile leg, F10). The scan ran over
+# AN OPTION'S VALUE IS NOT AN OPTION (1.1.0 adversarial review, F10). The scan ran over
 # the raw segment, so `git commit -m "-fix"` was denied as auto-staging: the
 # one-word message survives the lexer as a bare word and the old regex matched
 # the `i` in it. `-m "-i18n strings"` allowed, because a multi-word span becomes
@@ -772,6 +771,18 @@ if [[ -n "$IDENTITY_EMAIL" ]]; then
   fi
 fi
 
-# fail-open-ok: every check above ran against the staged content and found
-# nothing to deny; this is the gate's green path.
+# THE GREEN PATH HAS ONE NAMED EXCEPTION, and it is named here because the
+# annotation below was written as though it had none. If git is unusable (missing,
+# broken, or this is not a repository), every read above yields the EMPTY STRING,
+# every grep over it misses, and this path is reached having examined NOTHING
+# rather than having examined content and found it clean. The two are
+# indistinguishable from here. That is F3 of the 2.2.0 leg, deferred to 2.3.0
+# under a recorded owner bound, with the probe its two siblings already carry:
+# close-gate.sh refuses CG-NO-GIT and scope-hook.sh refuses SH-NO-GIT, and this
+# gate does not yet. The guarantee layer is unaffected, because the git hooks
+# still refuse the content; what is missing here is the warning, not the refusal.
+#
+# fail-open-ok: every check above ran against the staged content it was able to
+# read and found nothing to deny; this is the gate's green path, subject to the
+# exception named directly above.
 exit 0

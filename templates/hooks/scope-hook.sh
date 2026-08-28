@@ -20,8 +20,7 @@
 
 set -u
 
-# THE scope ADVISES, IT DOES NOT VETO (design-advisory-means-advisory.md,
-# RATIFIED 2026-08-04).
+# THE scope ADVISES, IT DOES NOT VETO (the advisory-gate decision, RATIFIED 2026-08-04).
 #
 # This function used to emit permissionDecision "deny" and hold a hard veto over
 # the session. It now emits "allow" and reports what it WOULD have decided in a
@@ -30,7 +29,7 @@ set -u
 # after argument parsing and ref resolution and have nothing left to spell
 # around.
 #
-# WHY, in one number. Across four hostile legs on 2026-08-03 and 2026-08-04,
+# WHY, in one number. Across four adversarial reviews on 2026-08-03 and 2026-08-04,
 # five of six BLOCKERs and three MAJORs were in parser code written that same
 # day to fix the previous leg: roughly a fifth of parser repairs introduced a
 # new defect. That rate is a property of changing a shell command parser at all,
@@ -270,6 +269,29 @@ canonical_branch() { # canonical_branch <name> -> git's stored spelling of it
 # `symbolic-ref --quiet --short HEAD` predates the floor and is what the git-hook
 # layer has always used. Measured identical on current git in both cases that
 # matter: the branch name on a branch, empty when detached.
+# GIT IS PROBED BEFORE ITS ANSWER IS BELIEVED (v1.9 leg, V19-F1 with F7).
+#
+# The line below cannot distinguish "detached HEAD" from "git is broken": both
+# yield an empty string, and empty never equals the trunk, so the gate exited 0
+# and a write to the trunk was allowed in total silence. That is the same
+# fail-open F7 measured in close-gate.sh, reaching this gate too, which is what
+# V19-F1 added to it. Measured before this block existed: with a git that exits
+# 127, a Write to a role path on the trunk produced ZERO BYTES here.
+#
+# Probed HERE rather than beside the awk/sed/tr/grep block above, deliberately:
+# this is the first line whose ANSWER this gate believes, and probing earlier
+# would warn in states this gate does not govern (an unscaffolded instance, a
+# repo with no sdd.json) where it currently stays correctly silent.
+#
+# The probe RUNS git and checks its OUTPUT as well as its status, like every
+# other probe in this file: a git that exits 0 and prints nothing disables this
+# read just as thoroughly. A detached HEAD still reads as empty BELOW and still
+# passes, which is the documented limitation and is deliberately not changed.
+_shgit="$(git -C "$PROJ" rev-parse --git-dir 2>/dev/null)" || _shgit=""
+if [[ -z "$_shgit" ]]; then
+  deny_literal "scope hook [SH-NO-GIT]: git is not usable here (it is missing, broken, or this is not a git repository), so this gate cannot tell which branch this write lands on and would otherwise allow feature code straight onto the trunk unchallenged. Run 'git rev-parse --git-dir' in this directory to see the failure; a missing binary, a broken dynamic library, a wrong-architecture build and a directory that is not a repository all look like this. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+fi
+
 BRANCH="$(git -C "$PROJ" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" # fail-open-ok: a detached HEAD yields empty here exactly as it did before, and a detached HEAD is not the trunk
 BRANCH="$(canonical_branch "$BRANCH")"
 TRUNK="$(canonical_branch "$TRUNK")"
@@ -390,7 +412,7 @@ if [[ -n "$CANON" ]]; then
     # verdict is invented from it.
   esac
 fi
-# THE ROLE PATH IS NORMALISED, NOT JUST TRIMMED (1.1.0 hostile leg, second run).
+# THE ROLE PATH IS NORMALISED, NOT JUST TRIMMED (1.1.0 adversarial review, second run).
 #
 # The WRITE path above is canonicalised hard (duplicate slashes squeezed, ./ and
 # ../ resolved, symlinked role directories resolved physically) because this file

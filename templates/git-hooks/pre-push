@@ -13,7 +13,7 @@
 # looks installed. A shipped file's own documentation contradicting the shipped
 # stamp is this repository's signature defect; it was filed during the v1.7 gate's
 # Phase 1, missed by the Phase 4 pass that edited this very layer, and found
-# independently by the 1.1.0 hostile leg.
+# independently by the 1.1.0 adversarial review.
 #
 # Why opt-in, and why a git hook rather than a Claude Code hook. The three
 # PreToolUse gates decide by parsing a shell command before it runs, and a
@@ -34,20 +34,48 @@
 # and that making it part of the protocol "waits for the v1.7 cut (backlog item
 # 28)". The 2026-08-03 correction above fixed the header and left this standing
 # four lines below it, so the file contradicted itself in the same comment
-# block; the 1.1.0 hostile leg filed the header half and this half survived it.
+# block; the 1.1.0 adversarial review filed the header half and this half survived it.
 # v1.7 IS the cut. Item 28 landed, this hook is stamped by default, and the
 # enforcement boundary is described in the edition text.
 #
-# To bypass once, for a deliberate exception you are willing to own:
-#   SETLIST_SKIP_TRUNK_AUDIT=1 git push ...
+# TWO ESCAPES, AND THEY ARE NOT THE SAME ESCAPE (KL2, and PD11's advice strings).
+#
+#   SETLIST_SKIP_TRUNK_AUDIT=1   skips the TRUNK AUDIT only. The content scan
+#                                still runs, and a secret-carrying push is still
+#                                refused.
+#   SETLIST_SKIP_HOOKS=1         skips this hook ENTIRELY, exactly as it skips
+#                                pre-commit. The whole-hook escape.
+#
+# Until 2026-08-26 there was one variable and it did both jobs, because it was
+# written when this hook did one job. When the content scan was added to
+# pre-push, the audit's escape silently became the scan's escape too: an
+# operator skipping a known-noisy audit ALSO turned off the secret scan, with
+# nothing on stderr saying so, and the scan is the half that protects a remote
+# rather than a branch policy. The name says "trunk audit"; it now skips the
+# trunk audit.
+#
+# PD11's half is the other end of the same defect. Two refusal messages in this
+# file advised `SETLIST_SKIP_HOOKS=1`, which this hook did not read, so the
+# advice was INERT: an operator following it exactly got the same refusal again.
+# The variable is honoured here now rather than the advice deleted, because the
+# advice was right about what an operator needs and wrong only about whether it
+# worked, and pre-commit already documents this spelling as THE deliberate
+# whole-hook exception.
 
 set -u
 
+if [[ "${SETLIST_SKIP_HOOKS:-}" == "1" ]]; then
+  printf 'setlist: pre-push skipped ENTIRELY by SETLIST_SKIP_HOOKS=1 (scan and audit both)\n' >&2
+  # fail-open-ok: the DOCUMENTED whole-hook escape hatch, announced on stderr so
+  # the bypass is never silent. Same spelling, same meaning, as pre-commit's.
+  exit 0
+fi
+
+SKIP_AUDIT=0
 if [[ "${SETLIST_SKIP_TRUNK_AUDIT:-}" == "1" ]]; then
   printf 'setlist: trunk audit skipped by SETLIST_SKIP_TRUNK_AUDIT=1\n' >&2
-  # fail-open-ok: the DOCUMENTED escape hatch, announced on stderr so the bypass
-  # is never silent.
-  exit 0
+  printf 'setlist: the push-time content scan still runs. Use SETLIST_SKIP_HOOKS=1 to skip both.\n' >&2
+  SKIP_AUDIT=1
 fi
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null || printf '.')"
@@ -78,7 +106,7 @@ fi
 # not the condition's status. RC was therefore always 0, the RC==2 test below was
 # dead code, and an audit that could not run AT ALL was reported to the operator
 # as a dirty trunk: a claim about their history that nothing had checked
-# (v1.7 gate, hostile leg F11). Both branches refuse, so this was never a bypass,
+# (v1.7 gate, adversarial review F11). Both branches refuse, so this was never a bypass,
 # only a confidently wrong diagnostic.
 # WHAT IS ACTUALLY BEING PUSHED, rather than what the local trunk happens to be
 # (1.1.0 leg, fourth run, F17).
@@ -194,7 +222,7 @@ TRUNK_NAME="$(slh_trunk "$REPO")" || {
 #                                     BECOME a candidate remote trunk (git hosts
 #                                     adopt the first pushed branch as the
 #                                     default), so audit them all as trunk. This
-#                                     is F1 of the plugin-2.0.0 hostile leg: a
+#                                     is F1 of the plugin-2.0.0 adversarial review: a
 #                                     differently-named branch pushed first to an
 #                                     empty remote used to fall through to
 #                                     auditing LOCAL main and ALLOW unclosed
@@ -203,6 +231,11 @@ TRUNK_NAME="$(slh_trunk "$REPO")" || {
 #                                     never touched) this whole block exists to
 #                                     close, reintroduced for the empty sub-case.
 # Conflating them would either break offline work or reinstate a hole.
+# The remote name (or URL) git passed this hook, captured ONCE: the scan builds
+# argument lists further down and the positional parameters must stay what git
+# set them to.
+REMOTE_ARG="${1:-}"
+
 REMOTE_TRUNK=""
 REMOTE_UNREACHABLE=0
 REMOTE_EMPTY=0
@@ -228,6 +261,68 @@ if [[ -n "${1:-}" ]]; then
 fi
 
 PUSH_REFS=""
+
+# THE SCAN WALKS THE RANGE PER COMMIT (SC sub-hole 3).
+#
+# It used to read `git diff <a>..<b>`, an ENDPOINT diff, and the edition said so
+# in Known limitations: content ADDED and then REMOVED inside the pushed range is
+# never rendered by an endpoint diff, while every object still reaches the
+# remote. A secret committed and then deleted two commits later was published and
+# reported clean. That is not a weak scanner, it is the wrong question: the
+# endpoint diff asks what the range CHANGES, and the thing being protected is
+# what the range CARRIES.
+#
+# THE HONEST PRICE, stated rather than discovered: push latency now grows with
+# the SIZE of the range instead of with the size of its net diff. A push of one
+# commit costs one diff, as before; a push of two hundred costs two hundred. The
+# ranges this hook sees are what a push adds, so that is bounded by how long
+# somebody worked offline, and the alternative is a scan that reports clean on
+# content it never read.
+#
+# A MERGE COMMIT IS READ WITH --cc, which for a non-merge is an ordinary diff and
+# for a merge shows exactly the content that differs from ALL parents: the
+# conflict resolution. That content exists in no parent, so a per-commit walk
+# that skipped merges would miss the one part of a merge nothing else scans.
+#
+# THE DIFF PREFIXES ARE FORCED (SC sub-hole 6). slh_scan_added drops the diff's
+# own `+++` header line before reading added lines, and that strip has to be
+# anchored to the exact header form or it eats content. A repository with
+# `diff.noprefix=true` or a custom `diff.dstPrefix` emits a different header, so
+# the prefixes are pinned at the call site here and the strip is anchored to
+# `+++ b/` in the library: the two ends of the same rule, set together.
+slh_scan_walk() { # slh_scan_walk <what-it-is> <rev-list-arg...>
+  local what="$1"; shift
+  local c revs rc
+  # THE DIFFERENCE BETWEEN "READ NOTHING" AND "THERE WAS NOTHING" (SC sub-hole 4).
+  #
+  # A scan of nothing must not read as a scan that found nothing, and the way to
+  # honour that is to separate the two cases rather than to refuse on an empty
+  # list. rev-list FAILING means the range could not be read: that refuses.
+  # rev-list SUCCEEDING with no output means the remote already has every commit
+  # this ref would publish, which is not a gap and must not refuse, because the
+  # ordinary re-push of an unchanged branch lands there.
+  #
+  # The first cut of this fix refused on the empty list and was caught by its own
+  # clean-push control: for a push of the TRUNK itself, merge-base(trunk, tip) IS
+  # the tip, so the derived range was empty by construction and the most ordinary
+  # operation there is, the first push of a repository, was refused. The
+  # derivation at the call site is what fixes that; this function only has to
+  # stop conflating the two zeroes.
+  revs="$(git -C "$REPO" rev-list "$@" 2>/dev/null)" && rc=0 || rc=$?
+  if [ "$rc" != "0" ]; then
+    slh_refuse "SLH-SCAN-UNREADABLE-RANGE" "the push-time scan could not enumerate the commits for $what, so it read nothing. A scan that could not run has not passed. Push with SETLIST_SKIP_HOOKS=1 if you are willing to own the exception."
+    return 1
+  fi
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    slh_scan_added "$REPO" "$(git -C "$REPO" show --unified=0 --cc --format=%n --no-ext-diff \
+                        --src-prefix=a/ --dst-prefix=b/ "$c" 2>/dev/null)" "$what ($c)"
+  done <<EOF
+$revs
+EOF
+  return 0
+}
+
 # ===========================================================================
 # TWO CHECKS, TWO SCOPES, AND THEY ARE NOT THE SAME SCOPE (F2, verdict leg).
 #
@@ -251,15 +346,43 @@ PUSH_REFS=""
 # ===========================================================================
 while read -r _lref _loid rref _roid; do
   [[ -n "${rref:-}" ]] || continue
+
+  # A deletion pushes the all-zero local oid and removes the branch or tag. No
+  # history is arriving, so there is nothing to scan and nothing to audit.
+  case "$_loid" in *[!0]*) ;; *) continue ;; esac
+
+  # A TAG PUSH CARRIES HISTORY AND WAS NOT SCANNED AT ALL (SC sub-hole 5).
+  #
+  # This loop skipped every ref that was not refs/heads/*, so `git push origin
+  # v1.0.0` published whatever that tag reaches with no scan. A tag can name a
+  # commit no branch reaches, which makes it the one push shape where the
+  # content is genuinely reachable ONLY through the ref being pushed. The range
+  # it introduces is what it carries that the trunk does not; where that cannot
+  # be derived, the push is REFUSED with a named code rather than skipped, for
+  # the same reason an unfindable trunk-audit.sh refuses.
   case "$rref" in
+    refs/tags/*)
+      tname="${rref#refs/tags/}"
+      # A tag may be annotated, so it is peeled to the commit it names.
+      # fail-open-ok: an unpeelable target leaves this empty and the refusal below fires.
+      TAG_TIP="$(git -C "$REPO" rev-list -n1 "$_loid" 2>/dev/null || true)"
+      if [ -z "$TAG_TIP" ]; then
+        slh_refuse "SLH-TAG-UNSCANNABLE" "tag $tname does not resolve to a commit here, so what it publishes cannot be read. Refusing rather than pushing unscanned history."
+        continue
+      fi
+      # fail-open-ok: no merge base leaves this empty and the full-history walk below is used, which reads MORE than the range, never less.
+      TAG_BASE="$(git -C "$REPO" merge-base "$TRUNK_NAME" "$TAG_TIP" 2>/dev/null || true)"
+      if [ -n "$TAG_BASE" ]; then
+        slh_scan_walk "the history tag $tname publishes" "$TAG_BASE..$TAG_TIP" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and acted on below
+      else
+        slh_scan_walk "the history tag $tname publishes" "$TAG_TIP" || true # fail-open-ok: same, recorded and decided below
+      fi
+      continue
+      ;;
     refs/heads/*) ;;
     *) continue ;;
   esac
   rname="${rref#refs/heads/}"
-
-  # A deletion pushes the all-zero local oid and removes the branch. No history
-  # is arriving, so there is nothing to scan and nothing to audit.
-  case "$_loid" in *[!0]*) ;; *) continue ;; esac
 
   # --- half one: THE CONTENT SCAN, over EVERY pushed ref -------------------
   #
@@ -273,13 +396,39 @@ while read -r _lref _loid rref _roid; do
   # oid; a new branch pushes the all-zero remote oid and has no range, so the
   # merge-base with the local trunk is used, which is the set of commits the
   # branch carries that the trunk does not.
+  #
+  # A RANGE THAT CANNOT BE EMPTY ON A FIRST PUSH (SC sub-hole 4). The old
+  # merge-base arm left SCAN_RANGE empty and SKIPPED the scan in silence, and the
+  # case that reaches it is not exotic: the FIRST push of a trunk to a new remote
+  # has no remote oid, and merge-base(trunk, tip) for the trunk itself IS the
+  # tip, so the push that ESTABLISHES a repository was the one push nothing
+  # scanned.
+  #
+  # The derivation is now "what this ref publishes that the REMOTE does not
+  # already have", which is the question the scan was always trying to ask:
+  #   - an existing remote branch names its own oid, so the range is exact;
+  #   - a NEW remote ref is read against every ref already known for this remote,
+  #     and where no such refs exist (an empty remote, or a push by URL) that
+  #     reduces to the ref's WHOLE history. That is the root-commit fallback, and
+  #     it reads more than a range rather than less.
+  # An empty result then genuinely means the remote already has these objects,
+  # which is the ordinary re-push and correctly scans nothing.
+  #
+  # An ARRAY rather than `set --`: the positional parameters hold the remote name
+  # git passed this hook, which the block above and the refusal below both read,
+  # and rebuilding them here would silently retarget both.
   case "$_roid" in
-    *[!0]*) SCAN_RANGE="$_roid..$_loid" ;;
-    *)      SCAN_BASE="$(git -C "$REPO" merge-base "$TRUNK_NAME" "$_loid" 2>/dev/null || true)" # fail-open-ok: an unresolvable base leaves the range empty and the scan is skipped, which the edition records as a documented hole
-            if [ -n "$SCAN_BASE" ]; then SCAN_RANGE="$SCAN_BASE..$_loid"; else SCAN_RANGE=""; fi ;;
+    *[!0]*) SCAN_ARGV=("$_roid..$_loid") ;;
+    *)      if [[ -n "$REMOTE_ARG" && -n "$(git -C "$REPO" for-each-ref --count=1 "refs/remotes/$REMOTE_ARG" 2>/dev/null)" ]]; then
+              SCAN_ARGV=("$_loid" --not "--remotes=$REMOTE_ARG")
+            else
+              SCAN_ARGV=("$_loid")
+            fi ;;
   esac
-  if [ -n "${SCAN_RANGE:-}" ]; then
-    slh_scan_added "$(git -C "$REPO" diff --unified=0 "$SCAN_RANGE" 2>/dev/null)" "the history this push adds to $rname"
+  if git -C "$REPO" rev-parse --quiet --verify "${_loid}^{commit}" >/dev/null 2>&1; then
+    slh_scan_walk "the history this push adds to $rname" "${SCAN_ARGV[@]}" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below, so a non-zero return must not abort before every ref is read
+  else
+    slh_refuse "SLH-SCAN-UNRESOLVED-TIP" "the tip this push would put on $rname ($_loid) does not resolve to a commit here, so what it publishes cannot be read. Refusing rather than reporting a scan that did not run."
   fi
 
   # --- half two: THE TRUNK AUDIT, over trunk refs only ---------------------
@@ -309,8 +458,18 @@ if [[ "${SLH_REFUSED:-0}" -ne 0 ]]; then
   printf '\nsetlist pre-push: the history being pushed carries content the commit-time\n' >&2
   printf 'scans never saw (cherry-pick, rebase and am create commits without firing\n' >&2
   printf 'pre-commit). Fix the content, or push with SETLIST_SKIP_HOOKS=1 if this is a\n' >&2
-  printf 'deliberate exception you are willing to own.\n' >&2
+  printf 'deliberate exception you are willing to own. SETLIST_SKIP_TRUNK_AUDIT=1 does\n' >&2
+  printf 'NOT skip this scan.\n' >&2
   exit 1
+fi
+
+# THE AUDIT ARM, WHICH IS WHAT SETLIST_SKIP_TRUNK_AUDIT=1 SKIPS (KL2). The scan
+# above has already run and already had its say; skipping the audit here rather
+# than at the top of the file is the whole of the narrowing.
+if [[ "$SKIP_AUDIT" -eq 1 ]]; then
+  # fail-open-ok: the DOCUMENTED escape hatch for the AUDIT ONLY, announced on
+  # stderr at the top of this run. The content scan ran and did not refuse.
+  exit 0
 fi
 
 RC=0

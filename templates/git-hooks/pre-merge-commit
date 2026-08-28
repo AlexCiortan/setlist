@@ -97,7 +97,7 @@ slh_verify_close "$PROJ" "$TRUNK" "this merge" || true
 # returns early on empty input. That is the pre-2026-08-05 behaviour for this
 # path (no scan at all on a merge), so it cannot be a regression, and the
 # pre-push range scan reads the same content again before it is shared.
-slh_scan_added "$(git -C "$PROJ" diff --cached --unified=0 HEAD 2>/dev/null)" "this merge's content"
+slh_scan_added "$PROJ" "$(git -C "$PROJ" diff --cached --unified=0 --no-ext-diff --src-prefix=a/ --dst-prefix=b/ HEAD 2>/dev/null)" "this merge's content"
 
 # The expensive half, and the reason this lives at merge time. It can be the
 # project's full suite.

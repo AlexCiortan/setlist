@@ -26,8 +26,7 @@
 
 set -u
 
-# THE close ADVISES, IT DOES NOT VETO (design-advisory-means-advisory.md,
-# RATIFIED 2026-08-04).
+# THE close ADVISES, IT DOES NOT VETO (the advisory-gate decision, RATIFIED 2026-08-04).
 #
 # This function used to emit permissionDecision "deny" and hold a hard veto over
 # the session. It now emits "allow" and reports what it WOULD have decided in a
@@ -36,7 +35,7 @@ set -u
 # after argument parsing and ref resolution and have nothing left to spell
 # around.
 #
-# WHY, in one number. Across four hostile legs on 2026-08-03 and 2026-08-04,
+# WHY, in one number. Across four adversarial reviews on 2026-08-03 and 2026-08-04,
 # five of six BLOCKERs and three MAJORs were in parser code written that same
 # day to fix the previous leg: roughly a fifth of parser repairs introduced a
 # new defect. That rate is a property of changing a shell command parser at all,
@@ -164,6 +163,40 @@ if [[ "$JQ_STATE" != "ok" ]]; then
   esac
 fi
 
+# GIT IS THE ONE LOAD-BEARING DEPENDENCY THAT WAS NEVER PROBED (v1.9 leg, V19-F1
+# with the earlier F7; one fix discharges both, V19-F1 being the wider measurement
+# of the same fail-open reaching the scope hook as well).
+#
+# awk, sed, tr, grep and jq are all probed above, and git is the tool this gate
+# actually decides with: it resolves the merged ref, reads the spec off the
+# branch, and finds the inventory row. With git present but broken every one of
+# those reads yields an empty string, and an empty string reads as "nothing to
+# object to", so the gate emitted ZERO BYTES and the merge proceeded unwarned.
+# Measured on the shipped bytes before this block existed: with a git that exits
+# 127, both this gate and scope-hook.sh emitted nothing at all, while the same
+# payloads with a working git were judged normally.
+#
+# The probe RUNS git and checks its OUTPUT as well as its status, like every
+# probe above it: a git that exits 0 and prints nothing disables these reads just
+# as thoroughly. `rev-parse --git-dir` is the cheapest question that requires git
+# to have loaded, found the repository, and produced a value.
+#
+# Scoped to a payload that names a merge, exactly as the toolchain and jq probes
+# are: warning on every Bash call would block the very command that repairs the
+# broken git, and this gate governs merges.
+_gitprobe="$(git -C "${CLAUDE_PROJECT_DIR:-.}" rev-parse --git-dir 2>/dev/null)" || _gitprobe=""
+if [[ -z "$_gitprobe" ]]; then
+  case "$INPUT" in
+    *merge*)
+      deny_literal "close gate [CG-NO-GIT]: git is not usable here (it is missing, broken, or this is not a git repository), so this gate cannot resolve the merged branch, read its Closing report, or find the inventory row, and would otherwise report nothing at all and let the merge proceed unchecked. Run 'git rev-parse --git-dir' in this directory to see the failure; a missing binary, a broken dynamic library, a wrong-architecture build and a directory that is not a repository all look like this. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+      ;;
+    # fail-open-ok: the raw payload names no merge, so this is not a command this
+    # gate governs, and warning on every Bash call would block the very command
+    # that repairs the broken git.
+    *) exit 0 ;;
+  esac
+fi
+
 # The status of THIS parse, not of jq in general. A jq that runs on {} can still
 # fail on the payload in front of it, and a decision taken on a value that was
 # never produced is the same fail-open one level down.
@@ -203,7 +236,7 @@ fi
 # almost always does. One shell-safe word is kept as that word. Everything else
 # becomes `@@Q@@`, a single token that is not a command, not a separator, and not
 # a ref, so it can contribute nothing to any decision. That is the opaque-token
-# model from design-opaque-token-gate-parsing.md, and it needs no placeholder map
+# model this gate implements, and it needs no placeholder map
 # precisely because the only spans worth reading are the ones that survive.
 #
 # An UNTERMINATED quote appends a marker rather than silently swallowing the rest
@@ -222,7 +255,7 @@ fi
 # failed to materialise, empty read as "nothing to govern", and absence read as
 # permission. Here the dependency was not missing or broken, it was STRICTER.
 # A gate whose lexer can fail must not treat lexer failure as a clean parse.
-# A HEREDOC BODY IS A QUOTING CONSTRUCT (1.1.0 hostile leg, F9). Identical
+# A HEREDOC BODY IS A QUOTING CONSTRUCT (1.1.0 adversarial review, F9). Identical
 # treatment to commit-gate.sh, which carries the full reasoning, and this gate
 # has the sharper consequence: a heredoc body line reading `git merge --no-ff
 # spec/0100-good was reverted` was judged as a real trunk merge, ran the
@@ -686,7 +719,7 @@ strip_wrappers() { # strip_wrappers <segment> -> echoes the segment, unwrapped
 # The separator is KEPT, because it says whether the previous segment SUCCEEDED
 # (F7 of the 1.0.8 leg). Only `&&` implies success. Order matters: && before a
 # single &, || before a single |.
-# A PAREN IS GROUPING, NOT SEQUENCING (1.1.0 hostile leg, F2). `(` and `)` were
+# A PAREN IS GROUPING, NOT SEQUENCING (1.1.0 adversarial review, F2). `(` and `)` were
 # swept into the same bucket as `;`, `|` and `&`, so a paren adjacent to `&&`
 # emitted a segment consisting of the bare marker, the honored `&&` was lost,
 # and the branch fell through to the UNKNOWN sentinel. The result was a DENY on
@@ -702,7 +735,7 @@ strip_wrappers() { # strip_wrappers <segment> -> echoes the segment, unwrapped
 # them together made punctuation weaken a guarantee the separator had given.
 SEGMENTS="$(printf '%s\n' "$CMD_NORM" | awk '{ gsub(/>&/, ">@@FD@@"); gsub(/<&/, "<@@FD@@"); gsub(/&&/, "\n@@AND@@ "); gsub(/\|\|/, "\n@@SEQ@@ "); gsub(/[()]/, "\n@@GRP@@ "); gsub(/[;|&]/, "\n@@SEQ@@ "); print }')"
 
-# A BRANCH NAME IS NOT A STRING, IT IS A REF (1.1.0 hostile leg, second run).
+# A BRANCH NAME IS NOT A STRING, IT IS A REF (1.1.0 adversarial review, second run).
 #
 # On a case-insensitive filesystem `refs/heads/main` is one loose file, so
 # `git checkout MAIN` resolves, HEAD attaches to that same ref, and this gate
@@ -1033,7 +1066,7 @@ while IFS= read -r seg; do
           # command, so `@{-1}` still resolves to the pre-command previous
           # branch, which is exactly what `-` is about to become.
           #
-          # THAT JUSTIFICATION HOLDS FOR ONE CHECKOUT ONLY (1.1.0 hostile leg,
+          # THAT JUSTIFICATION HOLDS FOR ONE CHECKOUT ONLY (1.1.0 adversarial review,
           # F11). When an EARLIER segment of the same line already switched, `-`
           # at run time means THAT segment's origin, not the pre-command
           # reflog, and the gate read the stale one:
@@ -1452,7 +1485,7 @@ SEGEOF
 # conditions are about a specific branch's artifacts, so with no branch there
 # is nothing to check and the gate refuses rather than guessing.
 if [[ -n "$UNRESOLVED_TARGET" ]]; then
-  # THE MESSAGE HAS TO NAME THE ACTUAL CAUSE (1.1.0 hostile leg, F2). This said
+  # THE MESSAGE HAS TO NAME THE ACTUAL CAUSE (1.1.0 adversarial review, F2). This said
   # "switches branches by a shorthand this gate cannot resolve (git checkout -
   # or @{-1} ...)" for EVERY route to the sentinel, including the commonest one,
   # where the branch is named in full and the problem is the SEPARATOR: after
@@ -1512,7 +1545,12 @@ for MERGED_REF in $MERGED_REFS; do
     # closed on zero or multiple matches.
     SPEC_NUM="${SPEC_BRANCH#spec/}"
     SPEC_NUM="${SPEC_NUM%%-*}"
-    SPEC_PATHS="$(git -C "$PROJ" ls-tree -r --name-only "$MERGED_REF" -- specs/ 2>/dev/null | grep -E "^specs/${SPEC_NUM}-[^/]*\.md$" || true)"
+    # F2 of the 2.2.0 leg, a CONFIRMED FALSE DENIAL and the same root cause as
+    # F1's blocker, read side. git emits a spec path carrying a non-ASCII byte, a
+    # quote, a backslash or a control character as a QUOTED C string, so this
+    # pattern missed and the gate denied CG-SPEC-MISSING naming a file that is
+    # present. -z emits the raw bytes undecorated; grep -z keeps the NUL framing.
+    SPEC_PATHS="$(git -C "$PROJ" ls-tree -r -z --name-only "$MERGED_REF" -- specs/ 2>/dev/null | grep -zE "^specs/${SPEC_NUM}-[^/]*\.md$" | tr '\0' '\n' || true)"
     MATCHES=0
     [[ -n "$SPEC_PATHS" ]] && MATCHES="$(printf '%s\n' "$SPEC_PATHS" | grep -c .)"
     if [[ "$MATCHES" -eq 0 ]]; then
@@ -1570,7 +1608,7 @@ for MERGED_REF in $MERGED_REFS; do
     # Fenced content is stripped ONCE here rather than in each check, so the
     # four cannot drift apart the way the report checker's three readers did.
     #
-    # ...BUT A PASTED QA REPORT IS NOT A TEMPLATE QUOTE (1.1.0 hostile leg, F6),
+    # ...BUT A PASTED QA REPORT IS NOT A TEMPLATE QUOTE (1.1.0 adversarial review, F6),
     # and the first cut of this stripper could not tell them apart. It dropped
     # EVERY fenced span, and Appendix C's own field is "QA Pass 1 report (pasted
     # verbatim)". Pasting a verifier's output inside a fence is what "verbatim"
@@ -1603,7 +1641,7 @@ for MERGED_REF in $MERGED_REFS; do
     # mandatory field. Assigned here, above the first consumer, so the diagram check
     # and the STATUS-row check share the one frozen reader. LOCKSTEP with setlist-
     # hook-lib.sh and trunk-audit.sh; the suite compares all three byte-identical.
-    SLH_LIVE_TEXT_AWK='{ __l=$0; sub(/\r$/,"",__l); __para=PARA; PARA=0; if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (inhtml) { if (index(tolower(__l), htag)) inhtml = 0; next } if (!fence) { while ((__ci=index(__l, "<!--")) > 0) { __after=substr(__l, __ci+2); __cj=index(__after, "-->"); if (__cj > 0) { __l = substr(__l, 1, __ci-1) substr(__after, __cj+3) } else { __l = substr(__l, 1, __ci-1); incmt = 1; break } } } __t=__l; __d=0; while (1) { __save=__t; sub(/^ ? ? ?/,"",__t); if (__t ~ /^>/) { sub(/^> ?/,"",__t); __d++ } else { __t=__save; break } } if (fence) { if (__d==fbq && !(__t ~ /^(    |\t)/)) { __x=__t; sub(/^[[:space:]]*/,"",__x); __c=substr(__x,1,1); if (__c==fch) { __m=0; while(substr(__x,__m+1,1)==__c) __m++; __raw=substr(__x,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=flen && __r=="") fence=0 } } next } __hx=tolower(__t); sub(/^[[:space:]]*/,"",__hx); if (__hx ~ /^<(script|style|textarea|pre)([ \t>]|$)/) { if (__hx ~ /^<script/) htag="</script>"; else if (__hx ~ /^<style/) htag="</style>"; else if (__hx ~ /^<textarea/) htag="</textarea>"; else htag="</pre>"; if (index(__hx, htag)) { next } inhtml=1; next } __ic=__t; __peeled=0; while (1) { __s2=__ic; sub(/^ ? ? ?/,"",__ic); if (__ic ~ /^([-*+]|[0-9]+[.)])[ \t]/) { sub(/^([-*+]|[0-9]+[.)]) ?/,"",__ic); __peeled=1 } else if (__ic ~ /^>/) { sub(/^> ?/,"",__ic); __peeled=1 } else { __ic=__s2; break } } if (__peeled && __ic ~ /^(    |\t)/) { next } if (__d>0 && __t ~ /^(    |\t)/) { next } if (__d==0 && __t ~ /^(    |\t)/) { if (!__para) next } __o=__t; sub(/^([-*+]|[0-9]+[.)])[[:space:]]+/,"",__o); sub(/^[[:space:]]*/,"",__o); __c=substr(__o,1,1); if (__c=="`" || __c=="~") { __m=0; while(substr(__o,__m+1,1)==__c) __m++; __raw=substr(__o,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { fence=1; fch=__c; flen=__m; fbq=__d; next } } print __l; if (__l ~ /^[[:space:]]*$/) { intable=0 } else if (__d==0) { __ps=__t; sub(/^[[:space:]]*/,"",__ps); if (__ps ~ /^\|?[ \t|:-]*-[ \t|:-]*$/ && index(__ps,"|")) { intable=1 } else if (index(__ps,"|") && intable) { } else { intable=0; if (!(__ps ~ /^#+([ \t]|$)/) && !(__ps ~ /^[-=]+[ \t]*$/) && !(__ps ~ /^[*_]+[ \t]*$/)) PARA=1 } } }'
+    SLH_LIVE_TEXT_AWK='{ __l=$0; sub(/\r$/,"",__l); __para=PARA; PARA=0; if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (inhtml) { if (index(tolower(__l), htag)) inhtml = 0; next } if (!fence) { while ((__ci=index(__l, "<!--")) > 0) { __after=substr(__l, __ci+2); __cj=index(__after, "-->"); if (__cj > 0) { __l = substr(__l, 1, __ci-1) substr(__after, __cj+3) } else { __l = substr(__l, 1, __ci-1); incmt = 1; break } } } __t=__l; __d=0; while (1) { __save=__t; sub(/^ ? ? ?/,"",__t); if (__t ~ /^>/) { sub(/^> ?/,"",__t); __d++ } else { __t=__save; break } } if (fence) { if (__d==fbq && !(__t ~ /^(    |\t)/)) { __x=__t; sub(/^[[:space:]]*/,"",__x); __c=substr(__x,1,1); if (__c==fch) { __m=0; while(substr(__x,__m+1,1)==__c) __m++; __raw=substr(__x,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=flen && __r=="") fence=0 } } next } __hx=tolower(__t); sub(/^[[:space:]]*/,"",__hx); if (__hx ~ /^<(script|style|textarea|pre)([ \t>]|$)/) { if (__hx ~ /^<script/) htag="</script>"; else if (__hx ~ /^<style/) htag="</style>"; else if (__hx ~ /^<textarea/) htag="</textarea>"; else htag="</pre>"; if (index(__hx, htag)) { next } inhtml=1; next } __ic=__t; __peeled=0; while (1) { __s2=__ic; sub(/^ ? ? ?/,"",__ic); if (__ic ~ /^([-*+]|[0-9]+[.)])[ \t]/) { sub(/^([-*+]|[0-9]+[.)]) ?/,"",__ic); __peeled=1 } else if (__ic ~ /^>/) { sub(/^> ?/,"",__ic); __peeled=1 } else { __ic=__s2; break } } if (__peeled && __ic ~ /^(    |\t)/) { next } if (__d>0 && __t ~ /^(    |\t)/) { next } if (__d==0 && __t ~ /^(    |\t)/) { if (!__para) next } __o=__t; sub(/^([-*+]|[0-9]+[.)])[[:space:]]+/,"",__o); sub(/^[[:space:]]*/,"",__o); __c=substr(__o,1,1); if (__c=="`" || __c=="~") { __m=0; while(substr(__o,__m+1,1)==__c) __m++; __raw=substr(__o,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { fence=1; fch=__c; flen=__m; fbq=__d; next } } if ((__d>0 || __peeled) && __ic ~ /^[[:space:]]*[|]/) next; print __l; if (__l ~ /^[[:space:]]*$/) { intable=0 } else if (__d==0) { __ps=__t; sub(/^[[:space:]]*/,"",__ps); if (__ps ~ /^\|?[ \t|:-]*-[ \t|:-]*$/ && index(__ps,"|")) { intable=1 } else if (index(__ps,"|") && intable) { } else { intable=0; if (!(__ps ~ /^#+([ \t]|$)/) && !(__ps ~ /^[-=]+[ \t]*$/) && !(__ps ~ /^[*_]+[ \t]*$/)) PARA=1 } } }'
 
     # The Closing report section exists (Appendix C: "## Closing report ...").
     if ! printf '%s\n' "$SPEC_TEXT" | grep -qE $'^ {0,3}#{1,6}[ \t]+Closing report'; then
@@ -1692,7 +1730,7 @@ for MERGED_REF in $MERGED_REFS; do
     # The architecture-diagram field (Appendix C, exact label "Architecture
     # diagram:") is answered: "updated in this commit" or "no impact", never the
     # template placeholder (which still carries angle brackets).
-    # A FIELD, NOT A SUBSTRING (1.1.0 hostile leg, F8), which is the third time
+    # A FIELD, NOT A SUBSTRING (1.1.0 adversarial review, F8), which is the third time
     # this release has had to make that same correction: the STATUS row went
     # from "grep the row for CLOSED" to "field 4 must BE CLOSED" (leg 5 F8), the
     # QA verdict from "the word anywhere" to "the word as a field" (B6), and this

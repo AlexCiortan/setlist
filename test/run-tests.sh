@@ -126,6 +126,48 @@ session_payload() { # session_payload <source>
 HOOK_OUT=""
 HOOK_RC=0
 
+# A PERMISSION FIXTURE THAT CANNOT ARM ITSELF MUST NOT REPORT A PASS (V1b).
+#
+# Three fixtures in this file make a directory unreadable with `chmod 000` or
+# `chmod 300` and then assert that the code REFUSES rather than vouching for what
+# it cannot see. `chmod` is a no-op against uid 0, which a cold container
+# typically runs as, so on those hosts the directory stayed readable, the
+# refusal never fired, and the assertion failed for a fixture reason while
+# looking like a real defect. A remote session reported exactly that: `808/1` on
+# `refresh R9c` in a container, against a tree this host runs green.
+#
+# The guard asks whether the restriction ACTUALLY BIT rather than asking who we
+# are. That is deliberate and it is the stronger question: uid 0 is only the
+# common reason chmod does nothing, and a filesystem mounted without permission
+# support, an ACL, or a container's user namespace produce the same no-op
+# without producing uid 0. Testing the effect covers all of them, and it cannot
+# drift from the thing it is a proxy for, because it is not a proxy.
+#
+# It SKIPS LOUDLY rather than refusing to run the whole suite: these are three
+# assertions out of hundreds, the rest are perfectly meaningful as root, and
+# refusing outright would make the suite unrunnable in exactly the environment
+# CI containers use. The skip names the reason so it can never be read as a pass.
+# THE PROBE IS A SHELL BUILTIN, NOT `ls`, AND THAT WAS MEASURED RATHER THAN
+# ASSUMED. The first cut asked `ls "$dir" >/dev/null 2>&1`. On this development
+# machine `ls` is a replacement that prints "Permission denied ... code: 13" and
+# EXITS 0, so the probe concluded the chmod had not bitten, and all three
+# assertions would have skipped silently on the one host that can actually run
+# them. A guard against a silent pass that introduces a silent pass is worth
+# catching, and only running it caught it.
+#
+# `[ -r ] && [ -x ]` is a bash builtin, so it depends on no external tool, and it
+# is the SAME predicate hooks_layer_is_ours uses to decide it cannot vouch for a
+# directory. Asking the code's own question is what makes this a precondition
+# check rather than a second opinion. As root, access(2) succeeds on both
+# regardless of mode, which is exactly the case that must skip.
+perm_fixture_bites() { # perm_fixture_bites <path> <label> -> 0 when the chmod really restricts
+  if [[ -r "$1" && -x "$1" ]]; then
+    ok "$2: SKIPPED, chmod does not restrict this process here (uid $(id -u)), so the fixture cannot arm its own precondition and a pass would be unearned"
+    return 1
+  fi
+  return 0
+}
+
 run_hook() { # run_hook <hook-file> <project-dir> <payload>
   HOOK_OUT="$(printf '%s' "$3" | CLAUDE_PROJECT_DIR="$2" bash "$1" 2>/dev/null)"
   HOOK_RC=$?
@@ -190,7 +232,7 @@ run_hook_brokenjq() { # run_hook_brokenjq <hook-file> <project-dir> <payload>
   HOOK_RC=$?
 }
 
-# THE SAME TRICK, FOR THE REST OF THE TOOLCHAIN (v1.7 gate, hostile leg F2).
+# THE SAME TRICK, FOR THE REST OF THE TOOLCHAIN (v1.7 gate, adversarial review F2).
 #
 # jq was the only dependency anyone probed, and close-gate.sh:133-145 states the
 # rule in general terms ("A gate whose lexer can fail must not treat lexer
@@ -480,6 +522,37 @@ close_fixture() {
 MERGE_CMD='git merge --no-ff spec/0001-thing'
 
 # j. no Closing report
+# F2 of the 2.2.0 leg, a CONFIRMED FALSE DENIAL and F1's root cause on the READ
+# side. A fully compliant spec whose FILENAME carries a non-ASCII byte was
+# refused CG-SPEC-MISSING, the message naming a file that is present, because
+# `git ls-tree --name-only` emits the path QUOTED and the gate's
+# ^specs/NNNN-[^/]*\.md$ pattern could not match through the quotes and escapes.
+#
+# The CONTROL runs first and is the ASCII sibling of the same fixture, so a green
+# here is evidence about the FILENAME rather than about close_fixture.
+CL="$WORK/close-f2-ascii"; close_fixture "$CL" yes yes answered yes no true
+run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
+expect_allow "close-gate F2 control: a compliant spec with an ASCII filename merges"
+
+# THE RENAME MUST HAPPEN ON THE SPEC BRANCH, not on the trunk. The first cut of
+# this case renamed on main, because close_fixture leaves you there, so the gate
+# read the still-ASCII file from MERGED_REF and the case PASSED against pre-fix
+# bytes: a vacuous assertion that would have shipped as evidence for a fix it
+# never exercised. Caught by running it against the unfixed tree, which is the
+# only reason it is written this way.
+CL="$WORK/close-f2-utf8"; close_fixture "$CL" yes yes answered yes no true
+git -C "$CL" checkout -q spec/0001-thing
+git -C "$CL" mv "specs/0001-thing.md" "specs/0001-$(printf 'caf\303\251').md"
+git -C "$CL" add -A && git -C "$CL" commit -qm "the spec file carries a non-ASCII byte"
+git -C "$CL" checkout -q main
+# The fixture asserts its own shape: the branch must really carry the renamed
+# file, or the case below tests nothing.
+if ! git -C "$CL" ls-tree -r -z --name-only spec/0001-thing | tr '\0' '\n' | grep -q "^specs/0001-"; then
+  printf 'FIXTURE BROKEN: close-f2-utf8 has no specs/0001-* on the spec branch\n' >&2
+fi
+run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
+expect_allow "close-gate F2: a compliant spec whose FILENAME carries a non-ASCII byte still merges"
+
 CL="$WORK/close-j"; close_fixture "$CL" no no answered yes no true
 run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
 expect_deny "close-gate j: a branch with no Closing report is denied" "Closing report"
@@ -938,7 +1011,7 @@ else
       "the deny reason did not clear sdd.json: $HOOK_OUT"
 fi
 
-# THE REST OF THE TOOLCHAIN, one tool at a time (hostile leg F2).
+# THE REST OF THE TOOLCHAIN, one tool at a time (adversarial review F2).
 #
 # Asserted on the CODE rather than on "it denied", deliberately. The payload
 # below is a governed merge that the healthy gate already denies for an ordinary
@@ -952,6 +1025,36 @@ for bt in awk sed tr grep; do
   run_hook_brokentool "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "clean"')"
   expect_deny "toolchain t2: the commit gate fails CLOSED when $bt is broken" "CM-NO-TOOLCHAIN"
 done
+
+# GIT, THE ONE LOAD-BEARING DEPENDENCY THAT WAS NEVER PROBED (v1.9 leg, V19-F1
+# with F7; one fix, two gates, so two assertions).
+#
+# git is the tool these gates DECIDE with: close-gate resolves the merged ref and
+# reads the spec off the branch, scope-hook asks which branch HEAD is on. With
+# git present but broken every one of those reads returned an empty string, and
+# empty read as "nothing to object to", so both gates emitted ZERO BYTES and the
+# operation proceeded unwarned. Watched RED first on the pre-fix bytes: both
+# cases below produced no output at all, while all three controls already held.
+#
+# Asserted on the CODE, like its toolchain siblings above and for the same
+# reason: the merge payload is one the healthy gate denies anyway, so a bare
+# "did it deny" would pass with or without the probe.
+build_brokentool_bin git
+run_hook_brokentool "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
+expect_deny "toolchain t3: the close gate names a no-git code when git is broken" "CG-NO-GIT"
+
+# The scope hook's fail-open was one level further in: a broken git makes the
+# branch read empty, empty never equals the trunk, and the gate exits 0 on a
+# write it exists to warn about.
+run_hook_brokentool "$HOOKS/scope-hook.sh" "$SC" "$(edit_payload "$SC/src/app.js")"
+expect_deny "toolchain t4: the scope hook names a no-git code when git is broken" "SH-NO-GIT"
+
+# CONTROL, and it is the one that keeps t3 honest: with git broken, a payload
+# this gate does NOT govern must stay silent. Without it the fix could have
+# turned every Bash call into a warning and t3 would still pass.
+run_hook_brokentool "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'ls -la')"
+expect_allow "toolchain t5 control: broken git, ungoverned payload, still silent"
+
 
 # The blast radius stays narrow in this state too: the session must still be
 # able to run the command that repairs jq.
@@ -1777,6 +1880,59 @@ jq '.hooks.PostToolUse=[{matcher:"NotebookEdit",hooks:[{type:"command",command:"
   "$INST/.claude/settings.json" > "$INST/t" && mv "$INST/t" "$INST/.claude/settings.json"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "wiring j: a foreign hook naming NotebookEdit does not mask a stale scope matcher" 3 "Write|Edit"
+
+# THE SCOPE-MATCHER CERTIFICATION, AS COVERAGE (F3 with V19-F5 and V19-F10, and
+# F5's three spellings). One block, because they are one function and three
+# separate repairs to one predicate is how the second reintroduces the first.
+#
+# Watched RED first, every subject, on the pre-fix bytes: the substring test
+# certified `Write|Edit|MultiEdit|NotebookEditor` and `Write|NotebookEdit` CLEAN,
+# `| first` reported a two-entry instance whose union covers everything as
+# unwired, and all three match-all spellings were read as covering nothing.
+# The comma case "passed" before the fix for the WRONG reason (the substring
+# search found the token inside it), which is F3 in one line.
+sm_settings() { # sm_settings <matcher-json>... -> a settings.json body
+  local entries="" m
+  for m in "$@"; do
+    [[ -n "$entries" ]] && entries="$entries,"
+    entries="$entries{\"matcher\":$m,\"hooks\":[{\"type\":\"command\",\"command\":\"\$CLAUDE_PROJECT_DIR/.claude/hooks/scope-hook.sh\",\"timeout\":10}]}"
+  done
+  printf '{"hooks":{"PreToolUse":[%s],"SessionStart":[]}}' "$entries"
+}
+sm_case() { # sm_case <label> <want: GAP|CLEAN> <matcher-json>...
+  local label="$1" want="$2"; shift 2
+  local inst="$WORK/inst-sm"; rm -rf "$inst"
+  instance_fixture "$inst" 1.0.0 current
+  sm_settings "$@" > "$inst/.claude/settings.json"
+  run_script bash "$SCRIPTS/refresh-instance.sh" "$inst"
+  local got
+  if printf '%s' "$SCRIPT_OUT" | grep -qiE 'scope hook.*(does not cover|do not cover|not wired|could not be)'; then got=GAP; else got=CLEAN; fi
+  if [[ "$got" == "$want" ]]; then
+    ok "scope coverage [$label]"
+  else
+    bad "scope coverage [$label]" \
+        "wanted $want, measured $got. The matcher set is judged by COVERAGE over Write/Edit/MultiEdit/NotebookEdit, taking the UNION of every entry that runs the scope hook, with a catch-all treated as match-all and a comma spelling translated first. A substring search over the first entry is what this replaced."
+  fi
+}
+sm_case "a matcher CONTAINING the token but covering nothing" GAP '"Write|Edit|MultiEdit|NotebookEditor"'
+sm_case "a matcher missing Edit and MultiEdit"                GAP '"Write|NotebookEdit"'
+sm_case "control: the correct matcher certifies clean"      CLEAN '"Write|Edit|MultiEdit|NotebookEdit"'
+sm_case "two entries whose UNION covers everything"         CLEAN '"Write|Edit"' '"MultiEdit|NotebookEdit"'
+sm_case "match-all *"                                       CLEAN '"*"'
+sm_case "match-all empty"                                   CLEAN '""'
+sm_case "match-all absent"                                  CLEAN 'null'
+sm_case "the comma spelling"                                CLEAN '"Write,Edit,MultiEdit,NotebookEdit"'
+sm_case "control: no scope-hook entry at all is a gap"        GAP
+
+# F10: the advisory backup notice ends its own line. It was printed without a
+# trailing newline at two call sites, so the one line telling an operator a
+# foreign file was replaced was glued onto the success line.
+if grep -qE "printf 'refresh-instance\.sh: %s' " "$SCRIPTS/refresh-instance.sh"; then
+  bad "F10: the advisory backup notice ends with a newline" \
+      "a call site still prints it without one, so the notice is glued to the next line"
+else
+  ok "F10: the advisory backup notice ends with a newline"
+fi
 
 # Unparseable settings cannot be evaluated, so they are named, never assumed.
 INST="$WORK/inst-badjson"
@@ -2978,7 +3134,7 @@ fi
 # the reason this block exists rather than two more literal cases.
 CORPUS_DASHVAL_N=0
 CORPUS_DASHVAL_FAIL=""
-# The NON-ALPHABETIC dash flag was added after a hostile run found it: the axis
+# The NON-ALPHABETIC dash flag was added after an adversarial review found it: the axis
 # above was written with alphabetic flags only (`nice -n -5`), so `nice -5`,
 # where the FLAG itself is not a letter, matched none of the stripper branches
 # and stayed stranded at the head of the segment. v1.0.6 denied it. The author of
@@ -3082,7 +3238,7 @@ fi
 #     echo hi & git merge --no-ff spec/0001-thing
 #
 # collapsed into ONE segment whose command word was `echo`, and the merge was
-# never judged. Pre-existing in v1.0.6, found by the hostile leg as F8.
+# never judged. Pre-existing in v1.0.6, found by the adversarial review as F8.
 AMP_N=0; AMP_FAIL=""
 for payload in \
   'echo hi & git merge --no-ff spec/0001-thing' \
@@ -3439,13 +3595,12 @@ expect_script "interpreter: the trunk audit CATCHES the outcome the gate let pas
 # hole: The secret scan is a first cut. | asserted
 # hole: A broken or missing `jq` is handled by the GIT hooks, not by the session gates. | asserted
 # hole: A timed-out hook is a skipped gate. | unassertable | harness behaviour, not hook behaviour; verified live 2026-07-25 with a sleeping hook under timeout 1 and 10, recorded in close-gate.sh's header
-# hole: The staged-content scans read every staged line. | asserted
-# hole: A spec that QUOTES the closing-report template inside a fence is refused an ordinary commit. | asserted
+# hole: The staged-content scans read every staged line unless you scope them. | asserted
 # hole: The scans read this project's own index. | asserted
 # hole: `--no-verify` skips git hooks | asserted
 # hole: Git hooks are per-clone, and the tracked directory narrows that without closing it. | asserted
 # hole: `git merge --ff-only` and `git merge --ff` skip the merge hooks. | asserted
-# hole: `git merge --squash` does not work in a Setlist instance, and the error does not say so. | asserted
+# hole: `git merge --squash` needs one flag to work in a Setlist instance, and the error does not say so. | asserted
 # hole: The close gate refuses `@{u}` and other revision-suffix spellings of a merge operand. | asserted
 # hole: A role directory spelled in a different case is not seen by the session scope gate on macOS or Windows. | asserted
 # hole: A `<<\EOF` heredoc body is read as code by the session gates, and can run your whole gate command before an ordinary `git commit`. | asserted
@@ -3459,7 +3614,6 @@ expect_script "interpreter: the trunk audit CATCHES the outcome the gate let pas
 # hole: A checkout is an enforcement switch: every git hook is inert on a branch without `.claude/sdd.json`. | asserted
 # hole: The `SETLIST_SKIP_HOOKS=1` escape is not read by `pre-push`. | asserted
 # hole: The Architecture-diagram check is decided by the LAST matching line, so a later note can answer or unanswer it. | asserted
-# hole: `SETLIST_SKIP_TRUNK_AUDIT=1` turns off the whole of `pre-push`, not just the audit. | asserted
 # hole: Merges crafted to evade the trunk audit can succeed, and the list of known routes is maintained rather than complete. | asserted
 # hole: The trunk is recognised by the NAME recorded in `.claude/sdd.json`, so an instance that merges onto a differently-named branch is ungoverned. | asserted
 # LEDGER-END
@@ -3782,6 +3936,43 @@ if [[ -z "$QA_LOCK_BAD" ]]; then
 else
   bad "qa verdict lockstep: all three layers carry a byte-identical QA_PASS1_AWK" \
       "these do not agree:$QA_LOCK_BAD"
+fi
+
+# THE SAME LOCKSTEP FOR THE TEMPLATE STRIPPER (v1.9 leg, V19-F4).
+#
+# Its three copies ARE byte-identical and always have been, so no gate was
+# misbehaving. What was missing is the DETECTOR: a drifted copy passed the whole
+# suite and nothing said so, while TWO comments in the shipped bytes claimed the
+# lockstep was asserted. The sibling lexers QA_PASS1_AWK and SLH_LIVE_TEXT_AWK
+# both have this assertion, which is why the pattern looked present until
+# somebody checked which of the three had one: A9's sibling rule applied to the
+# assertions rather than to the code.
+#
+# It matters more from 2026-08-26 than it did when it was filed. Until this
+# commit the stripper had ONE caller in the library; the V19-F2 fix gave it a
+# second (the lifecycle detector), so a drifted copy now moves what pre-commit
+# accepts as well as what the close verification accepts.
+#
+# Watched RED first against a deliberately drifted copy: appending a single
+# space to close-gate.sh's value took this assertion to close-gate.sh:differs
+# with the rest of the suite unchanged.
+TF_LOCK_BAD=""
+TF_LOCK_REF=""
+for tf_lock_f in "$HOOKS/close-gate.sh" "$SCRIPTS/trunk-audit.sh" "$ROOT/templates/git-hooks/setlist-hook-lib.sh"; do
+  tf_lock_v="$(grep -m1 -E '^[[:space:]]*(SLH_)?TEMPLATE_FENCE_AWK=' "$tf_lock_f" | sed 's/^[[:space:]]*//; s/^SLH_//' || true)" # fail-open-ok: an empty value is the finding and is tested immediately below
+  if [[ -z "$tf_lock_v" ]]; then
+    TF_LOCK_BAD="$TF_LOCK_BAD $(basename "$tf_lock_f"):absent"
+  elif [[ -z "$TF_LOCK_REF" ]]; then
+    TF_LOCK_REF="$tf_lock_v"
+  elif [[ "$tf_lock_v" != "$TF_LOCK_REF" ]]; then
+    TF_LOCK_BAD="$TF_LOCK_BAD $(basename "$tf_lock_f"):differs"
+  fi
+done
+if [[ -n "$TF_LOCK_REF" && -z "$TF_LOCK_BAD" ]]; then
+  ok "template stripper lockstep: all three layers carry a byte-identical TEMPLATE_FENCE_AWK"
+else
+  bad "template stripper lockstep: all three layers carry a byte-identical TEMPLATE_FENCE_AWK" \
+      "ref-empty=[${TF_LOCK_REF:0:1}] disagreements:$TF_LOCK_BAD"
 fi
 
 # =============================================================================
@@ -4262,7 +4453,7 @@ fi
 # nobody had listed what completeness meant.
 CG_INDEX_VERBS='add stage rm mv restore reset stash checkout switch merge pull rebase cherry-pick revert am apply update-index read-tree sparse-checkout'
 
-# POSITION DECIDES, AND THIS CORPUS USED TO ASSERT OTHERWISE (1.1.0 hostile leg,
+# POSITION DECIDES, AND THIS CORPUS USED TO ASSERT OTHERWISE (1.1.0 adversarial review,
 # F1). Both orders were required to deny, so the suite pinned the very behaviour
 # the leg reported: `git commit -m "x" && git checkout -` was refused, and that
 # is the canonical spec-branch workflow the framework prescribes, commit on the
@@ -4313,7 +4504,7 @@ else
       "git commit -m \"x\" && git checkout - was denied, which is the canonical spec-branch workflow"
 fi
 
-# The real-world spellings from the hostile leg, with their actual flags rather
+# The real-world spellings from the adversarial review, with their actual flags rather
 # than the generated `git <verb> x` shape. A dimension only tests the form you
 # imagined, which is exactly how `nice -5` sailed through the dash-valued axis.
 CGIV_REAL_FAIL=""
@@ -4517,7 +4708,7 @@ else
       "these were denied (~ marks the newline):$CG_NL_ALLOW_FAIL"
 fi
 
-# --- the LINE-CONTINUATION axis (1.0.7, found by the hostile leg) -----------
+# --- the LINE-CONTINUATION axis (1.0.7, found by the adversarial review) -----------
 # A backslash before a newline is a CONTINUATION, not a separator: the shell
 # joins the lines into one command. The 1.0.7 newline fix converted every
 # newline into a segment break, so `git commit \<newline> -am x` put -am in a
@@ -4936,6 +5127,30 @@ audit_fixture() { # audit_fixture <dir> <mode: clean|direct|unclosed>
     printf 'snuck in\n' >> "$d/src/f.js"
     git -C "$d" add -A && git -C "$d" commit -qm "hotfix straight onto the trunk"
   fi
+  # F1 of the 2.2.0 leg: the same direct-commit violation as "direct" above,
+  # differing ONLY in the filename. Each of these four names is emitted QUOTED by
+  # git's --name-only, which is what made the role test blind to it. The ASCII
+  # sibling is `plainrole` and runs first as the control, so a green row here is
+  # evidence about the NAME and not about the fixture builder.
+  case "$mode" in
+    plainrole)  TA_NAME='plain.js' ;;
+    utf8role)   TA_NAME="$(printf 'caf\303\251.js')" ;;
+    bslashrole) TA_NAME='ba\ck.js' ;;
+    quoterole)  TA_NAME='qu"ote.js' ;;
+    tabrole)    TA_NAME="$(printf 'ta\tb.js')" ;;
+    *)          TA_NAME='' ;;
+  esac
+  if [[ -n "$TA_NAME" ]]; then
+    printf 'const b=2\n' > "$d/src/$TA_NAME"
+    git -C "$d" add -A && git -C "$d" commit -qm "direct role-path commit"
+    # The fixture ASSERTS ITS OWN SHAPE before the audit reads it. A path git
+    # refused to stage would leave a commit that touches nothing, and every case
+    # below would then pass by testing an empty diff, which is the vacuous
+    # comparison this suite exists to refuse.
+    if [[ -z "$(git -C "$d" diff --name-only HEAD~1 HEAD 2>/dev/null)" ]]; then
+      printf 'FIXTURE BROKEN: audit_fixture %s staged no path\n' "$mode" >&2
+    fi
+  fi
   # B6, all three shapes. Each rides on the fixture above, which has left spec
   # 0005b CLOSED on the trunk: that already-closed spec is the laundering
   # vehicle in two of the three.
@@ -4958,7 +5173,7 @@ audit_fixture() { # audit_fixture <dir> <mode: clean|direct|unclosed>
     git -C "$d" merge -q --no-ff -m "Merge spec 0006" spec/0006-prose
   fi
   if [[ "$mode" == "fencedclose" ]]; then
-    # The audit's half of hostile leg F9. close-gate.sh strips fenced spans
+    # The audit's half of adversarial review F9. close-gate.sh strips fenced spans
     # before its close checks; this script never did, so a spec whose entire
     # Closing report is a quoted example was reported clean by the backstop that
     # README:176 sells as reading "what ended up in your history".
@@ -5231,6 +5446,52 @@ AUD="$WORK/audit-tablecell"; audit_fixture "$AUD" tablecell
 run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
 expect_script "trunk audit item 35: a table-cell QA verdict is accepted, not reported as no-qa-verdict" 0 "0 violations"
 
+# --- F1 of the 2.2.0 leg: git QUOTES paths, and the role test read the quotes ---
+#
+# THE BLOCKER. `git diff --name-only` and `git ls-tree --name-only` emit a path
+# containing a non-ASCII byte, a double quote, a backslash or a control
+# character as a QUOTED C string: "src/caf\303\251.js", quotes and octal escapes
+# included. touches_role fed that 15-byte string to touches_role_file, whose
+# `case "$f" in "$r"/*)` cannot match `src/`, so the file was invisible to the
+# role test and unreviewed feature code landed on the trunk at exit 0 with the
+# push allowed. The trunk audit IS the guarantee, so this sat above MAJOR.
+#
+# WHY -z AND NOT core.quotePath=false. Measured before the fix was written:
+# flipping core.quotePath restores the NON-ASCII case only. A double quote, a
+# backslash and a control character are quoted UNCONDITIONALLY at any setting.
+# `-z` emits paths NUL-delimited and unquoted, which is the only spelling that
+# covers all four classes, so every case below is run with quotePath BOTH ways
+# and must give the same answer.
+#
+# The ASCII control runs FIRST in each pair. Four cases that all expect "1
+# violations" prove nothing if the fixture builder silently produced no commit.
+for TA_QP in true false; do
+  AUD="$WORK/audit-qp-ascii-$TA_QP"; audit_fixture "$AUD" plainrole
+  git -C "$AUD" config core.quotePath "$TA_QP"
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
+  expect_script "trunk audit F1 control [quotePath=$TA_QP]: an ASCII role path committed direct to the trunk IS a violation" 1 "1 violations"
+
+  AUD="$WORK/audit-qp-utf8-$TA_QP"; audit_fixture "$AUD" utf8role
+  git -C "$AUD" config core.quotePath "$TA_QP"
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
+  expect_script "trunk audit F1 [quotePath=$TA_QP]: a NON-ASCII role path is seen by the role test" 1 "1 violations"
+
+  AUD="$WORK/audit-qp-bslash-$TA_QP"; audit_fixture "$AUD" bslashrole
+  git -C "$AUD" config core.quotePath "$TA_QP"
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
+  expect_script "trunk audit F1 [quotePath=$TA_QP]: a BACKSLASH role path is seen (quoted at any setting)" 1 "1 violations"
+
+  AUD="$WORK/audit-qp-quote-$TA_QP"; audit_fixture "$AUD" quoterole
+  git -C "$AUD" config core.quotePath "$TA_QP"
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
+  expect_script "trunk audit F1 [quotePath=$TA_QP]: a DOUBLE-QUOTE role path is seen (quoted at any setting)" 1 "1 violations"
+
+  AUD="$WORK/audit-qp-tab-$TA_QP"; audit_fixture "$AUD" tabrole
+  git -C "$AUD" config core.quotePath "$TA_QP"
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
+  expect_script "trunk audit F1 [quotePath=$TA_QP]: a TAB role path is seen (quoted at any setting)" 1 "1 violations"
+done
+
 AUD="$WORK/audit-launder"; audit_fixture "$AUD" launder
 run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
 expect_script "trunk audit B6c: code merged under an already-CLOSED spec closes nothing and is a violation" 1 "closes-no-spec"
@@ -5372,7 +5633,7 @@ expect_script "pre-push c: the documented escape hatch works and says so" 0 "ski
 run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPD' && bash '$PP' </dev/null"
 expect_script "pre-push d: unable to find its own tool, it REFUSES rather than passing" 1 "has not passed"
 
-# THE "AUDIT COULD NOT RUN" BRANCH IS REACHABLE (v1.7 gate, hostile leg F11).
+# THE "AUDIT COULD NOT RUN" BRANCH IS REACHABLE (v1.7 gate, adversarial review F11).
 #
 # It was dead code: `RC=$?` sat after `if bash "$AUDIT" ...; then exit 0; fi`,
 # and the status of an if-compound whose condition FAILED and which has no else
@@ -5395,7 +5656,7 @@ PPD="$WORK/prepush-noinstance"; rm -rf "$PPD"; mkdir -p "$PPD"; git_init "$PPD"
 run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPD' && CLAUDE_PLUGIN_ROOT='$ROOT' bash '$PP' </dev/null"
 expect_script "pre-push e: a repo that is not a framework instance is untouched" 0
 
-# THE EMPTY-REMOTE FIRST-PUSH GAP (plugin-2.0.0 hostile leg, F1).
+# THE EMPTY-REMOTE FIRST-PUSH GAP (plugin-2.0.0 adversarial review, F1).
 #
 # On a FIRST push to an empty remote, `ls-remote --symref <remote> HEAD` prints
 # nothing, so REMOTE_TRUNK is empty and REMOTE_UNREACHABLE is 0. A pushed branch
@@ -5648,7 +5909,7 @@ gh_fixture() { # gh_fixture <dir> <closed: yes|no> [trunk-spelling]
     # leg 5's F7 and strips fenced spans once before all four checks; the git
     # hooks and the trunk audit never got the same treatment, so a spec whose
     # entire Closing report is a quoted ```markdown example really merged
-    # (v1.7 gate, hostile leg F9). This is ordinary authoring rather than an
+    # (v1.7 gate, adversarial review F9). This is ordinary authoring rather than an
     # attack: the template ships fenced in setlist.md and the spec-authoring
     # skill tells authors to copy it.
     # A HEREDOC, not printf. The first draft used one printf per line and three
@@ -6111,7 +6372,7 @@ else ok "git hooks b: completing the STALLED merge with a plain commit is refuse
 
 # The squash. git fires no pre-merge-commit for it at all.
 #
-# THIS ASSERTION EVALUATED NOTHING UNTIL 2026-08-03 (1.1.0 hostile leg, F13).
+# THIS ASSERTION EVALUATED NOTHING UNTIL 2026-08-03 (1.1.0 adversarial review, F13).
 # It ran `git merge --squash` inside a fixture that sets `merge.ff=false`, and
 # git refuses that combination: `fatal: options '--squash' and '--no-ff.'
 # cannot be used together`, exit 128. stderr went to /dev/null so the fatal was
@@ -6230,7 +6491,7 @@ done
 # A FENCED Closing report is not a Closing report, in the layer that now carries
 # the guarantee. close-gate.sh strips fenced spans once before all four close
 # checks (leg 5, F7); nothing in templates/git-hooks/ did, so the whole close
-# passed on quoted example text (v1.7 gate, hostile leg F9).
+# passed on quoted example text (v1.7 gate, adversarial review F9).
 GH="$WORK/gh-fenced"; gh_fixture "$GH" fenced
 ( cd "$GH" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m x spec/0001-thing ) >/dev/null 2>&1
 if gh_landed "$GH"; then
@@ -6239,19 +6500,24 @@ if gh_landed "$GH"; then
 else ok "git hooks w: a Closing report that exists only inside a fence is REFUSED"; fi
 
 # ===========================================================================
-# THE FENCED TEMPLATE FALSE DENIAL (V19-F2), PINNED AS A DOCUMENTED HOLE.
+# THE FENCED TEMPLATE FALSE DENIAL (V19-F2), FIXED 2026-08-26 AND PINNED IN THE
+# ACCEPT DIRECTION.
 #
-# pre-commit's lifecycle detector reads the RAW staged diff:
+# pre-commit's lifecycle detector used to read the RAW staged diff:
 #   grep -qE "^\+Status:[[:space:]]*(STATES)|^\+#+[[:space:]]*Closing report"
-# with no fence handling. So a spec that QUOTES the closing-report template,
-# changing no lifecycle state of its own, reads as a real close and is refused
-# SLH-STATUS-MISSING. That is a CONFIRMED FALSE DENIAL: it refuses honest work.
+# with no fence handling and no indent allowance. So a spec that QUOTED the
+# closing-report template, changing no lifecycle state of its own, read as a
+# real close and was refused SLH-STATUS-MISSING: a CONFIRMED FALSE DENIAL, it
+# refused honest work. The mirror of the same regex missed an INDENTED heading
+# entirely, while the three sibling readers accept it.
 #
-# It is pinned here in the REFUSE direction rather than left to prose, because
-# the public Known-limitations bullet that discloses it is only honest while the
-# behaviour stands. When the next cycle fence-strips this detector (aligning it
-# with the three sibling readers that already do), THIS ASSERTION GOES RED and
-# says the docs are now wrong, which is the whole contract of the hole ledger.
+# The detector now asks slh_lifecycle_added, which strips template quotes with
+# the shared SLH_TEMPLATE_FENCE_AWK and matches the shared
+# SLH_CLOSING_REPORT_RE, so the fourth reader agrees with the other three (A9).
+# These assertions were watched RED against the pre-fix bytes in both
+# directions before the fix landed: fenced-template REFUSED and mirror-indented
+# LANDED, while both controls held. THIS BLOCK IS NOW THE REGRESSION PIN: if the
+# fence handling is ever lost, the first subject goes red again.
 #
 # Every case stages a file under specs/ and does NOT stage specs/STATUS.md. The
 # discriminating variable is the CONTENT and nothing else, which is what makes
@@ -6321,27 +6587,28 @@ Architecture diagram: no impact
 
 Nothing above is this spec own lifecycle state: it is a quotation.
 '; then
-  bad "documented hole: a FENCED quotation of the close template is still refused (V19-F2)" \
-      "it committed. The false denial is FIXED, which is good news and makes the public Known-limitations bullet wrong: delete that bullet, its ledger row and this assertion together"
+  ok "V19-F2 fixed: a FENCED quotation of the close template commits"
 else
-  ok "documented hole: a FENCED quotation of the close template is still refused (V19-F2)"
+  bad "V19-F2 fixed: a FENCED quotation of the close template commits" \
+      "it was REFUSED. The false denial is back: the detector has stopped stripping template quotes, and honest authoring that copies the shipped template is being refused SLH-STATUS-MISSING"
 fi
 
-# THE MIRROR DEFECT, same finding, opposite direction: an INDENTED heading is
+# THE MIRROR DEFECT, same finding, opposite direction: an INDENTED heading was
 # not matched at all, while the release's three other readers accept
 # "^ {0,3}#{1,6}[ \t]+Closing report". Isolated to the indent by a control that
 # differs in nothing else, because the first cut of this case carried a Status
-# line too and so proved nothing about indentation.
+# line too and so proved nothing about indentation. Now REFUSED, like its
+# unindented sibling below and like the other three readers.
 if f2_commits mirror-indented '# Spec 9001
 
   ## Closing report
 
 Architecture diagram: no impact
 '; then
-  ok "documented hole: an INDENTED closing-report heading is not seen by this detector (V19-F2 mirror)"
+  bad "V19-F2 mirror fixed: an INDENTED closing-report heading IS seen by this detector" \
+      "it committed, so the detector has gone back to the column-anchored regex and disagrees with the three sibling readers about what a heading is"
 else
-  bad "documented hole: an INDENTED closing-report heading is not seen by this detector (V19-F2 mirror)" \
-      "it was refused, so the detector now indent-allows; align the docs and this assertion with the sibling readers"
+  ok "V19-F2 mirror fixed: an INDENTED closing-report heading IS seen by this detector"
 fi
 if f2_commits mirror-control '# Spec 9001
 
@@ -7154,9 +7421,11 @@ fi
 # finding 4: an unreadable hooks directory is refused, never vouched for.
 OWN_CTX_D="$WORK/own-ctx-unread"; rm -rf "$OWN_CTX_D"; mkdir -p "$OWN_CTX_D"
 printf '#!/bin/sh\nexit 1\n' > "$OWN_CTX_D/pre-commit"; chmod +x "$OWN_CTX_D/pre-commit"; chmod 000 "$OWN_CTX_D"
-if ( GITHOOKS_SRC="$ROOT/templates/git-hooks"; source "$ROOT/scripts/setlist-delivery-lib.sh"; hooks_layer_is_ours "$OWN_CTX_D" ); then
-  OWN_CTX_BAD="$OWN_CTX_BAD
+if perm_fixture_bites "$OWN_CTX_D" "ownership context blindness"; then
+  if ( GITHOOKS_SRC="$ROOT/templates/git-hooks"; source "$ROOT/scripts/setlist-delivery-lib.sh"; hooks_layer_is_ours "$OWN_CTX_D" ); then
+    OWN_CTX_BAD="$OWN_CTX_BAD
     unreadable: a directory the guard cannot list was vouched for as ours"
+  fi
 fi
 chmod 755 "$OWN_CTX_D"
 if [[ -z "$OWN_CTX_BAD" ]]; then
@@ -7244,6 +7513,10 @@ printf '#!/bin/sh\nexec gitleaks protect --staged\n' > "$RFI_300/.githooks/pre-c
 chmod 755 "$RFI_300/.githooks/pre-commit"
 git -C "$RFI_300" config core.hooksPath .githooks
 chmod 300 "$RFI_300/.githooks"
+if ! perm_fixture_bites "$RFI_300/.githooks" "refresh F6l"; then
+  chmod 755 "$RFI_300/.githooks"
+  RFI_300_SKIPPED=1
+else
 bash "$SCRIPTS/refresh-instance.sh" --apply "$RFI_300" >"$WORK/rfi-mode300.out" 2>&1
 RFI_300_RC=$?
 chmod 755 "$RFI_300/.githooks"
@@ -7253,6 +7526,7 @@ if [[ "$RFI_300_RC" -ne 0 ]] && grep -qE 'refusing to arm' "$WORK/rfi-mode300.ou
 else
   bad "refresh F6l: an armed layer the guard cannot list refuses; blindness voids the exemption too" \
       "rc=$RFI_300_RC; a mode-300 directory slid past the exemption and a live scanner was overwritten"
+fi
 fi
 # Round 4, finding 3: the ./.githooks spelling reaches the same exemption.
 RFI_DOT="$WORK/rfi-dotslash"; rfi_fixture "$RFI_DOT" ""
@@ -7560,13 +7834,22 @@ fi
 R9C="$WORK/r9-warn"; rfi_fixture "$R9C" ""
 bash "$SCRIPTS/refresh-instance.sh" --apply "$R9C" >/dev/null 2>&1
 chmod 300 "$R9C/.githooks"
-bash "$SCRIPTS/refresh-instance.sh" "$R9C" >"$WORK/r9c.out" 2>&1
-chmod 755 "$R9C/.githooks"
-if grep -q 'apply will REFUSE' "$WORK/r9c.out"; then
-  ok "refresh R9c: report mode names the refusal apply will make; no all-clear over a refusing state"
+# THIS IS THE ONE A CONTAINER ACTUALLY REPORTED (V1b): `808/1` on this assertion,
+# against a tree this host runs green, because chmod is a no-op against uid 0 so
+# .githooks stayed readable, apply had nothing to refuse, and report mode
+# correctly said "present and byte-identical, config already set" -- which is
+# verbatim the text the container read as a failure.
+if perm_fixture_bites "$R9C/.githooks" "refresh R9c"; then
+  bash "$SCRIPTS/refresh-instance.sh" "$R9C" >"$WORK/r9c.out" 2>&1
+  chmod 755 "$R9C/.githooks"
+  if grep -q 'apply will REFUSE' "$WORK/r9c.out"; then
+    ok "refresh R9c: report mode names the refusal apply will make; no all-clear over a refusing state"
+  else
+    bad "refresh R9c: report mode names the refusal apply will make; no all-clear over a refusing state" \
+        "the report said present-and-set while apply exits 1, the round-5 divergence class recurred"
+  fi
 else
-  bad "refresh R9c: report mode names the refusal apply will make; no all-clear over a refusing state" \
-      "the report said present-and-set while apply exits 1, the round-5 divergence class recurred"
+  chmod 755 "$R9C/.githooks"
 fi
 # R9d: stamp's skip notes no longer claim files that were not delivered.
 R9D="$WORK/r9-note"; rm -rf "$R9D"; mkdir -p "$R9D"; git_init "$R9D"
@@ -8348,9 +8631,24 @@ if bash "$SCRIPTS/trunk-audit.sh" "$EVB" >/dev/null 2>&1; then
 else ok "event close b: a docs-commit that flips a row to CLOSED is verified too"; fi
 
 EV_BAD=""
+# THE CONTROL CARRIES ROLE-PATH CODE, AND WITHOUT IT PROVED NOTHING (F9).
+#
+# ev_fixture writes src/app.js at STAMP time, so this close commit used to touch
+# specs/ and nothing else. The violation it is the control FOR ("feature code
+# committed directly to main") is reached only when the commit ADDS role-path
+# code, so this case could not exhibit the finding it guards: it passed both
+# before and after F4, and would have gone on passing if F4 were never fixed.
+# That is the vacuous-control class this repository keeps paying for, filed as
+# F9 and landed here BEFORE F4's code fix per the regression-permanence rule.
+#
+# With the line below, this case is the F4 subject: a COMPLIANT fast-forward
+# close carrying feature code. Watched RED against the pre-F4 audit, which
+# reported `VIOLATION ... feature code committed directly to main` and refused a
+# close satisfying every condition the framework asks for.
 EVC="$WORK/event-ff-ok"; ev_fixture "$EVC"
 git -C "$EVC" checkout -q -b spec/0002-d
 ev_good > "$EVC/specs/0002-d.md"; ev_closed_row > "$EVC/specs/STATUS.md"
+printf 'feature\n' > "$EVC/src/ff-feature.js"
 git -C "$EVC" add -A >/dev/null 2>&1; git -C "$EVC" commit -qm "close 0002" >/dev/null 2>&1
 git -C "$EVC" checkout -q main; git -C "$EVC" merge -q --ff spec/0002-d >/dev/null 2>&1
 bash "$SCRIPTS/trunk-audit.sh" "$EVC" >/dev/null 2>&1 || EV_BAD="$EV_BAD ff-complete"
@@ -8363,6 +8661,108 @@ if [[ -z "$EV_BAD" ]]; then
 else
   bad "event close controls: a COMPLETE --ff close and an ordinary docs commit stay clean" \
       "these are refused:$EV_BAD, which is the false-denial direction"
+fi
+
+# The SQUASH half of F4, which is the same shape under the other flag name. A
+# squash has no second parent, so it lands in the same NPAR<2 arm; asserting it
+# separately is what stops a later fix keyed on the fast-forward alone from
+# looking complete.
+EVS="$WORK/event-squash-ok"; ev_fixture "$EVS"
+git -C "$EVS" checkout -q -b spec/0002-d
+ev_good > "$EVS/specs/0002-d.md"; ev_closed_row > "$EVS/specs/STATUS.md"
+printf 'feature\n' > "$EVS/src/sq-feature.js"
+git -C "$EVS" add -A >/dev/null 2>&1; git -C "$EVS" commit -qm "close 0002" >/dev/null 2>&1
+git -C "$EVS" checkout -q main
+git -C "$EVS" merge -q --squash spec/0002-d >/dev/null 2>&1
+git -C "$EVS" commit -qm "close 0002 (squash)" >/dev/null 2>&1
+if bash "$SCRIPTS/trunk-audit.sh" "$EVS" >/dev/null 2>&1; then
+  ok "F4 squash: a COMPLIANT --squash close carrying feature code is clean"
+else
+  bad "F4 squash: a COMPLIANT --squash close carrying feature code is clean" \
+      "it is a violation, so a compliant squash close is permanently unpushable. F4 is keyed on the PARENT COUNT precisely so one fix covers the fast-forward and the squash together"
+fi
+
+# THE TRUNK MUST NAME A BRANCH, NOT A POSITION (V19-F8). HEAD, @ and the reflog
+# forms all RESOLVE, and the reducer then audits whatever branch is checked out,
+# so the audited ref becomes a property of the working tree rather than of the
+# recorded configuration. Watched red first: HEAD and @ both audited CLEAN.
+EV8_BAD=""
+for ev8 in HEAD '@' '@{-1}'; do
+  EV8="$WORK/ev8"; ev_fixture "$EV8"
+  printf '{"trunk":"%s","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' "$ev8" > "$EV8/.claude/sdd.json"
+  git -C "$EV8" add -A >/dev/null 2>&1; git -C "$EV8" commit -qm "record trunk" >/dev/null 2>&1
+  bash "$SCRIPTS/trunk-audit.sh" "$EV8" >/dev/null 2>&1
+  [[ "$?" -eq 2 ]] || EV8_BAD="$EV8_BAD $ev8"
+done
+if [[ -z "$EV8_BAD" ]]; then
+  ok "V19-F8: a trunk recorded as HEAD, @ or a reflog form is refused"
+else
+  bad "V19-F8: a trunk recorded as HEAD, @ or a reflog form is refused" \
+      "these were accepted and audited:$EV8_BAD. The audited ref then depends on where HEAD happens to point, so a spec branch can be audited as though it were the trunk"
+fi
+# CONTROL: the ordinary spelling still audits, or the refusal above is a blanket one.
+EV8OK="$WORK/ev8ok"; ev_fixture "$EV8OK"
+if bash "$SCRIPTS/trunk-audit.sh" "$EV8OK" >/dev/null 2>&1; then
+  ok "V19-F8 control: a plain branch name still audits"
+else
+  bad "V19-F8 control: a plain branch name still audits" \
+      "the position guard is refusing ordinary configurations, so the case above proves nothing"
+fi
+
+# THE TALLY CANNOT PRINT AN IMPOSSIBLE PAIR (V19-F9). The chore arm incremented
+# CLEAN inside the PER-PARENT loop and the per-commit bucket incremented it
+# again, so `clean` could exceed `audited`. No violation was ever missed; a
+# shipped counter that prints an impossible pair is still a claim users read.
+EV9="$WORK/ev9"; ev_fixture "$EV9"
+git -C "$EV9" checkout -q -b chore/one
+printf 'x\n' > "$EV9/src/chore.js"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0002 | D | ACTIVE | x |\n\n- CHORE-007: DONE 2026-08-27. did a thing\n' > "$EV9/specs/STATUS.md"
+git -C "$EV9" add -A >/dev/null 2>&1; git -C "$EV9" commit -qm "chore work" >/dev/null 2>&1
+git -C "$EV9" checkout -q main
+git -C "$EV9" merge -q --no-ff -m "merge chore/one" chore/one >/dev/null 2>&1
+EV9_LINE="$(bash "$SCRIPTS/trunk-audit.sh" "$EV9" 2>&1 | grep '^audited' || true)" # fail-open-ok: an absent line is caught by the emptiness test below
+EV9_A="$(printf '%s' "$EV9_LINE" | sed -E 's/^audited ([0-9]+).*/\1/')"
+EV9_C="$(printf '%s' "$EV9_LINE" | sed -E 's/.*: ([0-9]+) clean.*/\1/')"
+if [[ -z "$EV9_LINE" || -z "$EV9_A" || -z "$EV9_C" ]]; then
+  bad "V19-F9: the audit tally never reports more clean than audited" \
+      "no audited/clean line was produced, so this comparison read nothing: [$EV9_LINE]"
+elif [[ "$EV9_C" -le "$EV9_A" ]]; then
+  ok "V19-F9: the audit tally never reports more clean than audited ($EV9_C of $EV9_A)"
+else
+  bad "V19-F9: the audit tally never reports more clean than audited" \
+      "it printed $EV9_C clean of $EV9_A audited, which is impossible: a commit is being counted in more than one bucket"
+fi
+
+# THE CLI GUARDS (F12). A value-less --since used to `shift 2` with one argument
+# left, which is an error that leaves $# UNCHANGED, so the loop spun forever.
+# Not reachable from pre-push, which always passes a value; a human or a CI job
+# running the CLI hangs. Watched red first by the reproduction hanging.
+EVF="$WORK/evf12"; ev_fixture "$EVF"
+EV12_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$EVF" --since 2>&1)"; EV12_RC=$?
+if [[ "$EV12_RC" -eq 2 ]] && printf '%s' "$EV12_OUT" | grep -q 'needs a <ref>'; then
+  ok "F12: a value-less --since is refused by name rather than looping"
+else
+  bad "F12: a value-less --since is refused by name rather than looping" \
+      "rc=$EV12_RC out=[$EV12_OUT]; the guard must refuse before the shift, because `shift 2` past the end leaves the argument list unchanged"
+fi
+EV12_BASE="$(git -C "$EVF" rev-parse HEAD)"
+if bash "$SCRIPTS/trunk-audit.sh" "$EVF" --since="$EV12_BASE" >/dev/null 2>&1; then
+  ok "F12: the --since=<ref> spelling is accepted"
+else
+  bad "F12: the --since=<ref> spelling is accepted" \
+      "it was read as the instance directory, which is the confusing error a correct command used to get"
+fi
+
+# SP2-F5: the file stops describing itself as harmless while pre-push uses it as
+# a gate. Asserted on the SHIPPED BYTES rather than on prose, and stated as the
+# absence of the retired claims: the correction paraphrases them rather than
+# quoting them, precisely so a grep like this one cannot read a quotation as a
+# claim.
+if grep -qE '^# ADVISORY as of plugin|it does not gate a commit|a finding does not block anything' "$SCRIPTS/trunk-audit.sh"; then
+  bad "SP2-F5: trunk-audit.sh does not call itself advisory" \
+      "the header still carries a retired advisory claim verbatim. pre-push RUNS this script on every push and refuses the push on its verdict, so a file calling itself harmless is a shipped claim that is false"
+else
+  ok "SP2-F5: trunk-audit.sh does not call itself advisory"
 fi
 
 # THE OCTOPUS SUB-MERGE (v1.7 claims round 5), and why this assertion exists.
@@ -8910,7 +9310,7 @@ else
 fi
 
 # ===========================================================================
-# THE ADVISORY FLIP (design-advisory-means-advisory.md, RATIFIED 2026-08-04).
+# THE ADVISORY FLIP (the advisory-gate decision, RATIFIED 2026-08-04).
 #
 # The three session gates no longer hold a veto. They emit permissionDecision
 # "allow" always, and report what they WOULD have decided in setlistAdvisory.
@@ -9396,7 +9796,7 @@ else
   ok "scope case b: SKIPPED, this filesystem is case-SENSITIVE so the role-case hole cannot exist here"
 fi
 
-# THE CASE-VARIANT TRUNK ALIAS (1.1.0 hostile leg, second run, BLOCKER).
+# THE CASE-VARIANT TRUNK ALIAS (1.1.0 adversarial review, second run, BLOCKER).
 #
 # On a case-insensitive filesystem `refs/heads/main` is one loose file, so
 # `git checkout MAIN` resolves and attaches HEAD to the same ref while
@@ -9521,7 +9921,7 @@ else
 fi
 
 # BARE `--ff` IS THE SAME HOLE UNDER A NAME THE DOCUMENTATION LEFT OUT (1.1.0
-# hostile leg, F16). The block above pins `--ff-only` and nothing pinned `--ff`,
+# adversarial review, F16). The block above pins `--ff-only` and nothing pinned `--ff`,
 # so the README told a reader to watch for one flag while the other did exactly
 # the same thing in exactly the same silence. Measured: it fast-forwards a spec
 # branch with no Closing report onto the trunk, fires neither hook, and the
@@ -9636,7 +10036,7 @@ else
 fi
 
 # THE STAMPED TEMPLATE MUST NOT SHIP A SATISFIED RECORD. Found by the 1.1.0
-# hostile leg (finder/content-as-code, BLOCKER) against the Phase 4 fix that
+# adversarial review (finder/content-as-code, BLOCKER) against the Phase 4 fix that
 # introduced it: the STATUS.md template's own EXAMPLE archive line matched the
 # chore rule, so every stamped instance shipped a pre-satisfied completion and a
 # branch that ADDS specs/STATUS.md could carry arbitrary role-path code onto the
@@ -9689,6 +10089,65 @@ if [[ -n "$LIB_LIVE_AWK" && -z "$LIVE_LOCK_BAD" ]]; then
 else
   bad "live text a: SLH_LIVE_TEXT_AWK is byte-identical in the hook library, trunk-audit.sh and close-gate.sh" \
       "lib-empty=[${LIB_LIVE_AWK:0:1}] disagreements:$LIVE_LOCK_BAD"
+fi
+
+# FREEZE AMENDMENT 1 (V19-F6, 2026-08-26): a CONTAINER-PREFIXED table row is not
+# a record. The reader printed blockquote and list-item lines verbatim, prefix
+# and all, and a real GFM row starts with '|' so its field 1 is empty: a '> ' or
+# '- ' prefix simply BECAME field 1 and the illustrative row's cells landed in
+# $2 and $4 exactly like a real row's. Measured at the guarantee layer: the
+# blockquote and list-item merges exited 0 and landed while the fenced control
+# was refused.
+#
+# The controls are the point of this block. Deleting container-prefixed lines
+# wholesale would take the CHORE ROUTE with it, because a chore archive line IS
+# a list item; the rule keys on the pipe, not on the bullet, and the last two
+# cases are what says so. Watched RED first: the three subjects all read CLOSED
+# on the pre-amendment bytes with every control already green.
+# Both values are extracted here rather than reused from below, because the pins
+# that define them run AFTER this block and a forward reference would silently
+# run these cases against an EMPTY awk program: every line would survive, the
+# subjects would read CLOSED, and the failure would look like the defect.
+LT_AWK="$(printf '%s' "$LIB_LIVE_AWK" | sed -e "s/^LIVE_TEXT_AWK='//" -e "s/'\$//")"
+LT_CHORE_RE="$(grep -m1 -E '^[[:space:]]*SLH_CHORE_DONE_RE=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" \
+  | sed -e 's/^[[:space:]]*//' -e "s/^SLH_CHORE_DONE_RE='//" -e "s/'\$//")"
+if [[ -z "$LT_AWK" || -z "$LT_CHORE_RE" ]]; then
+  bad "live text i: the amendment corpus has a program to run" \
+      "awk-empty=[${LT_AWK:0:1}] chore-re-empty=[${LT_CHORE_RE:0:1}]; an empty program keeps every line and would make these cases pass for the wrong reason"
+fi
+lt_row_closed() { # lt_row_closed <status-text> -> 0 when spec 0003 reads CLOSED
+  printf '%s\n' "$1" | awk "$LT_AWK" | sed 's/\\|/ /g' \
+    | awk -F'|' -v num=0003 'function t(x){gsub(/^[[:space:]]+|[[:space:]]+$/,"",x);return x} NF>=4 && t($2)==num && toupper(t($4))=="CLOSED"{f=1} END{exit(f?0:1)}'
+}
+LT_HDR='# inv
+
+| Spec | Title | Status | Note |
+| --- | --- | --- | --- |'
+for lt_case in "real:| 0003 | Thing | CLOSED | done |:CLOSED" \
+               "indented:   | 0003 | Thing | CLOSED | done |:CLOSED" \
+               "blockquote:> | 0003 | Thing | CLOSED | done |:HIDDEN" \
+               "listitem:- | 0003 | Thing | CLOSED | done |:HIDDEN" \
+               "quotedlist:> - | 0003 | Thing | CLOSED | done |:HIDDEN"; do
+  lt_name="${lt_case%%:*}"; lt_rest="${lt_case#*:}"
+  lt_line="${lt_rest%:*}"; lt_want="${lt_rest##*:}"
+  if lt_row_closed "$LT_HDR
+$lt_line"; then lt_got=CLOSED; else lt_got=HIDDEN; fi
+  if [[ "$lt_got" == "$lt_want" ]]; then
+    ok "live text i [$lt_name]: a container-prefixed row is not a record, a real row still is"
+  else
+    bad "live text i [$lt_name]: a container-prefixed row is not a record, a real row still is" \
+        "wanted $lt_want, measured $lt_got. A quotation of a row is not the row (V19-F6); dropping a REAL row instead would launder a spec past the row-flip union check"
+  fi
+done
+# The chore route, both directions, because the rule must not have eaten it.
+LT_CHORE="$(printf '%s\n' "$LT_HDR
+
+- CHORE-007: DONE 2026-08-26. did a thing" | awk "$LT_AWK")"
+if printf '%s\n' "$LT_CHORE" | grep -qE "$LT_CHORE_RE"; then
+  ok "live text i control: a LIVE chore archive line is still a list item and still counts"
+else
+  bad "live text i control: a LIVE chore archive line is still a list item and still counts" \
+      "the amendment ate the chore route: an archive line IS a list item, so a rule keyed on the bullet rather than on the pipe removes the chore route entirely"
 fi
 
 # Pin 2: the rule's semantics, asserted on the program itself. Each hidden
@@ -9867,7 +10326,7 @@ else
 fi
 
 # Pin: the DIAGRAM-field reader routes through the live-text rule too (F6,
-# plugin-2.0.0 hostile leg). Pins c/d/e above covered only the STATUS.md
+# plugin-2.0.0 adversarial review). Pins c/d/e above covered only the STATUS.md
 # extractions, so the Architecture-diagram field reader stayed a RAW grep of the
 # spec file while its sibling STATUS-row reader was stripped: a fenced
 # 'Architecture diagram: no impact' example satisfied the mandatory close
@@ -10822,6 +11281,741 @@ git -C "$NSC" add -A >/dev/null 2>&1; git -C "$NSC" commit -qm ns >/dev/null 2>&
 git -C "$NSC" checkout -q main
 run_hook "$HOOKS/close-gate.sh" "$NSC" "$(bash_payload "$MERGE_CMD")"
 expect_deny "qa heading e2e: a no-space ##Closing report is not a section, refused with the section code" "CG-NO-CLOSING-REPORT"
+
+# =============================================================================
+# THE PUSH-TIME SCAN: KL2 AND THE FOUR SCAN SUB-HOLES (spec 0121, 2026-08-26).
+#
+# Every case pushes to a real local bare remote through the armed hook layer,
+# because what is being asserted is what git's own invocation of pre-push
+# decides, not what a function returns when called directly.
+#
+# THE SCAN IS ISOLATED FROM THE AUDIT by putting the secret OUTSIDE the declared
+# role paths, so the trunk audit has nothing to say and only the scan can refuse.
+# A first cut of this block put it in src/, and then the audit refused three of
+# the cases for its own unrelated reason: the assertions passed while proving
+# nothing about the scan. The two KL2 cases below are the exception, because they
+# are ABOUT which check the escape variable turns off.
+#
+# Watched RED first against the pre-fix bytes, all six subjects, with both
+# controls holding in the same run: the plain-secret control, KL2's scan case,
+# SC3, SC4, SC5 and SC6 were all PUSHED where they should have been REFUSED.
+# =============================================================================
+sp_mk() { # sp_mk <name> -> an armed instance with a bare remote, prints its path
+  local d="$WORK/sp-$1"
+  rm -rf "$d" "$WORK/sp-$1.git"
+  mkdir -p "$d/.claude/hooks" "$d/.githooks" "$d/src" "$d/specs" "$d/docs"
+  git_init "$d"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$d/.claude/sdd.json"
+  printf '# inv\n\n| Spec | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$d/specs/STATUS.md"
+  cp "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" \
+     "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$d/.githooks/"
+  cp "$SCRIPTS/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  chmod +x "$d/.githooks/pre-push" "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+  git -C "$d" config core.hooksPath .githooks
+  git -C "$d" add -A >/dev/null 2>&1
+  SETLIST_SKIP_HOOKS=1 git -C "$d" commit -qm base >/dev/null 2>&1
+  git init -q --bare "$WORK/sp-$1.git"
+  git -C "$d" remote add origin "$WORK/sp-$1.git"
+  printf '%s' "$d"
+}
+sp_commit() { # sp_commit <dir> <path> <content>
+  printf '%s\n' "$3" > "$1/$2"
+  git -C "$1" add -A >/dev/null 2>&1
+  SETLIST_SKIP_HOOKS=1 git -C "$1" commit -qm "add $2" >/dev/null 2>&1
+}
+sp_push() { # sp_push <dir> [env-assignment...] -> 0 when the push LANDED
+  local d="$1"; shift
+  env "$@" git -C "$d" push -q origin main >/dev/null 2>&1
+}
+SP_SECRET='api_key = "AKIAQQQQZZZZ1234567890abcd"'
+
+# CONTROL a, the ALLOW direction. Without it every refusal below would pass
+# against a hook that refuses everything.
+SPD="$(sp_mk clean)"; SETLIST_SKIP_HOOKS=1 git -C "$SPD" commit -q --allow-empty -m x >/dev/null 2>&1
+if sp_push "$SPD"; then
+  ok "push scan control a: a clean push succeeds"
+else
+  bad "push scan control a: a clean push succeeds" \
+      "a clean first push was refused, so every refusal below proves nothing. This is the shape the SC4 fix broke and its own control caught: merge-base(trunk, tip) IS the tip, so a naive range is empty for the trunk itself"
+fi
+
+# CONTROL b, the DENY direction, and it is also SC4's subject: a first push whose
+# history carries a secret. On the pre-fix bytes this PUSHED.
+SPD="$(sp_mk plain)"; sp_commit "$SPD" docs/a.txt "$SP_SECRET"
+if sp_push "$SPD"; then
+  bad "push scan control b: a secret in a first push is refused (SC sub-hole 4)" \
+      "it pushed. The first push of a trunk has no remote oid and no merge base with itself, so the range came out empty and the push that ESTABLISHES a repository is scanned by nothing"
+else
+  ok "push scan control b: a secret in a first push is refused (SC sub-hole 4)"
+fi
+
+# KL2, direction 1: the AUDIT escape must not turn the SCAN off.
+SPD="$(sp_mk kl2a)"; sp_commit "$SPD" src/a.txt "$SP_SECRET"
+if sp_push "$SPD" SETLIST_SKIP_TRUNK_AUDIT=1; then
+  bad "KL2: SETLIST_SKIP_TRUNK_AUDIT=1 does NOT skip the content scan" \
+      "the secret was published. The audit's escape is turning off the secret scan as well, which is the whole of KL2: the variable is named for the audit and must skip the audit"
+else
+  ok "KL2: SETLIST_SKIP_TRUNK_AUDIT=1 does NOT skip the content scan"
+fi
+
+# KL2, direction 2: it really does skip the audit. Asserted because a narrowing
+# that quietly stopped honouring the variable would also pass direction 1.
+SPD="$(sp_mk kl2b)"; sp_commit "$SPD" src/f.txt 'ordinary feature code'
+if sp_push "$SPD" SETLIST_SKIP_TRUNK_AUDIT=1; then
+  ok "KL2 control: SETLIST_SKIP_TRUNK_AUDIT=1 still skips the audit"
+else
+  bad "KL2 control: SETLIST_SKIP_TRUNK_AUDIT=1 still skips the audit" \
+      "the escape no longer works at all, so direction 1 above proves nothing about narrowing"
+fi
+
+# KL2, direction 3: without the escape that same push IS refused by the audit,
+# which is what makes direction 2 a skip rather than a clean trunk.
+SPD="$(sp_mk kl2c)"; sp_commit "$SPD" src/f.txt 'ordinary feature code'
+if sp_push "$SPD"; then
+  bad "KL2 control: with no escape the audit refuses that same push" \
+      "it pushed with no escape set, so the case above proves nothing"
+else
+  ok "KL2 control: with no escape the audit refuses that same push"
+fi
+
+# SC sub-hole 3: content ADDED and then REMOVED inside the pushed range. An
+# endpoint diff never renders it while every object still reaches the remote.
+SPD="$(sp_mk sc3)"; sp_commit "$SPD" docs/a.txt "$SP_SECRET"
+rm -f "$SPD/docs/a.txt"; git -C "$SPD" add -A >/dev/null 2>&1
+SETLIST_SKIP_HOOKS=1 git -C "$SPD" commit -qm rm >/dev/null 2>&1
+if sp_push "$SPD"; then
+  bad "SC sub-hole 3: a secret added then removed inside the range is refused" \
+      "it pushed. The scan is reading an ENDPOINT diff again, so it asks what the range CHANGES when the question is what the range CARRIES"
+else
+  ok "SC sub-hole 3: a secret added then removed inside the range is refused"
+fi
+
+# SC sub-hole 5: a TAG push carrying a secret no pushed branch reaches.
+SPD="$(sp_mk sc5)"; SETLIST_SKIP_HOOKS=1 git -C "$SPD" commit -q --allow-empty -m base >/dev/null 2>&1
+git -C "$SPD" push -q origin main >/dev/null 2>&1
+git -C "$SPD" checkout -q -b side
+sp_commit "$SPD" docs/a.txt "$SP_SECRET"
+git -C "$SPD" tag sp-v9.9.9 >/dev/null 2>&1
+git -C "$SPD" checkout -q main; git -C "$SPD" branch -qD side >/dev/null 2>&1
+if git -C "$SPD" push -q origin sp-v9.9.9 >/dev/null 2>&1; then
+  bad "SC sub-hole 5: a tag push carrying a secret is refused" \
+      "it pushed. Every ref that is not refs/heads/* is being skipped, and a tag can name a commit no branch reaches, so it is the one shape where the content is reachable ONLY through the ref being pushed"
+else
+  ok "SC sub-hole 5: a tag push carrying a secret is refused"
+fi
+
+# SC sub-hole 6: a secret on a line whose own content begins with +++, which the
+# unanchored header strip removed from the scan's input.
+SPD="$(sp_mk sc6)"; sp_commit "$SPD" docs/a.txt "+++$SP_SECRET"
+if sp_push "$SPD"; then
+  bad "SC sub-hole 6: a secret behind a +++ prefix is refused" \
+      "it pushed. The header strip is unanchored again, so it is eating added lines whose content starts with ++ as well as the diff's own +++ b/ header"
+else
+  ok "SC sub-hole 6: a secret behind a +++ prefix is refused"
+fi
+
+# ===========================================================================
+# KL4: PATH-SCOPED SCANS, THE DECLARED EXCLUSION SET NAMED OUT LOUD (spec 0122).
+#
+# The em-dash and secret scans read every added line, so a vendored tree, a
+# fixture carrying a dummy credential, and quoted external text are refused
+# identically to the author's own writing. The fix is a DECLARED set of
+# repo-relative globs in .claude/sdd.json, honoured by both content scans at
+# both the commit and the push layer.
+#
+# WHAT THIS BLOCK IS EVIDENCE OF, said once so no green below is read as more
+# than it is (A8). An excluded-path green is evidence of SCOPING, never of
+# scanning: it proves the scan declined to read a path it was told to decline,
+# and it proves nothing at all about the scanner. That is why every excluded
+# cell has a non-excluded twin immediately beside it, and why the twin is the
+# assertion that keeps the pair honest.
+#
+# THE SKIP IS NAMED, EVERY TIME. An exclusion nobody is told about is the same
+# hole one directory over, which this project has already paid for once in the
+# hooksPath displacement. So the assertions below check the OUTPUT as well as
+# the verdict: a clean commit whose stderr says nothing about the file it did
+# not read would fail here even though the commit succeeded.
+# ===========================================================================
+
+KL4_SECRET='const api_key = "EXAMPLE_NOT_A_REAL_SECRET_0123456789";'
+KL4_DASHLINE="a $EMDASH b"
+
+kl4_fixture() { # kl4_fixture <dir> [scan_exclusions-json]
+  local d="$1" ex="${2:-}"
+  rm -rf "$d" "$d-rem.git"
+  mkdir -p "$d/src" "$d/vendor/dep" "$d/specs" "$d/.claude/hooks" "$d/.githooks"
+  git_init "$d"
+  if [[ -n "$ex" ]]; then
+    printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"},"scan_exclusions":%s}\n' "$ex" > "$d/.claude/sdd.json"
+  else
+    printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+  fi
+  printf 'x\n' > "$d/src/app.js"
+  printf 'v\n' > "$d/vendor/dep/lib.js"
+  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$d/specs/STATUS.md"
+  cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" \
+     "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
+  chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit" "$d/.githooks/pre-push"
+  # pre-push refuses for want of the audit tool if this is missing, and every
+  # case below would then pass while reaching nothing (the fixture gap that
+  # produced a false refutation during the F2 triage).
+  cp "$ROOT/scripts/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  git -C "$d" config core.hooksPath .githooks
+  git -C "$d" add -A >/dev/null 2>&1
+  git -C "$d" -c core.hooksPath=/dev/null commit -qm stamp >/dev/null 2>&1
+  git init -q --bare "$d-rem.git"
+  git -C "$d" remote add origin "$d-rem.git"
+  # The remote is seeded with a trunk so it is NOT empty: on an empty remote
+  # every pushed ref is a trunk candidate and IS audited, which would refuse
+  # these branches for a reason that has nothing to do with the scan.
+  git -C "$d" -c core.hooksPath=/dev/null push -q origin main:refs/heads/main >/dev/null 2>&1
+  git -C "$d-rem.git" symbolic-ref HEAD refs/heads/main >/dev/null 2>&1
+  git -C "$d" fetch -q origin >/dev/null 2>&1
+  git -C "$d" checkout -q -b work
+}
+
+KL4_ERR=""
+kl4_commit() { # kl4_commit <dir> <msg> -> rc, output in KL4_ERR
+  KL4_ERR="$(git -C "$1" commit -qm "$2" 2>&1)"
+}
+kl4_push() { # kl4_push <dir> <branch> -> rc, output in KL4_ERR
+  KL4_ERR="$(git -C "$1" push -q origin "$2" 2>&1)"
+}
+
+# --- the four cells, both directions at both layers -------------------------
+
+# CELL 1: an excluded path carrying BOTH shapes commits clean AND says so.
+KL4A="$WORK/kl4-commit-excluded"; kl4_fixture "$KL4A" '["vendor/**"]'
+{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SECRET"; } >> "$KL4A/vendor/dep/lib.js"
+git -C "$KL4A" add -A >/dev/null 2>&1
+if kl4_commit "$KL4A" "vendored"; then
+  ok "KL4 cell 1a: an excluded path carrying an em-dash and a secret COMMITS clean"
+else
+  bad "KL4 cell 1a: an excluded path carrying an em-dash and a secret COMMITS clean" \
+      "refused: $KL4_ERR"
+fi
+if printf '%s' "$KL4_ERR" | grep -q 'SLH-SCAN-EXCLUDED' \
+   && printf '%s' "$KL4_ERR" | grep -q 'vendor/dep/lib.js' \
+   && printf '%s' "$KL4_ERR" | grep -q 'vendor/\*\*'; then
+  ok "KL4 cell 1b: the commit-layer skip NAMES the path and the glob that caused it"
+else
+  bad "KL4 cell 1b: the commit-layer skip NAMES the path and the glob that caused it" \
+      "a scan that silently skips a path is the vacuous-green class wearing a feature's name. stderr was: $KL4_ERR"
+fi
+
+# CELL 2: the IDENTICAL content on a non-excluded path is still refused, with
+# the existing codes. Without this the cell above is satisfied by a hook that
+# stopped scanning.
+KL4B="$WORK/kl4-commit-scanned"; kl4_fixture "$KL4B" '["vendor/**"]'
+{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SECRET"; } >> "$KL4B/src/app.js"
+git -C "$KL4B" add -A >/dev/null 2>&1
+if kl4_commit "$KL4B" "mine"; then
+  bad "KL4 cell 2a: the identical content on a NON-excluded path is still refused at commit" \
+      "it committed, so the exclusion set is over-wide and the scan is off for everything"
+else
+  ok "KL4 cell 2a: the identical content on a NON-excluded path is still refused at commit"
+fi
+if printf '%s' "$KL4_ERR" | grep -q 'SLH-EMDASH' && printf '%s' "$KL4_ERR" | grep -q 'SLH-SECRET'; then
+  ok "KL4 cell 2b: the refusal carries the EXISTING codes, both of them"
+else
+  bad "KL4 cell 2b: the refusal carries the EXISTING codes, both of them" "stderr was: $KL4_ERR"
+fi
+
+# CELL 3: the push layer, excluded path. The commit is made with the hooks
+# bypassed so the PUSH is what is being measured.
+KL4C="$WORK/kl4-push-excluded"; kl4_fixture "$KL4C" '["vendor/**"]'
+{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SECRET"; } >> "$KL4C/vendor/dep/lib.js"
+git -C "$KL4C" add -A >/dev/null 2>&1
+git -C "$KL4C" -c core.hooksPath=/dev/null commit -qm "vendored" >/dev/null 2>&1
+if kl4_push "$KL4C" work; then
+  ok "KL4 cell 3a: an excluded path carrying an em-dash and a secret PUSHES clean"
+else
+  bad "KL4 cell 3a: an excluded path carrying an em-dash and a secret PUSHES clean" \
+      "refused: $KL4_ERR"
+fi
+if printf '%s' "$KL4_ERR" | grep -q 'SLH-SCAN-EXCLUDED' \
+   && printf '%s' "$KL4_ERR" | grep -q 'vendor/dep/lib.js'; then
+  ok "KL4 cell 3b: the push-layer skip NAMES the path, at the layer that publishes"
+else
+  bad "KL4 cell 3b: the push-layer skip NAMES the path, at the layer that publishes" \
+      "stderr was: $KL4_ERR"
+fi
+
+# CELL 4: the push layer, non-excluded path, still refuses.
+KL4D="$WORK/kl4-push-scanned"; kl4_fixture "$KL4D" '["vendor/**"]'
+{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SECRET"; } >> "$KL4D/src/app.js"
+git -C "$KL4D" add -A >/dev/null 2>&1
+git -C "$KL4D" -c core.hooksPath=/dev/null commit -qm "mine" >/dev/null 2>&1
+if kl4_push "$KL4D" work; then
+  bad "KL4 cell 4: the identical content on a NON-excluded path is still refused at push" \
+      "it pushed, so the secret reached a remote and the exclusion set is scoping the whole scan"
+else
+  ok "KL4 cell 4: the identical content on a NON-excluded path is still refused at push"
+fi
+
+# --- the default: absence changes NOTHING, proven rather than asserted ------
+#
+# The feature is invisible until asked for, and "byte-identical to today" is a
+# claim about BEHAVIOUR that a reading of the code cannot settle. So the two
+# generations are run side by side over a corpus, in fixtures that differ in
+# nothing but the hook bytes, and the verdict AND the operator-visible output
+# are compared exactly. The pre-feature generation is pinned by BLOB, not by a
+# revision expression: a blob is immutable, so this differential keeps meaning
+# the same thing after every later commit.
+KL4_OLD_PRECOMMIT=87e0c147ab413a6448675703d4a16b9e7fc7436a
+KL4_OLD_PREMERGE=eac8743342281e4edfe17be7052e713f28f405c2
+KL4_OLD_PREPUSH=273d972c024696cda2bb8b9e4d09e4c7cbbd093e
+KL4_OLD_LIB=72c493c4efc0fff1ada3e08994ba66045586bed6
+
+if git -C "$ROOT" cat-file -e "$KL4_OLD_LIB" 2>/dev/null; then
+  KL4_OLD="$WORK/kl4-default-old"; kl4_fixture "$KL4_OLD"
+  KL4_NEW="$WORK/kl4-default-new"; kl4_fixture "$KL4_NEW"
+  git -C "$ROOT" cat-file blob "$KL4_OLD_PRECOMMIT" > "$KL4_OLD/.githooks/pre-commit"
+  git -C "$ROOT" cat-file blob "$KL4_OLD_PREMERGE"  > "$KL4_OLD/.githooks/pre-merge-commit"
+  git -C "$ROOT" cat-file blob "$KL4_OLD_PREPUSH"   > "$KL4_OLD/.githooks/pre-push"
+  git -C "$ROOT" cat-file blob "$KL4_OLD_LIB"       > "$KL4_OLD/.githooks/setlist-hook-lib.sh"
+  chmod +x "$KL4_OLD/.githooks/pre-commit" "$KL4_OLD/.githooks/pre-merge-commit" "$KL4_OLD/.githooks/pre-push"
+
+  # The corpus. Every shape the header strip and the added-line reader have ever
+  # been wrong about, plus the ordinary ones, because a differential over three
+  # easy cases proves the easy cases only.
+  KL4_DIFF_CASES=0
+  KL4_DIFF_BAD=""
+  kl4_diff_one() { # kl4_diff_one <label> <path> <content...>
+    local label="$1" p="$2"; shift 2
+    local d rc out old="" new=""
+    for d in "$KL4_OLD" "$KL4_NEW"; do
+      mkdir -p "$d/$(dirname "$p")"
+      printf '%s\n' "$@" > "$d/$p"
+      git -C "$d" add -A >/dev/null 2>&1
+      out="$(git -C "$d" commit -qm "$label" 2>&1)"; rc=$?
+      out="${out//$d/<DIR>}"
+      if [[ "$d" == "$KL4_OLD" ]]; then old="rc=$rc
+$out"; else new="rc=$rc
+$out"; fi
+      [[ "$rc" -eq 0 ]] || { git -C "$d" reset -q --hard HEAD >/dev/null 2>&1; }
+    done
+    KL4_DIFF_CASES=$((KL4_DIFF_CASES + 1))
+    [[ "$old" == "$new" ]] || KL4_DIFF_BAD="$KL4_DIFF_BAD
+[$label]
+OLD: $old
+NEW: $new"
+  }
+
+  kl4_diff_one "clean"        src/d1.txt "ordinary content" "second line"
+  kl4_diff_one "emdash"       src/d2.txt "$KL4_DASHLINE"
+  kl4_diff_one "secret"       src/d3.txt "$KL4_SECRET"
+  kl4_diff_one "both"         src/d4.txt "$KL4_DASHLINE" "$KL4_SECRET"
+  kl4_diff_one "plusplusplus" src/d5.txt "+++$KL4_SECRET"
+  kl4_diff_one "plusplus"     src/d6.txt "++$KL4_DASHLINE"
+  kl4_diff_one "forgedheader" src/d7.txt "+++ b/vendor/dep/lib.js" "$KL4_SECRET"
+  kl4_diff_one "devnullline"  src/d8.txt "+++ /dev/null" "$KL4_DASHLINE"
+  kl4_diff_one "vendorclean"  vendor/dep/other.js "ordinary vendored content"
+  kl4_diff_one "vendordirty"  vendor/dep/dirty.js "$KL4_SECRET"
+  kl4_diff_one "deepclean"    src/nested/deep/x.txt "nothing to see"
+  kl4_diff_one "url"          src/d9.txt 'https://user:supersecretvalue@example.invalid/x'
+
+  if [[ "$KL4_DIFF_CASES" -eq 12 ]]; then
+    ok "KL4 default-unchanged: the differential ran all 12 corpus cases (count asserted before comparing)"
+  else
+    bad "KL4 default-unchanged: the differential ran all 12 corpus cases (count asserted before comparing)" \
+        "ran $KL4_DIFF_CASES; a differential over a corpus nobody counted is the vacuous comparison A8 exists for"
+  fi
+  if [[ -z "$KL4_DIFF_BAD" ]]; then
+    ok "KL4 default-unchanged: with NO scan_exclusions key, the new hook bytes are verdict- and output-identical to the pre-feature generation over the whole corpus"
+  else
+    bad "KL4 default-unchanged: with NO scan_exclusions key, the new hook bytes are verdict- and output-identical to the pre-feature generation over the whole corpus" \
+        "the feature is supposed to be invisible until asked for, and it is not:$KL4_DIFF_BAD"
+  fi
+else
+  ok "KL4 default-unchanged: pre-feature hook blobs not present here (export tree); the source-repo run asserts the differential"
+fi
+
+# --- malformed config fails CLOSED, at both layers, asserted both ways ------
+#
+# Never a silent full-scan and never a silent no-scan. Both directions are
+# needed because each alone is satisfiable by the wrong fix: a config error that
+# quietly scans everything looks fine until somebody relies on the exclusion,
+# and a config error that quietly scans nothing is the empty-result-as-verdict
+# class with a feature's name on it.
+kl4_malformed() { # kl4_malformed <label> <json> <expected-code>
+  local label="$1" json="$2" code="$3" d
+  d="$WORK/kl4-bad-$label"; kl4_fixture "$d" "$json"
+  # DIRECTION ONE: clean content. A malformed set must refuse even here, or the
+  # scan is running on an unread configuration.
+  printf 'ordinary clean content\n' >> "$d/src/app.js"
+  git -C "$d" add -A >/dev/null 2>&1
+  if kl4_commit "$d" clean; then
+    bad "KL4 malformed/$label: CLEAN content is refused at commit (never a silent scan on an unread config)" \
+        "it committed, so the hook decided with a configuration it could not read"
+  else
+    ok "KL4 malformed/$label: CLEAN content is refused at commit (never a silent scan on an unread config)"
+  fi
+  if printf '%s' "$KL4_ERR" | grep -q "$code"; then
+    ok "KL4 malformed/$label: the refusal carries the named code $code"
+  else
+    bad "KL4 malformed/$label: the refusal carries the named code $code" "stderr was: $KL4_ERR"
+  fi
+  # DIRECTION TWO: a real secret. A malformed set must not become an accidental
+  # exemption.
+  git -C "$d" reset -q --hard HEAD >/dev/null 2>&1
+  printf '%s\n' "$KL4_SECRET" >> "$d/src/app.js"
+  git -C "$d" add -A >/dev/null 2>&1
+  if kl4_commit "$d" dirty; then
+    bad "KL4 malformed/$label: a SECRET is refused at commit (a broken config is not an exemption)" \
+        "it committed, so an unparseable exclusion set turned the scan off"
+  else
+    ok "KL4 malformed/$label: a SECRET is refused at commit (a broken config is not an exemption)"
+  fi
+  # AND AT THE PUSH LAYER, which is the one that publishes.
+  git -C "$d" reset -q --hard HEAD >/dev/null 2>&1
+  printf 'ordinary clean content\n' >> "$d/src/app.js"
+  git -C "$d" add -A >/dev/null 2>&1
+  git -C "$d" -c core.hooksPath=/dev/null commit -qm clean >/dev/null 2>&1
+  if kl4_push "$d" work; then
+    bad "KL4 malformed/$label: the PUSH layer refuses on the same unreadable config" \
+        "it pushed, so the two layers disagree about a configuration neither can read"
+  else
+    ok "KL4 malformed/$label: the PUSH layer refuses on the same unreadable config"
+  fi
+  if printf '%s' "$KL4_ERR" | grep -q "$code"; then
+    ok "KL4 malformed/$label: the push refusal carries the same named code $code"
+  else
+    bad "KL4 malformed/$label: the push refusal carries the same named code $code" "stderr was: $KL4_ERR"
+  fi
+}
+
+kl4_malformed string   '"vendor/**"'            SLH-SCAN-EXCLUSIONS-SHAPE
+kl4_malformed object   '{"a":"b"}'              SLH-SCAN-EXCLUSIONS-SHAPE
+kl4_malformed number   '[123]'                  SLH-SCAN-EXCLUSIONS-SHAPE
+kl4_malformed nested   '[["vendor/**"]]'        SLH-SCAN-EXCLUSIONS-SHAPE
+kl4_malformed empty    '[""]'                   SLH-SCAN-EXCLUSION-INVALID
+kl4_malformed dotdot   '["../outside/**"]'      SLH-SCAN-EXCLUSION-INVALID
+kl4_malformed space    '["my vendor/**"]'       SLH-SCAN-EXCLUSION-INVALID
+kl4_malformed shellish '["vendor/**)rm -rf ."]' SLH-SCAN-EXCLUSION-INVALID
+kl4_malformed star     '["*"]'                  SLH-SCAN-EXCLUSION-CATCHALL
+kl4_malformed starstar '["**"]'                 SLH-SCAN-EXCLUSION-CATCHALL
+kl4_malformed slashy   '["*/*"]'                SLH-SCAN-EXCLUSION-CATCHALL
+kl4_malformed anychar  '["?"]'                  SLH-SCAN-EXCLUSION-CATCHALL
+
+# An EMPTY array is not malformed: it is a project that declared the key and
+# excluded nothing, and it must behave exactly like absence. This is the
+# shipped-template state, so getting it wrong refuses every commit in a freshly
+# stamped instance.
+#
+# THE REFUSAL IS CHECKED BY CODE, NOT BY VERDICT, and this pair is why. The
+# first cut of this assertion only asked whether the commit was refused. It was,
+# with SLH-SCAN-EXCLUSION-INVALID, because [] and [""] collapsed to the same
+# string once command substitution stripped the trailing newline: the reader
+# refused a project that had declared nothing, the assertion went green, and the
+# defect was found by hook-smoke and delivery-matrix instead. A green labelled
+# with the verdict rather than with the evidence (A8), committed by the test for
+# that very class.
+KL4E="$WORK/kl4-empty-array"; kl4_fixture "$KL4E" '[]'
+printf '%s\n' "$KL4_SECRET" >> "$KL4E/src/app.js"
+git -C "$KL4E" add -A >/dev/null 2>&1
+if kl4_commit "$KL4E" dirty; then
+  bad "KL4 empty array: an empty exclusion set excludes nothing and the SECRET SCAN is what refuses" \
+      "it committed, so [] read as 'exclude everything', which is the direction that publishes"
+elif printf '%s' "$KL4_ERR" | grep -q 'SLH-SECRET'; then
+  ok "KL4 empty array: an empty exclusion set excludes nothing and the SECRET SCAN is what refuses"
+else
+  bad "KL4 empty array: an empty exclusion set excludes nothing and the SECRET SCAN is what refuses" \
+      "it was refused, but not by the scan: $KL4_ERR. A refusal for the wrong reason is a green that proves the opposite of what it claims"
+fi
+# And the clean twin: an empty set must let ordinary work through, which is the
+# direction the shipped template lands in every stamped instance.
+git -C "$KL4E" reset -q --hard HEAD >/dev/null 2>&1
+printf 'ordinary content\n' >> "$KL4E/src/app.js"
+git -C "$KL4E" add -A >/dev/null 2>&1
+if kl4_commit "$KL4E" clean; then
+  ok "KL4 empty array: and clean content COMMITS, so the shipped template does not refuse every commit in a fresh instance"
+else
+  bad "KL4 empty array: and clean content COMMITS, so the shipped template does not refuse every commit in a fresh instance" \
+      "refused: $KL4_ERR"
+fi
+
+# --- the boundary cases the traps live in -----------------------------------
+
+# A glob that matches NOTHING must not read as coverage. The scan still refuses,
+# and nothing is announced as skipped: an exclusion that did not fire has no
+# business printing that it did.
+KL4N="$WORK/kl4-matches-nothing"; kl4_fixture "$KL4N" '["nosuchdir/**"]'
+printf '%s\n' "$KL4_SECRET" >> "$KL4N/src/app.js"
+git -C "$KL4N" add -A >/dev/null 2>&1
+if kl4_commit "$KL4N" dirty; then
+  bad "KL4 matches-nothing: a glob matching no path in the change changes no verdict" "it committed"
+else
+  ok "KL4 matches-nothing: a glob matching no path in the change changes no verdict"
+fi
+if printf '%s' "$KL4_ERR" | grep -q 'SLH-SCAN-EXCLUDED'; then
+  bad "KL4 matches-nothing: nothing is ANNOUNCED as skipped when nothing was skipped" \
+      "the hook printed an exclusion notice for a path it scanned, which is a skip report that reads as coverage: $KL4_ERR"
+else
+  ok "KL4 matches-nothing: nothing is ANNOUNCED as skipped when nothing was skipped"
+fi
+
+# PATH NORMALISATION. The declared side is normalised the way role paths already
+# are, so the four spellings of one directory mean one thing. The raw-vs-
+# normalised split is what made the guarantee layer go blind on "./src" once.
+kl4_spelling() { # kl4_spelling <label> <json> <expect: excluded|scanned>
+  local label="$1" json="$2" expect="$3" d rc
+  d="$WORK/kl4-spell-$label"; kl4_fixture "$d" "$json"
+  printf '%s\n' "$KL4_SECRET" >> "$d/vendor/dep/lib.js"
+  git -C "$d" add -A >/dev/null 2>&1
+  kl4_commit "$d" spell; rc=$?
+  if [[ "$expect" == "excluded" ]]; then
+    if [[ "$rc" -eq 0 ]] && printf '%s' "$KL4_ERR" | grep -q 'SLH-SCAN-EXCLUDED'; then
+      ok "KL4 spelling/$label: $json excludes vendor/dep/lib.js and says so"
+    else
+      bad "KL4 spelling/$label: $json excludes vendor/dep/lib.js and says so" "rc=$rc stderr: $KL4_ERR"
+    fi
+  else
+    if [[ "$rc" -ne 0 ]]; then
+      ok "KL4 spelling/$label: $json does NOT exclude vendor/dep/lib.js, so the scan still refuses"
+    else
+      bad "KL4 spelling/$label: $json does NOT exclude vendor/dep/lib.js, so the scan still refuses" \
+          "it committed, so a spelling that names a different path is silently excluding this one"
+    fi
+  fi
+}
+kl4_spelling glob       '["vendor/**"]'      excluded
+kl4_spelling single     '["vendor/*"]'       excluded
+kl4_spelling bare       '["vendor"]'         excluded
+kl4_spelling trailing   '["vendor/"]'        excluded
+kl4_spelling dotslash   '["./vendor/**"]'    excluded
+kl4_spelling leading    '["/vendor/**"]'     excluded
+kl4_spelling doubled    '["vendor//dep/**"]' excluded
+kl4_spelling exactfile  '["vendor/dep/lib.js"]' excluded
+kl4_spelling suffix     '["*.js"]'           excluded
+# CASE IS EXACT, DELIBERATELY, and the direction is the safe one: a case variant
+# fails to match, so the scan RUNS. On a case-insensitive filesystem the file is
+# the same file, and an exclusion that guessed would be an exclusion nobody
+# declared. Pinned so a later widening is a decision rather than drift.
+kl4_spelling casevariant '["VENDOR/**"]'     scanned
+kl4_spelling neighbour   '["vendors/**"]'    scanned
+kl4_spelling prefixonly  '["vend"]'          scanned
+
+# A CONTENT LINE CANNOT FORGE A FILE HEADER. Added lines carry a prefix column,
+# so `diff --git` and `@@` are unforgeable inside a hunk; attribution is taken
+# from the header state machine rather than from any line that looks like one.
+# Without that, a diff-of-a-diff could point the scanner's attribution at an
+# excluded path and carry a secret through under its name.
+KL4F="$WORK/kl4-forged-attribution"; kl4_fixture "$KL4F" '["vendor/**"]'
+{ printf '%s\n' "+++ b/vendor/dep/lib.js"; printf '%s\n' "$KL4_SECRET"; } >> "$KL4F/src/app.js"
+git -C "$KL4F" add -A >/dev/null 2>&1
+if kl4_commit "$KL4F" forged; then
+  bad "KL4 forged attribution: a content line spelled like a file header cannot move a secret into an excluded path" \
+      "it committed. The scanner is taking attribution from line text rather than from diff structure, so any excluded glob is a universal exemption for anyone who can write one line"
+else
+  ok "KL4 forged attribution: a content line spelled like a file header cannot move a secret into an excluded path"
+fi
+
+# MIXED CHANGE: one excluded file and one scanned file in the SAME commit. The
+# excluded half is skipped and named, the scanned half still refuses. A filter
+# that worked per-commit rather than per-path would pass this by exempting both.
+KL4M="$WORK/kl4-mixed"; kl4_fixture "$KL4M" '["vendor/**"]'
+printf '%s\n' "$KL4_SECRET" >> "$KL4M/vendor/dep/lib.js"
+printf '%s\n' "$KL4_SECRET" >> "$KL4M/src/app.js"
+git -C "$KL4M" add -A >/dev/null 2>&1
+if kl4_commit "$KL4M" mixed; then
+  bad "KL4 mixed change: an excluded file beside a scanned file does not exempt the scanned one" \
+      "it committed, so the exclusion is scoped to the COMMIT rather than to the PATH"
+else
+  ok "KL4 mixed change: an excluded file beside a scanned file does not exempt the scanned one"
+fi
+if printf '%s' "$KL4_ERR" | grep -q 'SLH-SCAN-EXCLUDED' && printf '%s' "$KL4_ERR" | grep -q 'SLH-SECRET'; then
+  ok "KL4 mixed change: the same output carries BOTH the named skip and the refusal it did not cover"
+else
+  bad "KL4 mixed change: the same output carries BOTH the named skip and the refusal it did not cover" \
+      "stderr was: $KL4_ERR"
+fi
+
+# --- the negative boundary: the set scopes the CONTENT scans and NOTHING else
+#
+# The scans are a seatbelt and an exclusion set that can hide anything is not
+# one. These assert the negative the spec asks for: a glob covering a role path,
+# the specs tree, or the config itself changes no judgment anywhere else.
+KL4_ROLE="$WORK/kl4-neg-role"; kl4_fixture "$KL4_ROLE" '["src/**","specs/**",".claude/**"]'
+printf 'unspecced feature code\n' > "$KL4_ROLE/src/feature.js"
+git -C "$KL4_ROLE" add -A >/dev/null 2>&1
+git -C "$KL4_ROLE" -c core.hooksPath=/dev/null commit -qm work >/dev/null 2>&1
+git -C "$KL4_ROLE" checkout -q main
+if ( cd "$KL4_ROLE" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m "close" work ) >/dev/null 2>&1; then
+  bad "KL4 negative/role-path: a glob covering a role path changes NOTHING about role-path judgment" \
+      "the merge landed unspecced feature code on the trunk, so the exclusion set reached SLH-CLOSES-NO-SPEC"
+else
+  ok "KL4 negative/role-path: a glob covering a role path changes NOTHING about role-path judgment"
+fi
+
+# LIFECYCLE DETECTION: a spec Status line moves without specs/STATUS.md staged.
+# The glob covers specs/, and the detector must not care.
+KL4_LC="$WORK/kl4-neg-lifecycle"; kl4_fixture "$KL4_LC" '["specs/**"]'
+printf '# Spec 0001\n\nStatus: ACTIVE\n' > "$KL4_LC/specs/0001-thing.md"
+git -C "$KL4_LC" add specs/0001-thing.md >/dev/null 2>&1
+if kl4_commit "$KL4_LC" lifecycle; then
+  bad "KL4 negative/lifecycle: a glob covering specs/ changes NOTHING about lifecycle detection" \
+      "it committed, so the exclusion set reached SLH-STATUS-MISSING"
+else
+  ok "KL4 negative/lifecycle: a glob covering specs/ changes NOTHING about lifecycle detection"
+fi
+if printf '%s' "$KL4_ERR" | grep -q 'SLH-STATUS-MISSING'; then
+  ok "KL4 negative/lifecycle: and the refusal is still the lifecycle code, not a scan code"
+else
+  bad "KL4 negative/lifecycle: and the refusal is still the lifecycle code, not a scan code" "stderr was: $KL4_ERR"
+fi
+
+# THE CLOSE CHECKS: a row flips to CLOSED with no Closing report, under a glob
+# that covers the specs tree AND the config that declares the glob.
+KL4_CL="$WORK/kl4-neg-close"; kl4_fixture "$KL4_CL" '["specs/**",".claude/**"]'
+printf '# Spec 0001\n\nStatus: CLOSED\n' > "$KL4_CL/specs/0001-thing.md"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n' > "$KL4_CL/specs/STATUS.md"
+printf 'work\n' > "$KL4_CL/src/FEATURE.txt"
+git -C "$KL4_CL" add -A >/dev/null 2>&1
+git -C "$KL4_CL" -c core.hooksPath=/dev/null commit -qm close >/dev/null 2>&1
+git -C "$KL4_CL" checkout -q main
+if ( cd "$KL4_CL" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m "close" work ) >/dev/null 2>&1; then
+  bad "KL4 negative/close-checks: a glob covering specs/ and the config changes NOTHING about the close checks" \
+      "a spec with no Closing report closed on the trunk, so the exclusion set reached the guarantee layer"
+else
+  ok "KL4 negative/close-checks: a glob covering specs/ and the config changes NOTHING about the close checks"
+fi
+
+# THE TRUNK AUDIT: an exclusion set does not quiet the push-time audit.
+KL4_TA="$WORK/kl4-neg-audit"; kl4_fixture "$KL4_TA" '["src/**","specs/**"]'
+git -C "$KL4_TA" checkout -q main
+printf 'straight to the trunk\n' > "$KL4_TA/src/direct.js"
+git -C "$KL4_TA" add -A >/dev/null 2>&1
+git -C "$KL4_TA" -c core.hooksPath=/dev/null commit -qm direct >/dev/null 2>&1
+if kl4_push "$KL4_TA" main; then
+  bad "KL4 negative/trunk-audit: a glob covering the role paths changes NOTHING about the trunk audit" \
+      "it pushed, so the exclusion set is scoping a check it was never given"
+else
+  ok "KL4 negative/trunk-audit: a glob covering the role paths changes NOTHING about the trunk audit"
+fi
+
+# --- A9: ONE reader, in the shared lib, called by both layers ---------------
+#
+# The same shape the lexer lockstep assertions carry. Three copies of a rule is
+# how a gate and its backstop went blind together in leg 5; the exclusion reader
+# gets the assertion rather than a comment asking people to remember.
+KL4_READERS="$(grep -l 'scan_exclusions' "$ROOT/templates/git-hooks/"* 2>/dev/null | wc -l | tr -d ' ')"
+if [[ "$KL4_READERS" == "1" ]] && grep -q 'scan_exclusions' "$ROOT/templates/git-hooks/setlist-hook-lib.sh"; then
+  ok "KL4 A9: exactly ONE file under templates/git-hooks/ names the scan_exclusions key, and it is the shared lib"
+else
+  bad "KL4 A9: exactly ONE file under templates/git-hooks/ names the scan_exclusions key, and it is the shared lib" \
+      "$KL4_READERS files read it; a second reader of one value is the defect class this hook layer was repaired for"
+fi
+KL4_JQ_READS="$(grep -c 'scan_exclusions' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" 2>/dev/null | tr -d ' ')"
+if [[ "$KL4_JQ_READS" -ge 1 ]] && [[ "$(grep -c 'slh_scan_exclusions_load()' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" 2>/dev/null | tr -d ' ')" == "1" ]]; then
+  ok "KL4 A9: the reader has exactly one implementation (slh_scan_exclusions_load)"
+else
+  bad "KL4 A9: the reader has exactly one implementation (slh_scan_exclusions_load)" \
+      "found $(grep -c 'slh_scan_exclusions_load()' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" 2>/dev/null) definitions"
+fi
+KL4_CALLERS=0
+for h in pre-commit pre-merge-commit pre-push; do
+  grep -q 'slh_scan_added' "$ROOT/templates/git-hooks/$h" && KL4_CALLERS=$((KL4_CALLERS + 1))
+done
+if [[ "$KL4_CALLERS" -eq 3 ]]; then
+  ok "KL4 A9: all three content-seeing layers reach the scan through the one shared entry point"
+else
+  bad "KL4 A9: all three content-seeing layers reach the scan through the one shared entry point" \
+      "$KL4_CALLERS of 3 call slh_scan_added; a layer that scans its own way is a layer the exclusion set does not govern"
+fi
+
+# --- THE ADVISORY SESSION GATE IS NOT PATH-SCOPED, AND THAT IS MEASURED -----
+#
+# THIS IS A GAP, PINNED RATHER THAN CLOSED. templates/hooks/commit-gate.sh runs
+# its own em-dash and secret scans over the whole staged diff, in a different
+# tree, without sourcing this library, and spec 0122 does not name it: its Owner
+# docs list the git-hook layer, the delivery scripts, the suite, the edition and
+# the public bullet, and its design contract says anything beyond the declared
+# shape goes back to the owner rather than being decided at working time.
+#
+# So the consequence is asserted instead of fixed, because an unasserted gap is
+# the one that surprises somebody: inside a Claude Code session, a commit of
+# excluded content is still DENIED by the advisory gate, while the same commit
+# run outside a session (or after the advisory ALLOW) is accepted by the git
+# hooks. The feature works at the layer carrying the guarantee and does not yet
+# work at the layer carrying the convenience. Filed for the owner as KL4-A1.
+#
+# The assertion is written in the CURRENT direction on purpose. If somebody
+# later scopes the advisory gate too, this goes red and says so, which is the
+# right way for a pinned limitation to be reopened: by a decision, not by drift.
+CGX="$WORK/kl4-advisory-gate"; kl4_fixture "$CGX" '["vendor/**"]'
+printf '%s\n' "$KL4_SECRET" >> "$CGX/vendor/dep/lib.js"
+git -C "$CGX" add -A >/dev/null 2>&1
+CGX_OUT="$(printf '%s' "$(bash_payload 'git commit -m x')" | CLAUDE_PROJECT_DIR="$CGX" bash "$HOOKS/commit-gate.sh" 2>/dev/null)"
+CGX_V="$(printf '%s' "$CGX_OUT" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+if [[ "$CGX_V" == "deny" ]]; then
+  ok "KL4 gap KL4-A1 (PINNED, not closed): the ADVISORY commit gate is not path-scoped, so it still denies excluded content inside a session"
+else
+  bad "KL4 gap KL4-A1 (PINNED, not closed): the ADVISORY commit gate is not path-scoped, so it still denies excluded content inside a session" \
+      "the advisory gate stopped denying. If that was deliberate, this is the assertion to update, in the commit that made the decision and with the ledger row and the public bullet moved with it; if it was not, the two layers have silently drifted apart on what the exclusion set governs"
+fi
+# The twin that keeps the pin honest: the GUARANTEE layer, same content, same
+# config, accepts it. Without this the assertion above is satisfied by a repo
+# where nothing works at all.
+if git -C "$CGX" -c core.hooksPath=.githooks commit -qm vendored >/dev/null 2>&1; then
+  ok "KL4 gap KL4-A1 twin: the guarantee layer accepts the same content the advisory gate denies, which is what makes the gap a gap rather than a feature that does not work"
+else
+  bad "KL4 gap KL4-A1 twin: the guarantee layer accepts the same content the advisory gate denies, which is what makes the gap a gap rather than a feature that does not work" \
+      "the git hooks refused too, so the feature is not working at the layer it was built for"
+fi
+
+# --- delivery: the config surface is stamped and survives a refresh ---------
+KL4_TMPL="$ROOT/templates/claude/sdd.json.tmpl"
+if jq -e 'has("scan_exclusions") and (.scan_exclusions | type) == "array" and (.scan_exclusions | length) == 0' "$KL4_TMPL" >/dev/null 2>&1; then
+  ok "KL4 delivery: the stamped sdd.json template DECLARES scan_exclusions, empty, so the surface is discoverable without changing a verdict"
+else
+  bad "KL4 delivery: the stamped sdd.json template DECLARES scan_exclusions, empty, so the surface is discoverable without changing a verdict" \
+      "a config surface nobody can find is a feature nobody has; an empty array is byte-identical in behaviour to absence and names the key"
+fi
+
+# PRESERVED ACROSS AN UPGRADE. A declared set that a refresh silently dropped
+# would turn a working exclusion into a wall of refusals on the next commit, at
+# the moment the operator is least expecting the hooks to have changed their
+# mind. refresh-instance.sh rewrites .plugin.version through jq and nothing
+# else, so preservation is a property of how it writes rather than a special
+# case for this key; the assertion pins that property where this key can see it.
+KL4_INST="$WORK/kl4-refresh-preserve"
+if instance_fixture "$KL4_INST" 1.0.0 >/dev/null 2>&1; then
+  jq '. + {scan_exclusions: ["vendor/**", "test/fixtures/**"]}' "$KL4_INST/.claude/sdd.json" > "$KL4_INST/.claude/sdd.json.new" \
+    && mv "$KL4_INST/.claude/sdd.json.new" "$KL4_INST/.claude/sdd.json"
+  bash "$SCRIPTS/refresh-instance.sh" --apply "$KL4_INST" >/dev/null 2>&1
+  KL4_KEPT="$(jq -c '.scan_exclusions' "$KL4_INST/.claude/sdd.json" 2>/dev/null)"
+  if [[ "$KL4_KEPT" == '["vendor/**","test/fixtures/**"]' ]]; then
+    ok "KL4 delivery: a refresh PRESERVES a declared exclusion set, value for value"
+  else
+    bad "KL4 delivery: a refresh PRESERVES a declared exclusion set, value for value" \
+        "after the refresh the set reads $KL4_KEPT; an upgrade that drops it turns a working exclusion into a wall of refusals nobody asked for"
+  fi
+  if [[ "$(jq -r '.plugin.version' "$KL4_INST/.claude/sdd.json" 2>/dev/null)" == "$PLUGIN_VERSION" ]]; then
+    ok "KL4 delivery: and the refresh it survived was a REAL one (the version moved)"
+  else
+    bad "KL4 delivery: and the refresh it survived was a REAL one (the version moved)" \
+        "the version did not move, so the preservation assertion above survived a refresh that did not happen"
+  fi
+else
+  bad "KL4 delivery: the refresh fixture builds" "instance_fixture failed, so the preservation assertions test nothing"
+fi
+
+# ABSENCE STAYS ABSENT. The other half of opt-in: a refresh must not invent the
+# key, because a key that appears on upgrade is a config surface the operator
+# never chose and a diff they have to explain.
+KL4_INST2="$WORK/kl4-refresh-absent"
+if instance_fixture "$KL4_INST2" 1.0.0 >/dev/null 2>&1; then
+  bash "$SCRIPTS/refresh-instance.sh" --apply "$KL4_INST2" >/dev/null 2>&1
+  if jq -e 'has("scan_exclusions") | not' "$KL4_INST2/.claude/sdd.json" >/dev/null 2>&1; then
+    ok "KL4 delivery: a refresh does NOT invent the key in an instance that never declared one"
+  else
+    bad "KL4 delivery: a refresh does NOT invent the key in an instance that never declared one" \
+        "the upgrade added a config surface the operator did not choose"
+  fi
+else
+  bad "KL4 delivery: the absent-key refresh fixture builds" "instance_fixture failed"
+fi
 
 # --- summary -----------------------------------------------------------------
 

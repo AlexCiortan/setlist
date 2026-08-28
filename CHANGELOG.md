@@ -9,6 +9,68 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.2.0
+
+**Edition v1.10 (the scoping edition).** The enforcement release. Unlike the two
+before it, this one changes the bytes that do the enforcing: the git hooks, the
+push-time trunk audit, the advisory session gates, and the upgrade certification all
+move. It is the first release since the hooks were pinned by content that REPLACES
+hook bytes in an existing instance, so `/setlist:upgrade` does more here than move a
+document.
+
+- **The false denial disclosed in 2.1.0 is FIXED.** A spec that QUOTED the
+  closing-report template inside a fenced code block, changed no lifecycle state, and
+  did not stage `specs/STATUS.md`, was refused an ordinary commit with
+  `[SLH-STATUS-MISSING]`. The detector read the raw staged diff and did not strip
+  fences, so quoted text was read as if it were live. The same regex meant an indented
+  `## Closing report` heading was not matched at all, while three other readers in the
+  same release accepted it. Both halves are one fix, made in the SHARED reader rather
+  than a fourth private copy, so all four readers now agree. The 2.1.0 notes promised
+  this to this release; the reproduction from that disclosure is now a fixture, and it
+  commits clean.
+- **The staged-content scans can be PATH-SCOPED, and this is the release's one new
+  feature.** Vendored trees, fixtures carrying dummy credentials and quoted external
+  text are not your writing, and splitting the commit never separated them from the
+  scanner. Declare the paths as repo-relative globs in `.claude/sdd.json`:
+  `"scan_exclusions": ["vendor/**", "test/fixtures/**"]`, honoured by the em-dash and
+  secret scans at the commit layer and the push layer alike. Four properties are part
+  of the mechanism rather than incidental to it. **Every skip is printed, naming the
+  file and the glob that matched it**, because an exclusion nobody is told about is a
+  hole one directory over. The set reaches those two scans and nothing else, so it
+  cannot quiet the trunk audit, the close checks or role-path judgment. A set that
+  cannot be read, or one made only of wildcards, is refused with a named code rather
+  than resolved in either direction, because a config error that quietly scans
+  everything ignores a declaration while one that quietly scans nothing is an exemption
+  nobody wrote. And declaring nothing leaves the scans exactly as they were. Where a
+  match cannot be decided the scan RUNS: a case-variant spelling and a path git had to
+  quote are scanned, and say so. This is scoping, not an off switch, and there is
+  deliberately no pattern that means "all". **One piece is not done**: the in-session
+  advisory commit gate is not path-scoped, so inside a Claude Code session a commit of
+  excluded content is still denied there while the git hooks accept it.
+- **A compliant SPEC close is no longer permanently unpushable.** A fast-forward or
+  `--squash` close of a spec branch that is otherwise compliant was refused by the
+  push-time trunk audit and could never be pushed at all. The audit now decides on parent
+  COUNT, so one fix covers both spellings. **A compliant CHORE close spelled that way is
+  still refused at push**, which is unchanged from previous releases and is disclosed in
+  the release notes as a known open issue. Preferring `--no-ff` avoids both.
+- **The skip variable stops being all-or-nothing.** `SETLIST_SKIP_TRUNK_AUDIT=1` now
+  narrows to the audit arm alone: the secret and em-dash scans keep running, so a push
+  that skips the history check is not also a push with the content checks off.
+- **The push-time scan reads every commit in the pushed range**, rather than diffing the
+  two endpoints, which missed content added and then removed across a range. A first
+  push of the trunk derives a range that cannot be empty, and a tag push whose target
+  introduces commits is either scanned or refused by name: a scan of nothing must never
+  read as a scan that found nothing.
+- **The advisory gates say so when they cannot run.** With `git` unusable, the close gate
+  and the scope hook produced zero bytes, which reads as approval. They now probe for a
+  usable repository and emit an explicit refusal code instead. Two pieces of advice that
+  pointed at a variable with no effect at the refusal in question are corrected, and no
+  gate message promises a denial it does not deliver.
+- **The upgrade certification stops reporting the wrong answer in both directions.** It
+  read one tool's matchers where a project may configure four, so a correctly protected
+  instance could be reported unprotected and an under-protected one clean. It now reads
+  every entry that runs the scope hook and takes the union.
+
 ## 2.1.1
 
 **Edition v1.9 (the reckoning edition), unchanged.** A documentation release. No

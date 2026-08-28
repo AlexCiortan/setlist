@@ -441,7 +441,7 @@ fi
 # EMPTY directory, so that was the ordinary case rather than the edge one, and
 # every project the primary onboarding path produced shipped with .githooks/
 # present, core.hooksPath unset, and therefore NO enforcement at all, while the
-# README said /scaffold arms the hooks. Nine hostile legs missed it because
+# README said /scaffold arms the hooks. Nine adversarial reviews missed it because
 # every leg fixture stamped into an EXISTING repository.
 #
 # A delivery that could not deliver has not delivered, which is the same rule

@@ -416,18 +416,71 @@ OURS_TEST='
   # that never runs was read as the scope hook's. Fixing the two predicates a
   # finding named and not the third one in the same file is the same
   # stop-at-the-example error as the heading-depth range next door.
-  SCOPE_MATCHER="$(jq -r --argjson allowed "$(ours_spellings scope-hook)" "[.hooks.PreToolUse[]?
+  # COVERAGE OVER THE FULL TOOL SET, EVERY ENTRY, ONE FIX (F3 with V19-F5 and
+  # V19-F10). Three findings, one function, and they are fixed together on
+  # purpose: three separate repairs to one predicate is how the second
+  # reintroduces the first, which is the repair-defect rate this repository
+  # measures at about one in five.
+  #
+  #   F3/V19-F5  the test was `[[ "$SCOPE_MATCHER" != *NotebookEdit* ]]`, a bash
+  #              SUBSTRING search sitting next to two neighbours that were real
+  #              coverage tests. `Write|Edit|MultiEdit|NotebookEditor` contains
+  #              the token and covers nothing, so it certified CLEAN; and
+  #              `Write|NotebookEdit` certified CLEAN while Edit and MultiEdit
+  #              were checked by nothing at all. Both directions measured with
+  #              controls: an UNDER-protected instance was told it was wired.
+  #   V19-F10    `| first` read only the FIRST entry running the scope hook, so
+  #              a correctly protected instance carrying two registrations was
+  #              told notebook writes reach the trunk. A false REPORT rather
+  #              than a false refusal, but it sends an operator to repair a
+  #              boundary that is already in force.
+  #   F5         a catch-all matcher (`*`, `.*`, empty, absent) is MATCH-ALL and
+  #              was read as covering nothing; the `Write,Edit` comma spelling
+  #              the harness also accepts became one impossible alternative; and
+  #              a jq that ERRORED yielded an empty string that read as "does
+  #              not count" rather than as "could not be checked".
+  #
+  # So: every entry's matcher, the UNION of what they cover, tested per tool as
+  # an ANCHORED alternation, with match-all and the comma spelling handled
+  # before the regex is built and a jq failure reported as a gap rather than
+  # swallowed.
+  SCOPE_MATCHERS="$(jq -c --argjson allowed "$(ours_spellings scope-hook)" "[.hooks.PreToolUse[]?
       | select(any(.hooks[]?; $OURS_TEST))
-      | .matcher // \"\"] | first // \"<unwired>\"" "$SETTINGS")"
-  if [[ "$SCOPE_MATCHER" == "<unwired>" ]]; then
+      | .matcher // \"\"]" "$SETTINGS" 2>/dev/null)" || SCOPE_MATCHERS=""
+  if [[ -z "$SCOPE_MATCHERS" ]]; then
+    WIRING_GAPS="$WIRING_GAPS
+  the scope hook's wiring could not be READ from $SETTINGS, so whether the trunk
+  rule runs is unknown. That is reported as a gap rather than as a pass: a check
+  that could not run has not passed."
+  elif [[ "$SCOPE_MATCHERS" == "[]" ]]; then
     WIRING_GAPS="$WIRING_GAPS
   the scope hook is not wired in PreToolUse at all, so the trunk rule never runs."
-  elif [[ "$SCOPE_MATCHER" != *NotebookEdit* ]]; then
-    WIRING_GAPS="$WIRING_GAPS
-  the scope hook's matcher is \"$SCOPE_MATCHER\", which does not cover
-  NotebookEdit. Set that entry's matcher to
+  else
+    # An invalid regex in a matcher makes jq's test() throw. The status is
+    # CARRIED so that failure becomes "could not be checked" below, never an
+    # empty uncovered-list that reads as full coverage.
+    SCOPE_UNCOVERED="$(printf '%s' "$SCOPE_MATCHERS" | jq -r '
+      def norm: gsub(","; "|");
+      def matchall: (. == "" or . == "*" or . == ".*");
+      . as $ms
+      | ["Write","Edit","MultiEdit","NotebookEdit"]
+      | map(. as $t
+            | select(($ms | any(matchall)) | not)
+            | select(($ms | any(. as $m | ($t | test("^(" + ($m | norm) + ")$")))) | not))
+      | join(", ")' 2>/dev/null)" || SCOPE_UNCOVERED="<unreadable>"
+    if [[ "$SCOPE_UNCOVERED" == "<unreadable>" ]]; then
+      WIRING_GAPS="$WIRING_GAPS
+  the scope hook's matcher(s) $SCOPE_MATCHERS could not be evaluated as a
+  pattern, so which tools they cover is unknown. Reported as a gap rather than a
+  pass. Set the matcher to \"Write|Edit|MultiEdit|NotebookEdit\"."
+    elif [[ -n "$SCOPE_UNCOVERED" ]]; then
+      WIRING_GAPS="$WIRING_GAPS
+  the scope hook's matcher(s) $SCOPE_MATCHERS do not cover: $SCOPE_UNCOVERED.
+  Set that entry's matcher to
     \"Write|Edit|MultiEdit|NotebookEdit\"
-  or a notebook write reaches the trunk without tripping the scope rule."
+  or a write through an uncovered tool reaches the trunk without tripping the
+  scope rule."
+    fi
   fi
 
   # Timeouts, on OUR entries only, and the message names each offender.
@@ -568,7 +621,7 @@ mkdir -p "$INSTANCE/.claude/hooks" \
 for h in $STAMPED_HOOKS; do
   ADV_NOTE="$(setlist_deliver_file "$HOOKS/$h.sh" "$INSTANCE" ".claude/hooks/$h.sh")" \
     || die "could not refresh .claude/hooks/$h.sh: ${ADV_NOTE:-the copy failed} Nothing has been recorded, so re-run once the cause is fixed."
-  [[ -z "$ADV_NOTE" ]] || printf 'refresh-instance.sh: %s' "$ADV_NOTE"
+  [[ -z "$ADV_NOTE" ]] || printf 'refresh-instance.sh: %s\n' "$ADV_NOTE"
 done
 # fail-open-ok: cosmetic. A filesystem that refuses the mode bit does not
 # make the copied hook bytes wrong, and the hooks are invoked via bash.
@@ -618,7 +671,7 @@ if [[ -f "$ROOT/scripts/trunk-audit.sh" ]]; then
   # file with a named backup instead of replacing 700 lines in silence.
   ADV_NOTE="$(setlist_deliver_file "$ROOT/scripts/trunk-audit.sh" "$INSTANCE" ".claude/hooks/trunk-audit.sh")" \
     || die "could not deliver trunk-audit.sh to .claude/hooks/: ${ADV_NOTE:-the copy failed} pre-push would refuse every push outside a Claude Code session."
-  [[ -z "$ADV_NOTE" ]] || printf 'refresh-instance.sh: %s' "$ADV_NOTE"
+  [[ -z "$ADV_NOTE" ]] || printf 'refresh-instance.sh: %s\n' "$ADV_NOTE"
   [[ -f "$INSTANCE/.claude/hooks/trunk-audit.sh" ]] || die "could not deliver trunk-audit.sh to .claude/hooks/; pre-push would refuse every push outside a Claude Code session."
 fi
 

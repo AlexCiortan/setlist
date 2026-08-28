@@ -3,13 +3,33 @@
 # arriving through a closed spec?
 #
 # Usage:
-#   trunk-audit.sh [<instance-dir>] [--since <ref>]
+#   trunk-audit.sh [<instance-dir>] [--since <ref>] [--until <ref>]
 #
-# ADVISORY as of plugin 1.0.5. Nothing calls this automatically: it is not
-# wired as a hook, it does not gate a commit, and a finding does not block
-# anything. Run it by hand or from /setlist:validate. That is deliberate for
-# a first release, because it reads real project history and real history is
-# the only honest test of it.
+# THIS FILE IS A GATE (SP2-F5, corrected 2026-08-27). For four editions this
+# header called the script advisory, said nothing ran it automatically, and said
+# a finding here blocked nothing. Every one of those claims was true when it was
+# written for plugin 1.0.5, and none has been true since edition v1.7, when
+# pre-push was stamped and made live: `templates/git-hooks/pre-push` RUNS this
+# script on every push and REFUSES the push on its verdict. A shipped file
+# describing itself as harmless while a caller uses it as a boundary is this
+# repository's signature defect, filed against this very file by the scan-scope
+# proving run.
+#
+# The retired sentences are PARAPHRASED above rather than quoted, deliberately.
+# A verbatim stale claim sitting in a shipped file reads as a claim to anything
+# that greps or skims, which is the same "a quotation is not the thing" class the
+# live-text reader exists for, and this project's claims sweep deliberately holds
+# zero pinned stale copies so that any new one fails outright. The exact former
+# wording is in this file's git history, which is where a retired claim belongs.
+#
+# What is true now, stated at the strength the bytes support:
+#   - Run from pre-push on every push, and its exit status decides the push.
+#   - Also runnable by hand and from /setlist:validate, which is where it
+#     started and still the best way to read a whole history at once.
+#   - It reads real project HISTORY rather than parsing commands, which is why
+#     it catches what the session gates miss by construction.
+# The escape is named where it is honoured: SETLIST_SKIP_TRUNK_AUDIT=1 skips
+# this audit at push time and leaves the content scan running.
 #
 # Why this exists, and why it is different in kind from the hooks. The three
 # PreToolUse gates decide by parsing a shell command before it runs, and a
@@ -44,10 +64,29 @@ SINCE=""
 # happens to point at (1.1.0 leg, F17). Defaults to the trunk, which is every
 # other caller and the behaviour this script has always had.
 UNTIL=""
+# A VALUE-LESS --since OR --until IS REFUSED, NOT ABSORBED (F12).
+#
+# These read `SINCE="${2:-}"; shift 2`, and `shift 2` with only one argument
+# left is an ERROR in bash that leaves $# UNCHANGED, so `trunk-audit.sh --since`
+# looped forever on the same argument. Not reachable from pre-push, which always
+# passes a value, but a human or a CI job running the CLI hangs.
+#
+# The `=` spelling is accepted here rather than left to fail as an instance path.
+# `--since=HEAD~5` is the form every other git-adjacent tool takes, and the old
+# loop silently treated it as the INSTANCE directory, which then failed with
+# "not a directory: --since=HEAD~5": a confusing error for a correct command.
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --since) SINCE="${2:-}"; shift 2 ;;
-    --until) UNTIL="${2:-}"; shift 2 ;;
+    --since=*) SINCE="${1#--since=}"; shift ;;
+    --until=*) UNTIL="${1#--until=}"; shift ;;
+    --since|--until)
+      if [[ $# -lt 2 ]]; then
+        printf 'trunk-audit.sh: %s needs a <ref> value. A missing value used to loop forever rather than say so.\n' "$1" >&2
+        exit 2
+      fi
+      case "$1" in --since) SINCE="$2" ;; *) UNTIL="$2" ;; esac
+      shift 2
+      ;;
     *) INSTANCE="$1"; shift ;;
   esac
 done
@@ -137,6 +176,32 @@ fi
 ROLES="$(mapfile_roles)"
 [[ -n "$ROLES" ]] || die "no role paths recorded in $SDD"
 
+# A TRUNK THAT NAMES "WHEREVER HEAD IS" NAMES NO TRUNK (V19-F8).
+#
+# `HEAD`, `@` and `@{-1}` all RESOLVE, and the reducer below then turns them into
+# whatever branch is checked out at audit time: the audited ref becomes a
+# property of the working tree rather than of the recorded configuration, so the
+# same repository audits a different branch depending on where somebody happened
+# to leave HEAD, and a spec branch can be audited as though it were the trunk.
+# `@{-1}` is worse still, naming the PREVIOUSLY checked-out branch.
+#
+# This EXTENDS a guard that already fires rather than teaching the audit to tell
+# a crafted shape from an ordinary one, which is why it is a fix and not the
+# coverage chase A3 warns against: the reducer below already refuses a spelling
+# that names no local branch, and these three slip past only because they name a
+# real one indirectly. Reaching this needs one of the three written into
+# sdd.json's "trunk", which is not ordinary work; the refusal is cheap and the
+# silent misdirection is not.
+#
+# The reflog forms are refused as a FAMILY (`@{...}` anywhere) rather than
+# enumerated, because @{0}, @{1}, @{upstream} and @{-1} are one syntax and an
+# enumeration is always one spelling short of the next one.
+case "$TRUNK" in
+  HEAD|@|*@\{*\}*)
+    die "the recorded trunk '$TRUNK' names a POSITION rather than a branch, so which ref this audit reads would depend on where HEAD happens to point rather than on what this project protects. Record the plain branch NAME (for example \"main\") in .claude/sdd.json."
+    ;;
+esac
+
 git -C "$INSTANCE" rev-parse --verify --quiet "$TRUNK" >/dev/null 2>&1 \
   || die "the recorded trunk '$TRUNK' does not resolve in this repository"
 
@@ -145,7 +210,7 @@ git -C "$INSTANCE" rev-parse --verify --quiet "$TRUNK" >/dev/null 2>&1 \
 # above passed it straight through: this script then audited refs/remotes/origin/
 # main, the violating merge on LOCAL main was simply not in the range, and it
 # reported "1 clean, 0 violations" at exit 0 while pre-push allowed the push
-# (v1.7 dogfood gate, hostile leg F10). Same root cause as slh_trunk's, different
+# (v1.7 dogfood gate, adversarial review F10). Same root cause as slh_trunk's, different
 # file, so fixing the library does not fix this.
 #
 # Reduced by ASKING GIT, the same way close-gate.sh and setlist-hook-lib.sh do.
@@ -263,11 +328,24 @@ touches_role() { # touches_role <from> <to>
   # ineffective. Two copies of a rule is the shape of leg 5's F8 and of item 35;
   # it is also what this file's own comments warn about. So the per-file
   # decision is made in exactly one place and this walks the diff.
+  # NUL-DELIMITED, BECAUSE git QUOTES PATHS (F1 of the 2.2.0 leg, a BLOCKER).
+  # Without -z, `--name-only` emits a path carrying a non-ASCII byte, a double
+  # quote, a backslash or a control character as a QUOTED C string, escapes and
+  # surrounding quotes included, and touches_role_file's prefix match cannot see
+  # `src/` through them. A role-path file was then invisible to the role test and
+  # unreviewed feature code reached the trunk at exit 0.
+  #
+  # -z RATHER THAN core.quotePath=false, and this was measured before it was
+  # written: the config flag rescues the NON-ASCII case ONLY. A quote, a
+  # backslash and a control character are quoted unconditionally at every
+  # setting. -z emits the raw bytes with a NUL terminator and no quoting at all,
+  # which is the only spelling that covers all four classes. The suite runs each
+  # class with the flag BOTH ways for exactly this reason.
   local f
-  while IFS= read -r f; do
+  while IFS= read -r -d '' f; do
     [[ -n "$f" ]] || continue
     touches_role_file "$f" && return 0
-  done < <(git -C "$INSTANCE" diff --name-only "$1" "$2" 2>/dev/null)
+  done < <(git -C "$INSTANCE" diff -z --name-only "$1" "$2" 2>/dev/null)
   return 1
 }
 
@@ -276,11 +354,14 @@ touches_role_tree() { # touches_role_tree <commit>
   # diff against: does its own tree carry role-path code? Routed through
   # touches_role_file for the reason the comment above gives, so the normalise
   # and match rule still exists in exactly one place.
+  # NUL-delimited for the reason touches_role gives one screen up: ls-tree quotes
+  # the same four path classes that diff does, and the root-commit arm must not
+  # be the one place the role test stays blind.
   local f
-  while IFS= read -r f; do
+  while IFS= read -r -d '' f; do
     [[ -n "$f" ]] || continue
     touches_role_file "$f" && return 0
-  done < <(git -C "$INSTANCE" ls-tree -r --name-only "$1" 2>/dev/null)
+  done < <(git -C "$INSTANCE" ls-tree -r -z --name-only "$1" 2>/dev/null)
   return 1
 }
 
@@ -367,7 +448,7 @@ TEMPLATE_FENCE_AWK='function __f(k,  i){ if(k) for(i=1;i<=n;i++) print b[i]; n=0
 # setlist-hook-lib.sh, which carries the full reasoning. Strips fenced blocks,
 # HTML comment spans and indented-code lines before a plain grep looks for a
 # chore archive line, so an illustration cannot be counted as a record.
-SLH_LIVE_TEXT_AWK='{ __l=$0; sub(/\r$/,"",__l); __para=PARA; PARA=0; if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (inhtml) { if (index(tolower(__l), htag)) inhtml = 0; next } if (!fence) { while ((__ci=index(__l, "<!--")) > 0) { __after=substr(__l, __ci+2); __cj=index(__after, "-->"); if (__cj > 0) { __l = substr(__l, 1, __ci-1) substr(__after, __cj+3) } else { __l = substr(__l, 1, __ci-1); incmt = 1; break } } } __t=__l; __d=0; while (1) { __save=__t; sub(/^ ? ? ?/,"",__t); if (__t ~ /^>/) { sub(/^> ?/,"",__t); __d++ } else { __t=__save; break } } if (fence) { if (__d==fbq && !(__t ~ /^(    |\t)/)) { __x=__t; sub(/^[[:space:]]*/,"",__x); __c=substr(__x,1,1); if (__c==fch) { __m=0; while(substr(__x,__m+1,1)==__c) __m++; __raw=substr(__x,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=flen && __r=="") fence=0 } } next } __hx=tolower(__t); sub(/^[[:space:]]*/,"",__hx); if (__hx ~ /^<(script|style|textarea|pre)([ \t>]|$)/) { if (__hx ~ /^<script/) htag="</script>"; else if (__hx ~ /^<style/) htag="</style>"; else if (__hx ~ /^<textarea/) htag="</textarea>"; else htag="</pre>"; if (index(__hx, htag)) { next } inhtml=1; next } __ic=__t; __peeled=0; while (1) { __s2=__ic; sub(/^ ? ? ?/,"",__ic); if (__ic ~ /^([-*+]|[0-9]+[.)])[ \t]/) { sub(/^([-*+]|[0-9]+[.)]) ?/,"",__ic); __peeled=1 } else if (__ic ~ /^>/) { sub(/^> ?/,"",__ic); __peeled=1 } else { __ic=__s2; break } } if (__peeled && __ic ~ /^(    |\t)/) { next } if (__d>0 && __t ~ /^(    |\t)/) { next } if (__d==0 && __t ~ /^(    |\t)/) { if (!__para) next } __o=__t; sub(/^([-*+]|[0-9]+[.)])[[:space:]]+/,"",__o); sub(/^[[:space:]]*/,"",__o); __c=substr(__o,1,1); if (__c=="`" || __c=="~") { __m=0; while(substr(__o,__m+1,1)==__c) __m++; __raw=substr(__o,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { fence=1; fch=__c; flen=__m; fbq=__d; next } } print __l; if (__l ~ /^[[:space:]]*$/) { intable=0 } else if (__d==0) { __ps=__t; sub(/^[[:space:]]*/,"",__ps); if (__ps ~ /^\|?[ \t|:-]*-[ \t|:-]*$/ && index(__ps,"|")) { intable=1 } else if (index(__ps,"|") && intable) { } else { intable=0; if (!(__ps ~ /^#+([ \t]|$)/) && !(__ps ~ /^[-=]+[ \t]*$/) && !(__ps ~ /^[*_]+[ \t]*$/)) PARA=1 } } }'
+SLH_LIVE_TEXT_AWK='{ __l=$0; sub(/\r$/,"",__l); __para=PARA; PARA=0; if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (inhtml) { if (index(tolower(__l), htag)) inhtml = 0; next } if (!fence) { while ((__ci=index(__l, "<!--")) > 0) { __after=substr(__l, __ci+2); __cj=index(__after, "-->"); if (__cj > 0) { __l = substr(__l, 1, __ci-1) substr(__after, __cj+3) } else { __l = substr(__l, 1, __ci-1); incmt = 1; break } } } __t=__l; __d=0; while (1) { __save=__t; sub(/^ ? ? ?/,"",__t); if (__t ~ /^>/) { sub(/^> ?/,"",__t); __d++ } else { __t=__save; break } } if (fence) { if (__d==fbq && !(__t ~ /^(    |\t)/)) { __x=__t; sub(/^[[:space:]]*/,"",__x); __c=substr(__x,1,1); if (__c==fch) { __m=0; while(substr(__x,__m+1,1)==__c) __m++; __raw=substr(__x,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=flen && __r=="") fence=0 } } next } __hx=tolower(__t); sub(/^[[:space:]]*/,"",__hx); if (__hx ~ /^<(script|style|textarea|pre)([ \t>]|$)/) { if (__hx ~ /^<script/) htag="</script>"; else if (__hx ~ /^<style/) htag="</style>"; else if (__hx ~ /^<textarea/) htag="</textarea>"; else htag="</pre>"; if (index(__hx, htag)) { next } inhtml=1; next } __ic=__t; __peeled=0; while (1) { __s2=__ic; sub(/^ ? ? ?/,"",__ic); if (__ic ~ /^([-*+]|[0-9]+[.)])[ \t]/) { sub(/^([-*+]|[0-9]+[.)]) ?/,"",__ic); __peeled=1 } else if (__ic ~ /^>/) { sub(/^> ?/,"",__ic); __peeled=1 } else { __ic=__s2; break } } if (__peeled && __ic ~ /^(    |\t)/) { next } if (__d>0 && __t ~ /^(    |\t)/) { next } if (__d==0 && __t ~ /^(    |\t)/) { if (!__para) next } __o=__t; sub(/^([-*+]|[0-9]+[.)])[[:space:]]+/,"",__o); sub(/^[[:space:]]*/,"",__o); __c=substr(__o,1,1); if (__c=="`" || __c=="~") { __m=0; while(substr(__o,__m+1,1)==__c) __m++; __raw=substr(__o,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { fence=1; fch=__c; flen=__m; fbq=__d; next } } if ((__d>0 || __peeled) && __ic ~ /^[[:space:]]*[|]/) next; print __l; if (__l ~ /^[[:space:]]*$/) { intable=0 } else if (__d==0) { __ps=__t; sub(/^[[:space:]]*/,"",__ps); if (__ps ~ /^\|?[ \t|:-]*-[ \t|:-]*$/ && index(__ps,"|")) { intable=1 } else if (index(__ps,"|") && intable) { } else { intable=0; if (!(__ps ~ /^#+([ \t]|$)/) && !(__ps ~ /^[-=]+[ \t]*$/) && !(__ps ~ /^[*_]+[ \t]*$/)) PARA=1 } } }'
 
 while IFS= read -r C; do
   [[ -n "$C" ]] || continue
@@ -406,6 +487,9 @@ while IFS= read -r C; do
     # row-flipped and file-touched instead of the row-flip itself; here, the
     # check was bound to the shape that usually carries the event instead of to
     # the event. The rule is the ROW FLIP, and it is asked of every commit.
+    # Did this commit COMPLIANTLY close a spec? Set by the loop below and read
+    # by the touches-role decision at the end of this arm (F4).
+    LIN_CLOSED_OK=0
     if [[ -n "$P1" ]]; then
       # LIVE TEXT AT THE SOURCE (2026-08 consolidation): the row readers judge
       # STATUS.md by what the rendered file shows, so a fenced example row or a
@@ -419,7 +503,13 @@ while IFS= read -r C; do
         # Same narrowing as the library (leg F6): the exact number then a
         # hyphen, and a count rather than head -n1, because 0002b is a
         # different spec and a pick among several is a guess.
-        LIN_HITS="$(git -C "$INSTANCE" ls-tree -r --name-only "$C" 2>/dev/null | grep -E "^specs/${LIN_NUM}-[^/]*\.md$" || true)" # fail-open-ok: no file yields empty, handled as its own violation below
+        # -z and a NUL-aware grep (F1's class, on the spec side): a spec file whose
+        # name carries a non-ASCII byte, a quote, a backslash or a control character
+        # is emitted QUOTED by --name-only and would miss this pattern, so the audit
+        # would report "no spec file" about a spec that is present. Same defect as
+        # the role reader, opposite consequence: there it under-refuses, here it
+        # over-refuses.
+        LIN_HITS="$(git -C "$INSTANCE" ls-tree -r -z --name-only "$C" 2>/dev/null | grep -zE "^specs/${LIN_NUM}-[^/]*\.md$" | tr '\0' '\n' || true)" # fail-open-ok: no file yields empty, handled as its own violation below
         if [ -n "$LIN_HITS" ] && [ "$(printf '%s\n' "$LIN_HITS" | grep -c .)" -ne 1 ]; then
           printf 'VIOLATION %s  spec %s has several files matching specs/%s-*.md, so its close cannot be verified: %s\n' \
             "$SHORT" "$LIN_NUM" "$LIN_NUM" "$(printf '%s' "$LIN_HITS" | tr '\n' ' ')"
@@ -456,6 +546,9 @@ while IFS= read -r C; do
           printf 'VIOLATION %s  spec %s was marked CLOSED without:%s\n' "$SHORT" "$LIN_NUM" "$LIN_MISS"
           printf '          %s\n' "$SUBJ"
           VIOLATIONS=$((VIOLATIONS + 1))
+        else
+          # A COMPLIANT CLOSE, ON A COMMIT WITH FEWER THAN TWO PARENTS (F4).
+          LIN_CLOSED_OK=1
         fi
       done
     fi
@@ -497,7 +590,32 @@ while IFS= read -r C; do
     fi
     # A direct commit on the trunk. Docs-only is the allowed case the whole
     # loop exists to distinguish.
-    if touches_role "$P1" "$C"; then
+    #
+    # A COMPLIANT FAST-FORWARD OR SQUASH CLOSE IS NOT "CODE COMMITTED DIRECTLY"
+    # (F4, and the two spellings are one shape). A `git merge --ff` of a linear
+    # spec branch creates no merge commit; a `git merge --squash` creates a
+    # commit with no second parent. Both therefore land role-path work on the
+    # trunk in a commit with fewer than two parents, pre-commit allows them, and
+    # this arm then called them violations FOREVER: the push was refused every
+    # time, with no way forward but rewriting history, for work that satisfied
+    # every close condition the framework asks for.
+    #
+    # KEYED ON THE PARENT COUNT, which is why one fix covers both. This arm is
+    # already the "fewer than two parents" arm, and the close verification above
+    # has already asked the real question of this exact commit: did a row flip to
+    # CLOSED, and does the spec carry its Closing report, its QA verdict and its
+    # diagram field. A commit that passed that is a close, whatever flag produced
+    # it. A fix keyed on the flag NAME would have covered neither honestly, since
+    # neither flag is visible in the history this script reads.
+    #
+    # The direction is narrow on purpose: LIN_CLOSED_OK is set only where the
+    # close verification found a flip AND found nothing missing. A commit that
+    # flips a row and fails a condition is still a violation, reported by that
+    # loop with the condition named; a commit that carries code and closes
+    # nothing is still "feature code committed directly".
+    if [[ "$LIN_CLOSED_OK" -eq 1 ]]; then
+      CLEAN=$((CLEAN + 1))
+    elif touches_role "$P1" "$C"; then
       printf 'VIOLATION %s  feature code committed directly to %s\n' "$SHORT" "$TRUNK"
       printf '          %s\n' "$SUBJ"
       VIOLATIONS=$((VIOLATIONS + 1))
@@ -543,7 +661,7 @@ while IFS= read -r C; do
     # got the older, compliant spec validated and the real work never looked at.
     # A one-line amendment to a closed spec laundered an unspecified change onto
     # the trunk, and the audit reported it clean.
-    SPECS_TOUCHED="$(git -C "$INSTANCE" diff --name-only "$BASE" "$P2" 2>/dev/null \
+    SPECS_TOUCHED="$(git -C "$INSTANCE" diff -z --name-only "$BASE" "$P2" 2>/dev/null | tr '\0' '\n' \
       | grep -E '^specs/[0-9]+[a-z]*-[^/]*\.md$' || true)"   # fail-open-ok: no match means no spec on the branch, handled as a chore below
 
     # fail-open-ok: same, an unreadable STATUS.md fails the row test below.
@@ -594,7 +712,16 @@ while IFS= read -r C; do
         # Verifiable now, where it used to be unverifiable by construction. This
         # is the whole gain from giving the archive line a form: history can
         # answer the question rather than shrug at it.
-        CLEAN=$((CLEAN + 1))
+        #
+        # COUNTED ONCE, BY THE ONE PLACE THAT COUNTS (V19-F9). This arm used to
+        # do `CLEAN=$((CLEAN + 1))` here, and this is the PER-PARENT loop: a
+        # merge whose parents each record a chore incremented CLEAN once per
+        # parent, and then the per-commit bucket at the bottom of the loop
+        # incremented it again, so `clean` could exceed `audited` and the report
+        # printed an impossible pair. No violation was ever missed, the decision
+        # was right and the tally was wrong, but a shipped counter that can print
+        # an impossible pair is a claim users read. The bucket below is the ONE
+        # site that counts a commit, and it counts it once.
         continue
       fi
       # No spec and no recorded chore. Still UNVERIFIABLE rather than a
@@ -650,10 +777,10 @@ while IFS= read -r C; do
       # A FENCED EXAMPLE IS NOT A CLOSING REPORT, in the backstop too. The close
       # gate has stripped fenced spans since leg 5's F7; this script never did,
       # so a spec quoting the shipped template satisfied every check below and
-      # the audit reported it clean (v1.7 gate, hostile leg F9). Stripped once,
+      # the audit reported it clean (v1.7 gate, adversarial review F9). Stripped once,
       # before all of them, exactly as close-gate.sh and setlist-hook-lib.sh do.
       #
-      # NARROWED for the 1.1.0 hostile leg's F6, and this copy is the one that
+      # NARROWED for the 1.1.0 adversarial review F6, and this copy is the one that
       # made the defect RETROACTIVE. The stripper is new here in 1.1.0, so an
       # instance upgrading from 1.0.9 found the audit condemning trunk history
       # that had merged legitimately, at which point pre-push refused the push
@@ -829,7 +956,7 @@ EOF
         git -C "$INSTANCE" cat-file -e "$PP:$nf" 2>/dev/null && { IN_A_PARENT=1; break; }
       done
       [[ "$IN_A_PARENT" -eq 0 ]] && INJECTED="$INJECTED $nf"
-    done < <(git -C "$INSTANCE" diff --name-only --diff-filter=A "$P1" "$C" 2>/dev/null)
+    done < <(git -C "$INSTANCE" diff -z --name-only --diff-filter=A "$P1" "$C" 2>/dev/null | tr '\0' '\n')
     if [[ -n "$INJECTED" ]]; then
       printf 'VIOLATION %s  the merge commit itself introduced role-path files that no parent carries:%s\n' "$SHORT" "$INJECTED"
       printf '          %s\n' "$SUBJ"
