@@ -73,6 +73,23 @@ esac
 # ABSENT FIELD IS SILENT, deliberately: every spec authored before v1.7 lacks it,
 # and warning about those would train people to ignore this message before it had
 # said anything true.
+#
+# THIS LAYER GETS ONE SENTENCE AND NO VERIFIER (KL3, and the KL4-A1 ruling of
+# 2026-08-28 applied prospectively rather than after paying for the divergence).
+# The approval attestation is verified in templates/git-hooks/setlist-hook-lib.sh,
+# in ONE implementation, because the git-hook layer is the only one here that can
+# refuse anything. A second reader in this tree would be an A9 violation and a
+# dependency between two trees that are deliberately separate, and it would buy
+# nothing: SessionStart has no deny mechanic, so a verifier here could only warn
+# about something the next commit is going to refuse anyway. So the drift notice
+# names the layer that verifies and states that this one does not, which is the
+# divergence closed by honesty rather than by coupling, for the price of one
+# string.
+#
+# The hash recipe below is the SECOND of three implementations in deliberate
+# behavioural lockstep (scripts/spec-hash.sh, this inline copy, and the verifier
+# in the git-hook library). The suite drives all three over a corpus and pins the
+# count at three; a fourth is what that pin exists to catch.
 SPEC_NUM="$(awk -F'|' '
   function trim(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return x }
   NF >= 4 && toupper(trim($4)) == "ACTIVE" { print trim($2); exit }
@@ -112,7 +129,7 @@ SPEC INTEGRITY: UNVERIFIED. A sha256 tool is installed but produced no digest on
         elif [[ "$ACTUAL" != "$RECORDED" ]]; then
           MSG="$MSG
 
-SPEC DRIFT: the active spec ${SPEC_FILE##*/} has CHANGED since it was approved. Its recorded Spec-hash does not match its current content above the Closing report. Stop and resolve this before building: either revert the edit, or route the change through Status REVISED with Planner sign-off and let /setlist:checkpoint rewrite the hash when it returns to ACTIVE. Building against text nobody approved is the failure this field exists to catch. (Edits to the Closing report itself are excluded from the hash and never trigger this.)"
+SPEC DRIFT: the active spec ${SPEC_FILE##*/} has CHANGED since it was approved. Its recorded Spec-hash does not match its current content above the Closing report. Stop and resolve this before building: either revert the edit, or route the change through Status REVISED with Planner sign-off and let /setlist:checkpoint rewrite the hash when it returns to ACTIVE. Building against text nobody approved is the failure this field exists to catch. (Edits to the Closing report itself are excluded from the hash and never trigger this.) This notice is a WARNING and nothing here verifies an approval: the approval attestation is verified at the git-hook layer, which is the only layer that can refuse, and this advisory does not read it."
         fi
       fi
     fi

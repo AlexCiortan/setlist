@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.10 (the scoping edition)**
+**Edition v1.11 (the attestation edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -411,6 +411,30 @@ wiring is never hand-maintained, and the template is the authority on the exact 
 set. Next to it sits `.claude/sdd.json`, the instance config
 the hooks and `/setlist:checkpoint` read: the src and tests role paths, the gate command
 (recorded by `/scaffold`), and the `scaffolded` flag that arms the scope hook.
+
+**The `attestation` block (new in v1.11), and OFF is the default.** A project that wants
+the headless build integrity chain of Part 6 declares it:
+
+```json
+"attestation": {
+  "required": true,
+  "custody": "signer",
+  "verify_with": ".claude/approvers.pub"
+}
+```
+
+Three rules, and the third is the one that carries the mechanism. **`required` absent or
+false means the feature is off**, and off behaves exactly as an instance that never heard
+of it: no warning, no nag, no half-mechanism. **`required: true` with no readable `custody`
+and `verify_with` is a REFUSAL, not a default**, because a half-configured integrity chain
+is the worst of the available states and must not be reachable by omission. **The verifier
+names the declared custody in every verification it emits, including the ones that pass**,
+which is the whole of what makes this more than a signature check; Part 6 says why.
+
+`custody` takes `signer` (a key the approver holds and the build process cannot read),
+`ci-secret` (a key the build CAN reach, permitted and self-described), or `forge` (the forge
+as notary, **designed and not built**: its verification is a query the forge answers and it
+lands with the forge-side required check, so declaring it today refuses and says so).
 
 **The transcript-secrets rule.** The permission rules stop the agent from reading secrets;
 they do nothing about secrets flowing INTO the conversation. A secret pasted into a chat
@@ -1460,9 +1484,12 @@ parser has failure modes its subject matter does not.
 **Three git hooks are stamped, into a tracked `.githooks/` directory:**
 
 - **`pre-commit`** carries the cheap checks: the em-dash scan, the secret scan, and
-  STATUS-in-the-same-commit when the staged diff moves a spec's lifecycle state. It also
-  carries the close verification in one specific case, described under "What each hook can
-  and cannot see" below.
+  STATUS-in-the-same-commit when the staged diff moves a spec's lifecycle state. **Since
+  v1.11, where the project declares one, it also verifies the approval attestation** over
+  any ACTIVE spec while the commit carries role-path content: this is the first hook that
+  sees a headless build's output and it fires for the ordinary commit, which is what a
+  headless build produces. It also carries the close verification in one specific case,
+  described under "What each hook can and cannot see" below.
 - **`pre-merge-commit`** carries the close verification: every spec this change CLOSES has a
   complete Closing report with a pasted QA Pass 1 verdict and an answered diagram field (with
   the last-match caveat recorded under Known limitations in this document), its
@@ -1597,6 +1624,23 @@ boundary.
 
 The edition describes a mechanical enforcement layer, so it owes an honest statement of
 where that layer ends. Everything below is a real hole, known and accepted, not an oversight.
+
+- **The approval attestation is only as strong as where your signing key lives, and a key
+  your build can reach is not custody (new in v1.11).** A signature proves a key was used,
+  not that a person decided. Under `ci-secret` custody the chain verifies and establishes
+  that the run had the key, which is not the question the attestation is asked; the
+  mechanism prints the declared custody on every verification, including the passes, so the
+  strength of the claim travels with the claim, but printing it is a disclosure and not a
+  fix. Two further edges: **whoever can commit can enrol a public key**, so this is
+  trust-on-first-use over the repository's own history, and the attestation is verified by
+  git hooks, so every hole in this list that bypasses a git hook bypasses this too.
+- **`forge` custody is designed and NOT BUILT (new in v1.11).** Verification would be a
+  query the forge answers, and it lands with the forge-side required check that this list
+  already names as a candidate rather than a promise. Declaring it today REFUSES rather than
+  passing, and says so; `signer` custody is the model that works now. This is a designed
+  mechanism that exists as a design, which is a state this project has been burned by
+  before, and it is written here rather than left in a private note precisely because that
+  is the difference between a deferral and an accident.
 
 - **`--no-verify` bypasses git hooks**, and `git push --no-verify` bypasses `pre-push`. This
   is a genuine hole and a different KIND of hole: a deliberate act with an obvious name, not
@@ -1733,6 +1777,60 @@ information, not as a finding.
 **A missing or broken sha256 tool reports UNVERIFIED in those words**, never silence. "The
 check could not run" and "the spec has not drifted" are different facts, and a hook that
 conflates them is the silent stop in Appendix B.
+
+#### The approval attestation, and what it is worth (new in v1.11)
+
+`Spec-hash` answers "did these bytes change since they were recorded". It does not answer
+"did anyone with authority approve these bytes", and a spec whose hash was quietly
+recomputed by hand passes the first and fails the second. The attestation answers the
+second, and the two are LAYERED rather than one replacing the other.
+
+**The mechanism.** When a project declares the `attestation` block (Part 3),
+`/setlist:checkpoint` writes `specs/attest/NNNN.json` at the ACTIVE flip and signs it,
+in the same commit as the `Spec-hash`. The document binds an approval to the spec's exact
+bytes: the same BL-005 digest, a `verdict` field admitting exactly one token (`APPROVED`),
+and the approver's identity. The signature is detached, at `specs/attest/NNNN.sig`.
+
+**It is verified by the git hooks, because they are the only layer here that can refuse.**
+Every session gate emits `permissionDecision: "allow"` as a literal and has since
+2026-08-04, so the refusal cannot live in the session; the SessionStart warning cannot deny
+either. `pre-commit` refuses a commit carrying role-path content while an ACTIVE spec has no
+valid attestation over its current bytes. `pre-push` re-asks over the pushed range, against
+the tree the push would publish, so a commit that arrived through `--no-verify` or an unset
+`core.hooksPath` is caught before the work is shared. `pre-merge-commit` requires the
+approval to cover the spec's final bytes at the close.
+
+**What it does NOT do, stated in the middle of the mechanism rather than in a caveat.** It
+does not stop an unapproved build from HAPPENING. Nothing here can: the only layer present
+when a file is written is the session layer, and that layer is advisory. It stops the result
+becoming a commit and, at push, being shared.
+
+**Its strength is exactly the strength of your key custody, and the mechanism says so out
+loud.** A signature proves a key was USED, not that a person DECIDED. If the signing key
+sits where the build process can read it, a headless run can sign its own approval and the
+whole chain will verify, establishing that the run had the key, which is not the question.
+That failure mode passes every test a suite could write, because those tests ask whether
+signatures verify and signatures verify. So the framework requires you to DECLARE your
+custody and **prints that declaration in every verification it emits, including the ones
+that pass**. A gate that states the strength of its own evidence is the only available
+defence against a claim no test can measure.
+
+**Empty or malformed is never a pass, and neither is unverifiable.** An attestation that
+cannot be parsed, whose signature does not verify, that names a DIFFERENT spec, or that
+covers bytes the spec no longer has, is refused with its own code. So is the case where the
+check could not RUN: a missing tool or a custody this layer cannot query refuses rather than
+passing, on the same rule the missing-sha256 case follows.
+
+**The legitimate revision path is the existing lifecycle, again.** A spec that genuinely
+changes mid-build goes `ACTIVE -> REVISED -> ACTIVE` with Planner sign-off, and checkpoint
+writes a NEW attestation on the return, exactly as it rewrites the hash. Re-signing to clear
+a refusal inverts the mechanism into a rubber stamp.
+
+**Two things it does not close, named rather than implied.** Whoever can commit can enrol a
+public key, so this is trust-on-first-use over your repository's own history. And
+`--no-verify` and an unset `core.hooksPath` bypass this exactly as they bypass every other
+git hook. A boundary that must hold against deliberate evasion belongs on your forge, as a
+required check, which is where this document has said the real boundary lives since v1.7.
 
 ### Closing with an open criterion (new in v1.7)
 
@@ -2189,20 +2287,20 @@ on the TUI. How they bind:
 - **The session-end checklist still applies.** A headless session ends with gates run,
   STATUS.md truthful, and the next action named, exactly like an interactive one; a
   scripted run that cannot complete the checklist ends by parking, not by guessing.
-- **DRAFT (not built in v1.7): the integrity chain for headless BUILDS.** Part 7c covers
-  headless operation and has no integrity chain, so nothing mechanically prevents a
-  headless Builder from executing a spec nobody approved. The designed shape is stated
-  here so the vocabulary exists, and it is marked DRAFT because none of it ships in this
-  edition: a spec is verified and approved; an attestation binds that verdict to the
-  spec's `Spec-hash` as SIGNED DATA rather than as prose a checker greps; a headless
-  executor refuses to build without a valid one, and an unreadable or unverifiable
-  attestation is a refusal rather than a warning. The full reasoning, the decision record
-  and the implementation trigger live in the framework's own design records, which are
-  not part of the published set; the DRAFT shape stated here is the whole of what this
-  edition commits to. Until it is built, this
-  is a KNOWN LIMITATION and not a guarantee: a named hole beats an unexercised mechanism,
-  and a DRAFT section that reads as shipped is exactly the failure this edition spent its
-  cycle removing.
+- **The integrity chain for headless BUILDS is BUILT (new in v1.11), and this bullet is
+  what it replaced.** Until v1.11 this said DRAFT, described the shape, and named the hole:
+  nothing mechanically prevented a headless Builder from executing a spec nobody approved.
+  The mechanism now exists and Part 6 describes it. What it means HERE, at the point of the
+  headless run, is one sentence: **it does not stop the build, it stops the build's OUTPUT
+  becoming a commit and, at push, being shared.** The `Spec-hash` warning at SessionStart is
+  still a warning and still cannot deny, and this layers under the attestation rather than
+  being replaced by it. Two conditions carry over unchanged. The chain is exactly as strong
+  as the instance's key custody, and a key the headless run can reach is not custody: such a
+  run can sign its own approval and the chain verifies while proving only that the run had
+  the key. And it is enforced by git hooks, so the bypasses in Part 6's Known limitations
+  apply to it too. **A headless run that meets a refusal PARKS**, per this Part's own rule
+  below: an open question in STATUS.md or a resume note, and a clean end. It does not
+  re-sign, and it does not self-certify around a refusal.
 - **Observing CI takes the RECORD-THE-DEBT path by default.** A `claude -p` session cannot
   sit in a watch loop, so a headless run that pushes to the trunk writes the one-line
   `CI run <id> unobserved` debt in STATUS.md rather than waiting or, worse, claiming a
@@ -2246,6 +2344,15 @@ Gather:
   -> `structure.md`. Spend the most effort here. Include the initial architecture diagram.
 - **Scope and the explicit out-of-scope list** -> `product.md`.
 - **The working mode** (write vs review-only) -> spec strictness + `review.md`.
+- **The approval attestation: ask, and the DEFAULT IS OFF** (new in v1.11). One question:
+  "will anything build this project headlessly, in CI or under `claude -p`?" If no, leave it
+  off and say so; the feature costs a key to manage and buys nothing where a human is
+  present at every commit. If yes, the follow-up is the only one that matters: **where would
+  the signing key live, and can the build process read it?** A key the build can reach gives
+  the same protection as no key at all, so a "yes" here means the answer is `signer` custody
+  with a key the approver holds, or the feature stays off honestly. Do not turn it on to be
+  thorough: an integrity chain nobody can describe the strength of is worse than none,
+  because it reports green.
 - Record each as an ADR (entry + index row) -> `DECISIONS.md`.
 
 ### Step 3 - Generate the files (two phases, new in v1.5)
@@ -2334,6 +2441,13 @@ Same structured-round rules as Part 8 Step 1 (including the stopping rule), plus
 retrofit-specific question: which existing constraints are **sacred** (not redesignable in
 the coming months) versus disposable? New projects have nothing sacred yet; existing ones
 always do.
+
+Part 8 Step 2's attestation question applies here unchanged and **the default is still OFF**
+(new in v1.11). A retrofit has one extra reason to leave it off at first: the repo's specs
+predate the framework, so nothing in it has an approval to attest to yet, and the feature
+starts meaning something at the first spec that goes ACTIVE under Setlist. Turning it on
+later is a config edit; turning it on now, over a history it cannot describe, is a green
+that covers nothing.
 
 ### Step 3 - Generate
 The Part 8 Step 3 file set, generated in the same two phases, with retrofit differences:
@@ -2428,6 +2542,18 @@ action.
   `.claude/hooks/` (the advisory tool `pre-push` runs), and sets `core.hooksPath` and
   `merge.ff = false`. An upgraded instance and a freshly stamped one end at the same
   surface.
+- **Mention the `attestation` block, and migrate NOTHING (new in v1.11).** Stamp parity
+  above delivers the key as `"attestation": {"required": false}`, which is OFF and is
+  byte-for-byte the behaviour the instance already had. **Do not turn it on as part of an
+  upgrade.** Turning it on means deciding where the signing key lives, and that is a
+  statement about the project's threat model rather than a migration step: a key the build
+  process can reach lets a headless run sign its own approval, so switching it on without
+  that conversation hands somebody a chain whose strength nobody established. This is
+  BL-005's own precedent applied twice: the `Spec-hash` field was mentioned and never
+  back-filled, because a hash computed today over a spec approved months ago attests to
+  nothing, and an approval manufactured during a migration attests to less. Tell the human
+  the block exists and what `signer` custody costs and buys; let them decide in a session
+  of their own.
 - **Accepted deviations are recorded, not erased.** If the repo keeps a non-canonical
   layout (paths are roles), say so inside the umbrella ADR; a future chore can relocate.
 - **Close like any chore:** gates pass (docs-only, so results must match pre-migration), a
@@ -2722,6 +2848,64 @@ judgment. Appendix A is the part worth keeping; everything else is implementatio
 ---
 
 ## Changelog
+
+- **v1.11 (the attestation edition).** This delta list is authoritative for
+  `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases
+  (this edition ships as plugin 2.3.0), the edition counts revisions of this document.
+  v1.11 moves because the PROTOCOL changes: what a verdict is, and what binds it.
+
+  **A VERDICT CAN NOW BE SIGNED DATA (Parts 3, 6, 7c).** A project may declare an
+  `attestation` block in `.claude/sdd.json`. Where it does, `/setlist:checkpoint` writes and
+  signs `specs/attest/NNNN.json` at the ACTIVE flip, binding an approval to the spec's exact
+  bytes, and the git hooks refuse a build commit, a push, or a close whose spec has drifted
+  since that approval. `Spec-hash` and its SessionStart warning are LAYERED under it, not
+  replaced: the two answer different questions, and a spec whose hash was quietly recomputed
+  by hand passes the first and fails the second.
+
+  **THE DEFAULT IS OFF AND OFF IS UNCHANGED BEHAVIOUR.** `required` absent or false means
+  every instance behaves exactly as it did at v1.10. `required: true` with no readable
+  custody is a REFUSAL rather than a default, because a half-configured integrity chain is
+  the worst of the available states.
+
+  **THE MECHANISM STATES THE STRENGTH OF ITS OWN EVIDENCE.** A signature proves a key was
+  used, not that a person decided; a key the build can reach is not custody. So the
+  declared custody is printed in every verification the layer emits, INCLUDING the ones that
+  pass. `signer` is the model that addresses the threat, `ci-secret` is permitted and
+  self-describing, and **`forge` is designed and NOT BUILT**: declaring it refuses and says
+  so, with its verification landing alongside the forge-side required check.
+
+  **Part 7c's DRAFT bullet is REPLACED**, since it said "not built in v1.7". Bootstrap and
+  Retrofit gain one interview question with the default OFF; Upgrade mentions the key and
+  migrates nothing, on BL-005's own precedent. **Appendix C does not change**: the
+  attestation lives beside the spec, never inside it, because a signature inside the bytes it
+  signs needs a second exclusion in the hashed range and two interacting exclusions is a
+  place defects live.
+
+- **v1.9 (the reckoning edition). WRITTEN AFTER THE FACT, 2026-08-29, and marked as such.**
+  This entry is a RECONSTRUCTION and not the cut it describes. The v1.9 turn moved this
+  document's header line and wrote no Changelog entry at all, so shipped 2.1.0 and 2.1.1
+  carried a delta list ending at v1.8 while the header said v1.9 and Part 6 twice said "new
+  in v1.9". `/setlist:upgrade` is pointed at this section as the authoritative delta list,
+  so an instance upgrading from v1.8 was told where authority lived and found nothing there.
+
+  **Why it is written this way rather than seamlessly**, which is the whole of the decision:
+  the Changelog is a record of cuts, and an entry slipped in silently would make the record
+  claim a cut was made when it was not. That is a worse defect than the gap, and it is the
+  forged-attestation shape one layer out from the mechanism this very edition builds to
+  refuse. A reconstruction that says it is one is honest and useful; a seamless entry is
+  neither.
+
+  **What v1.9 actually was**, reconstructed from the cut's own commit and recorded here so
+  the delta list is usable for an upgrader coming from either edition: a
+  corrections-and-doctrine edition, not a mechanism change. No command, hook, or gate
+  behaviour moved. Three corrections to the edition text (the Part 8c stamp-parity bullet
+  naming the git-hook boundary explicitly; the Known-limitations "pathspec hole" restored to
+  its narrow original meaning with two neighbouring holes named apart; two dangling
+  citations of a private design document removed from publishable prose). One doctrine
+  promotion: Part 6's "Doctrine for anything that checks anything" gained two bullets, that
+  a comparison must assert the size of what it compares and refuse on zero, and that every
+  green result should be labelled with what it is evidence of. An instance upgrading across
+  v1.9 has nothing to migrate; it has text to re-read.
 
 - **v1.10 (the scoping edition).** This delta list is authoritative for
   `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases

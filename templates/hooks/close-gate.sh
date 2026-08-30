@@ -73,7 +73,20 @@ deny() { advise "$1"; }
 # Advise with a fixed literal reason, for the paths where jq is unavailable to
 # escape one. The text must contain no double quotes, backslashes, or newlines.
 advise_literal() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"close","verdict":"deny","code":"","reason":"%s"}}\n' "$1" "$1" "$1"
+  # THE CODE IS EXTRACTED HERE TOO (F11-2026, and the SIBLING half of it).
+  #
+  # This function hardcoded `"code":""` while the gates' own frozen header
+  # promises `setlistAdvisory {gate, verdict, code, reason}`. Three adversarial
+  # legs filed it and none of them fixed it, because it never blocks and so
+  # nothing ever failed on it. The 2.3.0 build session then fixed ONE of the
+  # three emitters and left the other two, which is A9's exact shape: a rule
+  # that exists in one of its three places. The 2.3.0 leg found the residue by
+  # a different route, an assertion that read this field and got nothing back.
+  #
+  # The extraction is sed, deliberately the SAME expression the escaping path
+  # uses, and it cannot use jq: this whole path exists because jq is absent.
+  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"close","verdict":"deny","code":"%s","reason":"%s"}}\n' "$1" "$1" "$ADV_CODE" "$1"
   # fail-open-ok: advisory by design; see advise() above.
   exit 0
 }
@@ -1688,9 +1701,19 @@ for MERGED_REF in $MERGED_REFS; do
     # shape-quote in another section poisoned a real verdict (F3). Third
     # fence-vs-QA-block collision, so the fix is structural: the reader tracks
     # fences the way the template stripper does, reads headings only at fence
-    # depth zero, and the block that decides is the LAST qa-pass-1 fence at
-    # depth zero inside a Closing report section ("last wins" is the diagram
-    # field's revision convention). An opener inside another fence is content.
+    # depth zero, and the block that decides is the FIRST qa-pass-1 fence at
+    # depth zero inside a Closing report section. An opener inside another
+    # fence is content.
+    #
+    # FIRST WINS, ruled 2026-08-29 (F7-2026), and this reader took the LAST
+    # until then. The Closing report owns ONE verdict. An illustrative block
+    # comes after the real one by construction, so last-wins let an example
+    # replace a real verdict in both directions; a genuine revision EDITS THE
+    # VERDICT IN PLACE rather than appending a rival, so nothing legitimate
+    # rested on the old rule. A second block is now an ordinary fence: it
+    # neither satisfies nor poisons. The old comment justified last-wins by the
+    # diagram field's revision convention, and that convention changed in the
+    # same ruling, so the justification had outlived its rule as well.
     # The suite asserts the three layers agree BY OUTCOME over a corpus,
     # beside the byte-identity lockstep.
     #
@@ -1721,7 +1744,7 @@ for MERGED_REF in $MERGED_REFS; do
     # lockstep is why F5 reached the backstop, and it is kept because the answer
     # to a gate and its backstop agreeing on a WRONG rule is a right rule, not
     # two rules.
-    QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; qa_seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } } else { if (__r == "qa-pass-1" && inclose) { inb = 1; qch = __c; qlen = __m; n = 0; bad = 0; next } fence = 1; fch = __c; flen = __m; next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "") next; if (l ~ /^[A-Za-z0-9._-]+[[:space:]]*:[[:space:]]*(PASS|PARTIAL|FAIL)$/) n++; else bad = 1; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) inclose = 0 } } END { if (incmt) print "unclosed-comment"; else if (inb) print "unclosed"; else if (!qa_seen) print "none"; else if (bad) print "malformed"; else if (n == 0) print "empty"; else print "ok" }'
+    QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; qa_seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } } else { if (__r == "qa-pass-1" && inclose && !qa_seen) { inb = 1; qch = __c; qlen = __m; n = 0; bad = 0; next } fence = 1; fch = __c; flen = __m; next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "") next; if (l ~ /^[A-Za-z0-9._-]+[[:space:]]*:[[:space:]]*(PASS|PARTIAL|FAIL)$/) n++; else bad = 1; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) inclose = 0 } } END { if (incmt) print "unclosed-comment"; else if (inb) print "unclosed"; else if (!qa_seen) print "none"; else if (bad) print "malformed"; else if (n == 0) print "empty"; else print "ok" }'
     QA_STATE="$(printf '%s\n' "$SPEC_TEXT" | awk "$QA_PASS1_AWK")"
     if [[ "$QA_STATE" != "ok" ]]; then
       deny "close gate [CG-NO-QA-VERDICT]: the Closing report for $MERGED_REF carries no usable QA Pass 1 verdict block ($QA_STATE). Part 6 requires a fenced qa-pass-1 block whose every line is <criterion>: PASS|PARTIAL|FAIL, the criterion a bare identifier with no spaces, sitting inside the Closing report section at fence depth zero. none: no such block there; a block nested inside a pasted-report fence is content, and a fenced example in another section neither satisfies nor poisons this check. unclosed-comment: an HTML comment (<!--) was opened and never closed before the end of the spec, so what follows it cannot be read; close the comment with -->. unclosed: no closing fence. malformed: a line inside is not a verdict line, and a sentence is not a verdict however it reads. empty: the block has no criteria. Write the block at the left margin (three spaces of indent at most): this reader reads the document FLAT, so a block or fence indented four or more spaces, including inside a numbered list item, is indented code and is not read. Run QA Pass 1, write one line per criterion, paste the report below it, commit, then merge."
@@ -1741,11 +1764,20 @@ for MERGED_REF in $MERGED_REFS; do
     # said "revisit the Architecture diagram: <the auth box is now wrong>".
     #
     # Anchored at line start past any list bullet, exactly as its two siblings
-    # are. `tail -n1` is KEPT deliberately: a revised spec carries a second
-    # Closing report and the later one is the current one, which is what the
-    # original choice was for. Anchoring is what stops prose deciding the check;
-    # taking the last ANCHORED field still prefers the revision.
-    DIAG_LINE="$(printf '%s\n' "$SPEC_TEXT" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | tail -n1)"
+    # are. `head -n1` takes the FIRST field (KL1, ruled 2026-08-29), and this
+    # line read `tail -n1` until then on the argument that a revised spec
+    # carries a second Closing report whose later field is the current one.
+    # That argument is retired with the rule: a revision EDITS THE FIELD IN
+    # PLACE, so first-match loses nothing legitimate, while last-match let any
+    # later note answer or unanswer a field somebody had already answered
+    # (KL1's own defect).
+    #
+    # Anchoring the LABEL is what stops prose deciding the check. Anchoring the
+    # ANSWER to the start of the value is what stops a line that merely
+    # CONTAINS or CONTRADICTS an answer from satisfying it (F6-2026), which the
+    # unanchored match allowed. Commentary after the answer is still accepted,
+    # because the field answers first and explains afterwards.
+    DIAG_LINE="$(printf '%s\n' "$SPEC_TEXT" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | head -n1)"
     if [[ -z "$DIAG_LINE" ]]; then
       deny "close gate [CG-NO-DIAGRAM-FIELD]: the Closing report for $MERGED_REF is missing the mandatory field 'Architecture diagram: updated in this commit | no impact'."
     fi
@@ -1760,7 +1792,7 @@ for MERGED_REF in $MERGED_REFS; do
     # Asserted across the value space rather than at a spelling: this field has
     # been corrected three times, twice by repairing only the case reported.
     DIAG_ANSWER="$(printf '%s' "$DIAG_ANSWER" | sed 's/<[^>]*>//g')"
-    if ! printf '%s' "$DIAG_ANSWER" | grep -qE 'updated in this commit|no impact'; then
+    if ! printf '%s' "$DIAG_ANSWER" | sed 's/^[[:space:]]*//' | grep -qE '^(updated in this commit|no impact)([^A-Za-z]|$)'; then
       deny "close gate [CG-DIAGRAM-UNANSWERED]: the architecture-diagram field for $MERGED_REF is unanswered; answer it 'updated in this commit' or 'no impact', commit to the branch, then merge."
     fi
 

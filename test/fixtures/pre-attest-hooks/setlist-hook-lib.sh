@@ -35,7 +35,7 @@
 
 # The verdict rule. LOCKSTEP: close-gate.sh, trunk-audit.sh, and this file.
 #
-# SCOPED (2.0.0 leg, F8/F3): the block that decides is the FIRST qa-pass-1 fence
+# SCOPED (2.0.0 leg, F8/F3): the block that decides is the LAST qa-pass-1 fence
 # at fence depth ZERO inside a Closing report section. Third fence-vs-QA-block
 # collision, so the scoping is structural rather than another special case: the
 # reader tracks fences the way the template stripper does (open on three or
@@ -45,15 +45,8 @@
 # report cannot satisfy the check (F8, which reached the trunk and the audit
 # called it clean), and an illustrative shape-quote outside the Closing report
 # cannot poison a real verdict (F3, refused at all three layers with a reason
-# naming the wrong block).
-#
-# FIRST WINS, ruled 2026-08-29 (F7-2026), and this reader read LAST until then.
-# The Closing report owns ONE verdict. An illustrative block comes after the
-# real one by construction, so last-wins let a later example replace a real
-# verdict in both directions; and a genuine revision EDITS THE VERDICT IN PLACE
-# rather than appending a rival, so nothing legitimate depended on the old
-# rule. A second block is now read as an ordinary fence: it neither satisfies
-# nor poisons. Headings are
+# naming the wrong block). "Last wins" is the diagram field's revision
+# convention, kept deliberately so a revised close still closes. Headings are
 # read only at depth zero, so a template quoted in a fence cannot open the
 # section, and the section ends at the next heading of the same or shallower
 # level. A HEADING IS WHAT MARKDOWN SAYS A HEADING IS (second 2.0.0 leg, F1):
@@ -79,7 +72,7 @@
 # at both layers. The suite asserts the three layers agree BY OUTCOME over a corpus,
 # beside the byte-identity lockstep, because F8 proved three identical readers
 # are just three readers wrong together.
-SLH_QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; qa_seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } } else { if (__r == "qa-pass-1" && inclose && !qa_seen) { inb = 1; qch = __c; qlen = __m; n = 0; bad = 0; next } fence = 1; fch = __c; flen = __m; next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "") next; if (l ~ /^[A-Za-z0-9._-]+[[:space:]]*:[[:space:]]*(PASS|PARTIAL|FAIL)$/) n++; else bad = 1; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) inclose = 0 } } END { if (incmt) print "unclosed-comment"; else if (inb) print "unclosed"; else if (!qa_seen) print "none"; else if (bad) print "malformed"; else if (n == 0) print "empty"; else print "ok" }'
+SLH_QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; qa_seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } } else { if (__r == "qa-pass-1" && inclose) { inb = 1; qch = __c; qlen = __m; n = 0; bad = 0; next } fence = 1; fch = __c; flen = __m; next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "") next; if (l ~ /^[A-Za-z0-9._-]+[[:space:]]*:[[:space:]]*(PASS|PARTIAL|FAIL)$/) n++; else bad = 1; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) inclose = 0 } } END { if (incmt) print "unclosed-comment"; else if (inb) print "unclosed"; else if (!qa_seen) print "none"; else if (bad) print "malformed"; else if (n == 0) print "empty"; else print "ok" }'
 
 # A FENCED EXAMPLE IS NOT A CLOSING REPORT, and the rule is stated ONCE here
 # because it now has two callers rather than one. It was assigned inside
@@ -523,31 +516,21 @@ slh_spec_path_for() {
   printf '%s\n' "$hits"
 }
 
-# THE HEADER STRIP IS POSITIONAL, AND TWO SHAPE-BASED ATTEMPTS PRECEDED IT.
+# THE HEADER STRIP IS ANCHORED TO THE HEADER (SC sub-hole 6).
 #
-# It was `grep -vE '^\+\+\+'`, which dropped the diff's own `+++ b/path` line
-# and also dropped any ADDED line whose content began `++` (SC sub-hole 6).
-# That was tightened to an anchored `^\+\+\+ (b/|/dev/null)`, which was the
-# right direction and the wrong instrument, and the 2.3.0 leg found the
-# residue as F3: a unified diff prefixes every added line with ONE `+`, so an
-# added line whose content begins `++ b/` arrives as `+++ b/...` and is
-# BYTE-IDENTICAL to a header. No pattern over a single line can separate two
-# things that have the same shape. A secret on such a line passed both layers
-# at rc=0, in silence.
+# It was `grep -vE '^\+\+\+'`, which drops the diff's own `+++ b/path` line and
+# also drops any ADDED LINE whose content begins with `++`. That is not a
+# contrived shape: `+++` opens a conflict marker, and diff-of-a-diff content and
+# some generated files carry it too. A secret on such a line was removed from the
+# scan's input by the scan itself.
 #
-# The separating fact is POSITION, and it is git's own structure: a `+++` line
-# is a header only OUTSIDE a hunk, and once `@@` has been seen every `+` line
-# is content whatever it looks like. SLH_SCAN_SCOPE_AWK already read the diff
-# this way, which is why the defect lived only in the UNSCOPED branch and in
-# the advisory gate's private copy. Both now reach the same rule.
-SLH_ADDED_AWK='
-{
-  if ($0 ~ /^diff --git / || $0 ~ /^diff --cc /) { inhunk = 0; next }
-  if (!inhunk && $0 ~ /^@@/) { inhunk = 1; next }
-  if (!inhunk) next
-  if ($0 ~ /^\+/) print
-}'
-
+# The exact forms git emits are `+++ b/<path>` and `+++ /dev/null`, and the
+# prefix is pinned at the call sites (`--src-prefix=a/ --dst-prefix=b/`) so a
+# repository configuring `diff.noprefix` or a custom prefix cannot change the
+# header out from under this anchor. Both ends are set together on purpose: an
+# anchor without a pinned prefix eats content on some repositories, and a pinned
+# prefix without an anchor eats content on all of them.
+SLH_DIFF_HEADER_RE='^\+\+\+ (b/|/dev/null)'
 
 slh_scan_added() {
   local proj="$1" diff_text="$2" where="$3" added
@@ -564,13 +547,7 @@ slh_scan_added() {
     # reproduced. This line is the whole of "the feature is invisible until
     # asked for", and the suite proves it by differential against the pinned
     # pre-feature hook blobs rather than by reading it.
-    # POSITIONAL, not shaped (F3). The awk stage carries its own status, so a
-    # broken awk is a refusal rather than an empty read: this branch used to be
-    # two greps whose emptiness was indistinguishable from a clean diff.
-    if ! added="$(printf '%s\n' "$diff_text" | awk "$SLH_ADDED_AWK")"; then
-      slh_refuse "SLH-SCAN-FILTER-FAILED" "the scan of $where could not read the change, so it read nothing and has judged nothing. A scan that could not run has not passed. Check 'awk --version', or push with SETLIST_SKIP_HOOKS=1 if this is an exception you are willing to own."
-      return 1
-    fi
+    added="$(printf '%s\n' "$diff_text" | grep -E '^\+' | grep -vE "$SLH_DIFF_HEADER_RE" || true)" # fail-open-ok: no added lines makes both greps below find nothing, which is the correct answer for a diff that adds nothing
   else
     # NOT fail-open-ok, and deliberately the only branch here that is not: the
     # scoped filter can FAIL, and a failed filter prints nothing, which the
@@ -979,521 +956,6 @@ slh_chores_completed() { # slh_chores_completed <status-new> <status-old>
   done
 }
 
-# ===========================================================================
-# THE HEADLESS BUILD INTEGRITY CHAIN (KL3).
-#
-# WHAT THIS IS FOR, in one sentence, because every line below is downstream of
-# it: a signature proves a KEY WAS USED, it does not prove a PERSON DECIDED.
-# The threat is a headless session building against a spec edited after
-# approval. A key that session can reach lets it sign the drifted spec's own
-# hash and pass every check written here, and the chain then verifies while
-# proving only that the run had the key. That failure mode passes every test a
-# suite could write, because its tests check that signatures verify, and
-# signatures verify.
-#
-# So the mechanism does two things rather than one. It verifies, and it STATES
-# THE STRENGTH OF ITS OWN EVIDENCE: the declared custody is printed in every
-# verification this layer emits, INCLUDING the ones that pass. A gate that says
-# what its green means is the only defence against a claim nobody can test.
-#
-# WHERE IT REFUSES, and why it is not anywhere else. The session layer emits
-# permissionDecision "allow" as a literal in every gate since 2026-08-04, so it
-# cannot refuse anything and the refusal cannot live there. Deciding at the
-# moment of the WRITE would be a judgement about intent, which is the parser
-# treadmill in a new costume. So this refuses the unapproved build's OUTPUT:
-# it does not prevent an unapproved build from happening, it prevents one
-# becoming a commit and, at push, being shared.
-#
-# ONE VERIFIER, HERE. The advisory layer gets one honest sentence naming this
-# one and no reader of its own, which is the 2026-08-28 ruling that a
-# divergence closes by honesty rather than by coupling.
-# ===========================================================================
-
-# The namespace ssh-keygen signatures are bound to. A signature made for some
-# other purpose with the same key must not verify as an approval, and the
-# namespace is what makes that true rather than hoped.
-SLH_ATTEST_NS="setlist-attestation"
-
-# The custody models this layer knows. "forge" is DECLARABLE and its verifier
-# is an open question with the owner (the design supports it and does not
-# settle what query a hook may run: a declared command string would be
-# configuration deciding what this hook executes, which is the lesson
-# SLH-SCAN-EXCLUSION-INVALID was written for, and answering it from local refs
-# is the identity-by-history question this project has paid for three times).
-# Until that is ruled, declaring it REFUSES with UNVERIFIABLE rather than
-# passing: a refusal that says what it cannot do beats a green that means
-# nothing.
-SLH_ATTEST_CUSTODIES="signer ci-secret forge"
-
-SLH_ATTEST_STATE=""       # "" unread, off, on, bad
-SLH_ATTEST_CUSTODY=""
-SLH_ATTEST_VERIFY_WITH=""
-
-# slh_attest_load <proj> -> 0 with the three globals set, 1 after refusing.
-#
-# THREE RULES, and the third is the one that carries the design:
-#   1. `required` absent or false means the feature is OFF, and off is
-#      byte-identical to an instance that never heard of it. No warning, no
-#      nag, no half-mechanism. PROVEN, not asserted, and the proof is KL4's
-#      method: the suite pins the PRE-FEATURE hook blobs as a fixture, runs
-#      both generations over the same cases with no attestation declared, and
-#      compares stdout, stderr and exit code BYTE FOR BYTE. The fixture's
-#      blobs are in KNOWN_SETLIST_HOOK_BLOBS, so it is provably the generation
-#      it claims to be rather than a copy somebody made. This claim was
-#      narrowed when the claims sweep flagged it and only the behavioural half
-#      had been run; it is widened here because the differential now exists.
-#   2. `required: true` with no readable custody and verify_with is a REFUSAL
-#      and NOT a default. A half-configured integrity chain is the worst of the
-#      available states and must not be reachable by omission.
-#   3. Whatever is declared is PRINTED at every verification, which happens in
-#      slh_attest_require below rather than here.
-slh_attest_load() { # slh_attest_load <proj>
-  local proj="$1" raw verdict rest known c
-  if [ -n "$SLH_ATTEST_STATE" ]; then
-    [ "$SLH_ATTEST_STATE" = "bad" ] && return 1
-    return 0
-  fi
-  if ! command -v jq >/dev/null 2>&1; then
-    SLH_ATTEST_STATE="bad"
-    slh_refuse "SLH-ATTEST-UNVERIFIABLE" "jq is required to read the attestation declaration from .claude/sdd.json and is not installed, so whether this project requires an approval attestation could not be determined. That is not the same as 'not required'. Install jq, or set \"attestation\": {\"required\": false} if this project does not use the integrity chain."
-    return 1
-  fi
-  # jq's STATUS is carried rather than discarded, for the reason slh_trunk and
-  # slh_scan_exclusions_load both carry it: a jq that EXISTS and fails yields an
-  # empty string indistinguishable from an absent key, and here that empty
-  # string would read as "attestation not required" while the truth is "the
-  # configuration was not read". Those are different facts.
-  if ! raw="$(jq -r '
-        (.attestation // null) as $a
-        | if ($a == null) then "off"
-          elif (($a | type) != "object") then "shape"
-          elif (($a.required // false) != true) then "off"
-          elif ((($a.custody // "") | type) != "string") then "shape"
-          elif ((($a.verify_with // "") | type) != "string") then "shape"
-          elif (($a.custody // "") == "" or ($a.verify_with // "") == "") then "incomplete"
-          else "on " + $a.custody + " " + $a.verify_with end' \
-        "$proj/.claude/sdd.json" 2>/dev/null)"; then
-    SLH_ATTEST_STATE="bad"
-    slh_refuse "SLH-ATTEST-UNVERIFIABLE" "jq ran and failed while reading the attestation declaration from .claude/sdd.json, so whether an approval attestation is required here could not be determined. THE LIKELIER CAUSE IS THE TOOLCHAIN, NOT THE FILE: the trunk was read from this same file moments ago. Check 'jq --version' and 'jq . .claude/sdd.json' in that order. Refusing rather than treating an unread file as a project that requires nothing."
-    return 1
-  fi
-  verdict="${raw%% *}"
-  case "$verdict" in
-    off)
-      SLH_ATTEST_STATE="off"
-      return 0
-      ;;
-    shape)
-      SLH_ATTEST_STATE="bad"
-      slh_refuse "SLH-ATTEST-UNVERIFIABLE" ".claude/sdd.json has an \"attestation\" block that is not an object with string \"custody\" and \"verify_with\" values, so the custody this project claims cannot be read. Refusing rather than guessing: an unreadable custody declaration is the one state worse than declaring none, because it looks like a decision and establishes nothing. Write it as {\"required\": true, \"custody\": \"signer\", \"verify_with\": \".claude/approvers.pub\"}, or remove the block."
-      return 1
-      ;;
-    incomplete)
-      SLH_ATTEST_STATE="bad"
-      slh_refuse "SLH-ATTEST-UNVERIFIABLE" ".claude/sdd.json declares \"attestation\": {\"required\": true} without a \"custody\" and a \"verify_with\", so this project requires an approval it has given nobody a way to check. THIS IS A REFUSAL AND NOT A DEFAULT: a half-configured integrity chain would verify nothing while reporting green, which is the failure this whole mechanism exists to remove. Declare the custody (\"signer\", \"ci-secret\" or \"forge\") and the file that verifies it, or set \"required\": false."
-      return 1
-      ;;
-    on) ;;
-    *)
-      # An empty or unrecognised verdict means the reader did not read. A
-      # refusal by construction, never a default: this is exactly the place
-      # where "no evidence a chain is required" and "no chain is required"
-      # must not be conflated.
-      SLH_ATTEST_STATE="bad"
-      slh_refuse "SLH-ATTEST-UNVERIFIABLE" "the attestation declaration in .claude/sdd.json could not be read (the reader returned no verdict), so whether an approval is required here is not established. Refusing rather than proceeding on an unread configuration."
-      return 1
-      ;;
-  esac
-  rest="${raw#on }"
-  SLH_ATTEST_CUSTODY="${rest%% *}"
-  SLH_ATTEST_VERIFY_WITH="${rest#* }"
-  known=0
-  for c in $SLH_ATTEST_CUSTODIES; do
-    [ "$c" = "$SLH_ATTEST_CUSTODY" ] && known=1
-  done
-  if [ "$known" != "1" ]; then
-    SLH_ATTEST_STATE="bad"
-    slh_refuse "SLH-ATTEST-UNVERIFIABLE" ".claude/sdd.json declares custody \"$SLH_ATTEST_CUSTODY\", which this layer does not know how to verify, so it cannot say what an approval here would prove. The declared custody is printed in every verification precisely so that the strength of the claim travels with the claim, and a custody nobody can name has no strength to print. Use \"signer\" (a human-held key the build cannot read), \"ci-secret\" (a key the build CAN reach, which establishes that the run had the key and not that a person approved), or \"forge\"."
-    return 1
-  fi
-  SLH_ATTEST_STATE="on"
-  return 0
-}
-
-# slh_attest_spec_hash <spec-file> -> the BL-005 digest, or nothing.
-#
-# THE THIRD IMPLEMENTATION OF ONE RECIPE, and it is bought deliberately rather
-# than arrived at. scripts/spec-hash.sh serves checkpoint, which can reach the
-# plugin tree; templates/hooks/regrounding-hook.sh has an inline copy, because
-# a stamped hook cannot depend on the plugin tree being reachable; this is the
-# third, for the same reason as the second. Both cheaper routes are closed: a
-# shared recipe file sourced by both trees is the cross-tree dependency the
-# 2026-08-28 ruling refused, and shelling out to scripts/spec-hash.sh breaks
-# the stamped-hook independence the inline copy exists to preserve.
-#
-# So the suite drives ALL THREE over a corpus and asserts identical OUTPUT, and
-# pins the count at three, so a fourth cannot arrive unasserted. That lockstep
-# is the price, it is named here rather than discovered, and it is not optional.
-slh_attest_hash_stdin() { # slh_attest_hash_stdin  <spec bytes on stdin>
-  local out=""
-  if command -v sha256sum >/dev/null 2>&1; then
-    out="$(awk 'BEGIN{keep=1} /^##[[:space:]]*Closing report/{keep=0} keep' | grep -v '^[-*+[:space:]]*Spec-hash:' | sha256sum | cut -d' ' -f1)"
-  elif command -v shasum >/dev/null 2>&1; then
-    out="$(awk 'BEGIN{keep=1} /^##[[:space:]]*Closing report/{keep=0} keep' | grep -v '^[-*+[:space:]]*Spec-hash:' | shasum -a 256 | cut -d' ' -f1)"
-  fi
-  # PRESENT IS NOT WORKING. A hasher that exists and exits nonzero prints
-  # nothing, and an empty digest compared against a recorded one is not "no
-  # drift", it is no answer. The caller reads empty as UNVERIFIABLE-NO-TOOL,
-  # never as a match and never as a mismatch.
-  printf '%s' "$out"
-}
-
-# THE RECIPE TAKES STDIN AND THIS IS ITS ONLY FILE WRAPPER, which is the whole
-# reason the two are split. pre-commit hashes a spec on disk; pre-push hashes a
-# spec that exists ONLY inside a pushed tree and was never checked out here. Two
-# call shapes, and giving each its own copy of the recipe would make FOUR
-# implementations of a rule the suite pins at three. One recipe, one place, two
-# ways in.
-slh_attest_spec_hash() { # slh_attest_spec_hash <spec-file>
-  [ -f "$1" ] || return 0
-  slh_attest_hash_stdin < "$1"
-}
-
-# READING A PATH FROM EITHER SOURCE, so the verifier below has exactly one body.
-#
-# An empty <rev> means the working tree, which is what pre-commit and the close
-# judge. A non-empty <rev> means a commit-ish, which is what pre-push judges:
-# the content this push would PUBLISH, which may not exist on disk at all
-# (a branch pushed from a different worktree, a range whose tip is not HEAD).
-# Asking git rather than the filesystem is the same move the close gate made
-# when it stopped reading command text and started reading the index.
-slh_attest_exists() { # slh_attest_exists <proj> <rev> <path>
-  if [ -z "$2" ]; then
-    [ -f "$1/$3" ]
-  else
-    git -C "$1" cat-file -e "$2:$3" 2>/dev/null
-  fi
-}
-
-slh_attest_cat() { # slh_attest_cat <proj> <rev> <path>
-  if [ -z "$2" ]; then
-    cat "$1/$3" 2>/dev/null
-  else
-    git -C "$1" show "$2:$3" 2>/dev/null
-  fi
-}
-
-# slh_attest_verify <proj> <spec-path> -> ONE TOKEN on stdout.
-#
-#   VERIFIED | NO-ATTESTATION | MALFORMED | SIGNATURE-FAILED
-#            | SUBJECT-MISMATCH | HASH-MISMATCH
-#            | UNVERIFIABLE-NO-TOOL | UNVERIFIABLE-CUSTODY
-#
-# THE CALLING CONVENTION IS THE MECHANISM, not a style choice. The caller
-# refuses anything that is not exactly VERIFIED, so an empty result is a
-# refusal BY CONSTRUCTION rather than by a branch somebody remembered to write.
-# A crashed verifier, a missing verifier, a verifier whose output was eaten by
-# a broken pipe: all of them print something that is not VERIFIED, including
-# nothing at all.
-#
-# The natural spelling, `if verifier_says_bad; then refuse; fi`, is precisely
-# F3-2026's empty-result-as-verdict class: every failure OF THE VERIFIER lands
-# in the allow branch. This is that lesson expressed as a convention instead of
-# as vigilance.
-# slh_attest_say <tmp> <token>: print the verdict and release the workspace.
-# EVERY exit from the verifier goes through here, which is not tidiness: the
-# function has eleven of them and a temporary directory, and "remember to clean
-# up on this branch too" is the shape that leaves one behind. One exit door.
-slh_attest_say() { # slh_attest_say <tmp> <token>
-  [ -n "$1" ] && rm -rf "$1"
-  printf '%s' "$2"
-}
-
-slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
-  local proj="$1" spec="$2" rev="${3:-}" num base docp sigp json_ok claimed_spec claimed_num
-  local claimed_hash actual approver tmp doc sig allowed
-  base="${spec##*/}"
-  num="${base%%-*}"
-  docp="specs/attest/${num}.json"
-  sigp="specs/attest/${num}.sig"
-
-  slh_attest_exists "$proj" "$rev" "$docp" || { printf 'NO-ATTESTATION'; return 0; }
-  if ! command -v jq >/dev/null 2>&1; then printf 'UNVERIFIABLE-NO-TOOL'; return 0; fi
-  # Nothing is materialised above this line, so these two exits need no cleanup.
-
-  # THE DOCUMENT IS MATERIALISED ONCE, and only when the source is a tree.
-  # jq and ssh-keygen both want a file, and reading the same blob twice out of
-  # git would be two chances to disagree about what is being verified. On the
-  # working-tree path there is nothing to materialise and no temporary file is
-  # created at all, so the ordinary commit keeps the cheaper shape.
-  tmp=""
-  if [ -n "$rev" ]; then
-    tmp="$(mktemp -d 2>/dev/null)" || tmp=""
-    # A verifier that cannot obtain a workspace has not verified. It says so
-    # rather than falling back to the working tree, which would answer a
-    # question about the PUSHED bytes using the bytes on disk: a different
-    # question with the same shape, which is how a check quietly stops being
-    # about what it claims.
-    [ -n "$tmp" ] || { printf 'UNVERIFIABLE-NO-TOOL'; return 0; }
-    slh_attest_cat "$proj" "$rev" "$docp" > "$tmp/doc" 2>/dev/null
-    slh_attest_cat "$proj" "$rev" "$sigp" > "$tmp/sig" 2>/dev/null
-    doc="$tmp/doc"; sig="$tmp/sig"
-    slh_attest_exists "$proj" "$rev" "$sigp" || rm -f "$tmp/sig"
-  else
-    doc="$proj/$docp"; sig="$proj/$sigp"
-  fi
-
-  # THE SCHEMA IS CHECKED BEFORE ANY FIELD IS BELIEVED, and an empty file fails
-  # here. Empty or malformed is NEVER a pass; that is the one decision this
-  # design inherited unchanged from its 2026-08-01 draft.
-  json_ok="$(jq -r '
-      if (type != "object") then "no"
-      elif (.setlist_attestation != 1) then "no"
-      elif ((.spec // "") | type) != "string" or (.spec // "") == "" then "no"
-      elif ((.spec_number // "") | type) != "string" or (.spec_number // "") == "" then "no"
-      elif ((.spec_hash // "") | type) != "string" or ((.spec_hash // "") | test("^[0-9a-f]{64}$") | not) then "no"
-      elif (.verdict != "APPROVED") then "no"
-      elif ((.custody // "") | type) != "string" or (.custody // "") == "" then "no"
-      elif ((.approver // "") | type) != "string" or (.approver // "") == "" then "no"
-      else "yes" end' "$doc" 2>/dev/null)" || json_ok=""
-  [ "$json_ok" = "yes" ] || { slh_attest_say "$tmp" MALFORMED; return 0; }
-
-  # THE SUBJECT IS CHECKED, AND THIS ROW EXISTS BECAUSE CO1 TAUGHT IT. CO1 is
-  # the publish gate's replay-coverage criterion accepting a record that
-  # references a leg from a DIFFERENT release, satisfying coverage over the
-  # wrong finding list. The same shape here is an attestation that is perfectly
-  # valid, perfectly signed, and about another spec. A mechanism that checks a
-  # claim without checking its SUBJECT is checking nothing.
-  claimed_spec="$(jq -r '.spec' "$doc" 2>/dev/null)" || claimed_spec=""
-  claimed_num="$(jq -r '.spec_number' "$doc" 2>/dev/null)" || claimed_num=""
-  if [ "$claimed_spec" != "${spec#"$proj"/}" ] && [ "$claimed_spec" != "$spec" ]; then
-    slh_attest_say "$tmp" SUBJECT-MISMATCH; return 0
-  fi
-  [ "$claimed_num" = "$num" ] || { slh_attest_say "$tmp" SUBJECT-MISMATCH; return 0; }
-
-  # WHAT BINDS IS THE BYTES, not a commit sha. A spec's bytes can change
-  # without a new commit, and the working tree is what a headless Builder
-  # reads, so an attestation over a commit would verify while the file on disk
-  # said something else.
-  #
-  # AND IT IS HASHED FROM THE SAME SOURCE THE DOCUMENT CAME FROM. On the
-  # working-tree path that is the file on disk; on the pushed-range path it is
-  # the spec as it exists IN THE TREE BEING PUBLISHED. Hashing the disk copy
-  # while verifying a pushed tree would answer a question about bytes nobody is
-  # publishing, and it would pass for a push whose spec drifted only in the
-  # commit being pushed, which is the case this layer exists to catch.
-  claimed_hash="$(jq -r '.spec_hash' "$doc" 2>/dev/null)" || claimed_hash=""
-  actual="$(slh_attest_cat "$proj" "$rev" "${spec#"$proj"/}" | slh_attest_hash_stdin)"
-  [ -n "$actual" ] || { slh_attest_say "$tmp" UNVERIFIABLE-NO-TOOL; return 0; }
-  [ "$actual" = "$claimed_hash" ] || { slh_attest_say "$tmp" HASH-MISMATCH; return 0; }
-
-  case "$SLH_ATTEST_CUSTODY" in
-    signer|ci-secret)
-      [ -f "$sig" ] || { slh_attest_say "$tmp" SIGNATURE-FAILED; return 0; }
-      # THE ALLOWED-SIGNERS FILE COMES FROM THE SAME SOURCE TOO. Enrolment is a
-      # commit, so a push whose range enrols a key must be judged against the
-      # keys THAT PUSH publishes, not against whatever this clone happens to
-      # have checked out.
-      if [ -n "$rev" ]; then
-        slh_attest_exists "$proj" "$rev" "$SLH_ATTEST_VERIFY_WITH" \
-          || { slh_attest_say "$tmp" UNVERIFIABLE-CUSTODY; return 0; }
-        slh_attest_cat "$proj" "$rev" "$SLH_ATTEST_VERIFY_WITH" > "$tmp/allowed" 2>/dev/null
-        allowed="$tmp/allowed"
-      else
-        [ -f "$proj/$SLH_ATTEST_VERIFY_WITH" ] || { slh_attest_say "$tmp" UNVERIFIABLE-CUSTODY; return 0; }
-        allowed="$proj/$SLH_ATTEST_VERIFY_WITH"
-      fi
-      command -v ssh-keygen >/dev/null 2>&1 || { slh_attest_say "$tmp" UNVERIFIABLE-NO-TOOL; return 0; }
-      approver="$(jq -r '.approver' "$doc" 2>/dev/null)" || approver=""
-      [ -n "$approver" ] || { slh_attest_say "$tmp" MALFORMED; return 0; }
-      if ssh-keygen -Y verify -f "$allowed" -I "$approver" \
-           -n "$SLH_ATTEST_NS" -s "$sig" < "$doc" >/dev/null 2>&1; then
-        slh_attest_say "$tmp" VERIFIED; return 0
-      fi
-      slh_attest_say "$tmp" SIGNATURE-FAILED; return 0
-      ;;
-    forge)
-      # DESIGNED AND NOT BUILT, by the owner's ruling of 2026-08-29, and
-      # refusing is the shipped state rather than a placeholder. Custody C's
-      # verification lands with the forge-side required check filed to KL5;
-      # see SLH_ATTEST_CUSTODIES above for why no query shape was invented
-      # here and what the rejected alternative would have cost.
-      slh_attest_say "$tmp" UNVERIFIABLE-CUSTODY; return 0
-      ;;
-  esac
-  slh_attest_say "$tmp" UNVERIFIABLE-CUSTODY
-}
-
-# slh_attest_require <proj> <spec-path> <where> -> 0 allowed, 1 refused.
-#
-# THE CUSTODY IS NAMED ON THE PASS AS WELL AS ON THE FAILURE. That is not
-# decoration and it is not logging: it is the entire answer to a mechanism
-# whose strength no test can measure. A passing verification under a key the
-# build can reach must say so at the moment it passes, or an instance installs
-# this, watches its checks go green, and believes it has an integrity chain
-# whose actual strength nobody ever established.
-slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
-  local proj="$1" spec="$2" where="$3" rev="${4:-}" tok strength
-  slh_attest_load "$proj" || return 1
-  [ "$SLH_ATTEST_STATE" = "on" ] || return 0
-
-  tok="$(slh_attest_verify "$proj" "$spec" "$rev")"
-
-  case "$SLH_ATTEST_CUSTODY" in
-    signer) strength="a key the build process cannot read, which is the only custody that addresses the threat" ;;
-    ci-secret) strength="A KEY THE BUILD CAN REACH: this establishes that the run had the key, not that a person approved this spec" ;;
-    forge) strength="the forge as notary, DESIGNED AND NOT BUILT: its verification lands with the forge-side required check, which is filed and not promised" ;;
-    *) strength="an unnamed custody" ;;
-  esac
-
-  # The caller refuses anything that is not exactly VERIFIED. The default arm
-  # below is load-bearing: it catches an empty token, a token from a future
-  # version of this function, and a verifier that died without printing.
-  case "$tok" in
-    VERIFIED)
-      printf 'setlist [SLH-ATTEST-OK]: %s: %s is covered by a valid approval attestation, verified under "%s" custody (%s).\n' \
-        "$where" "$spec" "$SLH_ATTEST_CUSTODY" "$strength" >&2
-      return 0
-      ;;
-    NO-ATTESTATION)
-      slh_refuse "SLH-ATTEST-MISSING" "$where: this project declares \"attestation\": {\"required\": true} and $spec has no approval attestation at specs/attest/. A commit carrying feature code while that spec is ACTIVE must be covered by an approval over the spec's CURRENT bytes. Approve the spec with /setlist:checkpoint in an interactive session, which is where the human is, or set \"required\": false if this project is not running the integrity chain. (Declared custody: $SLH_ATTEST_CUSTODY.)"
-      ;;
-    MALFORMED)
-      slh_refuse "SLH-ATTEST-MALFORMED" "$where: the approval attestation for $spec is empty or is not the document this layer reads. EMPTY OR MALFORMED IS NEVER A PASS: an attestation nobody could parse establishes nothing, and treating it as an approval would make the whole chain decorative. Re-approve the spec with /setlist:checkpoint rather than editing the document by hand. (Declared custody: $SLH_ATTEST_CUSTODY.)"
-      ;;
-    SIGNATURE-FAILED)
-      slh_refuse "SLH-ATTEST-UNSIGNED" "$where: the approval attestation for $spec has no signature, or its signature does not verify against $SLH_ATTEST_VERIFY_WITH. An unsigned or unverifiable attestation is treated exactly as an absent one. If a signing key was rotated, the retired public key stays enrolled for as long as attestations signed by it must still verify; otherwise re-approve the spec. (Declared custody: $SLH_ATTEST_CUSTODY.)"
-      ;;
-    SUBJECT-MISMATCH)
-      slh_refuse "SLH-ATTEST-SUBJECT" "$where: the attestation filed for $spec names a DIFFERENT spec. It may be perfectly valid and perfectly signed and it is still about something else, and a mechanism that checks a claim without checking its SUBJECT is checking nothing. Re-approve this spec rather than copying another spec's attestation. (Declared custody: $SLH_ATTEST_CUSTODY.)"
-      ;;
-    HASH-MISMATCH)
-      slh_refuse "SLH-ATTEST-STALE" "$where: $spec has CHANGED since it was approved. The attestation covers the approved bytes and the current bytes hash to something else, so what is being built is not what anybody approved. Route the change through Status REVISED with Planner sign-off and let /setlist:checkpoint re-approve on the way back to ACTIVE; editing the spec and recomputing the hash by hand is the act this mechanism exists to make visible. (Declared custody: $SLH_ATTEST_CUSTODY.)"
-      ;;
-    *)
-      if [ "$SLH_ATTEST_CUSTODY" = "forge" ]; then
-        slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: this project declares \"custody\": \"forge\", and FORGE CUSTODY IS DESIGNED AND NOT BUILT. Its verification is a query the forge answers, and it lands with the forge-side required check, which is filed rather than promised. Nothing is wrong with $spec or with your configuration: this layer has no way to ask whether your protected ref and required review approved it, and it refuses rather than passing on a question it never asked. Use \"custody\": \"signer\" for a mechanism that works today, or set \"required\": false until the forge-side check ships."
-      else
-        slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: the approval attestation for $spec could not be VERIFIED here (the verifier returned \"${tok:-nothing at all}\"), so this layer cannot tell you whether the spec was approved. THAT IS NOT THE SAME AS NO DRIFT and it is not the same as no approval: the check could not run. A missing sha256 tool, a missing ssh-keygen, and an unreadable allowed-signers file at $SLH_ATTEST_VERIFY_WITH all look like this. Fix the toolchain, or commit with SETLIST_SKIP_HOOKS=1 if this is an exception you are willing to own. (Declared custody: $SLH_ATTEST_CUSTODY.)"
-      fi
-      ;;
-  esac
-  return 1
-}
-
-# slh_attest_walk <proj> <what> <tip> <rev-list-arg...> -> 0 allowed, 1 refused.
-#
-# THE PUSH LAYER'S ARM, and it asks the same question at a different scope. The
-# enforcement boundary puts the GUARANTEE in the push-time audit specifically,
-# and the reason applies here unchanged: a commit that got in through
-# --no-verify, through an unset core.hooksPath, or through a per-clone gap has
-# never met pre-commit, and this is the last layer before the work is SHARED.
-#
-# THE PREDICATE, stated exactly, because "the same check at push" hides a
-# choice. If the range this push publishes introduces role-path content, then
-# at the TIP THIS PUSH WOULD PUBLISH, every ACTIVE spec must be covered by a
-# valid attestation over ITS BYTES IN THAT TREE. Every term is read from git
-# rather than from the filesystem: the tip may not be HEAD, the branch may have
-# been built in another worktree, and the spec may not exist on disk here at
-# all. Judging a push by what happens to be checked out is a different question
-# wearing the same words.
-#
-# WHY THE TIP AND NOT EVERY COMMIT. A range is a sequence of intermediate
-# states, and an ordinary spec branch passes through many where the attestation
-# does not yet cover the spec (the approval commit lands after the first build
-# commit, a REVISED spec is re-approved on the way back). Requiring every
-# intermediate commit to verify would refuse the ordinary lifecycle, which is
-# the false-denial direction this repository treats as the more dangerous one.
-# What is being published is the TIP, and the tip is what a reader of the remote
-# gets. The content scan walks every commit because a secret in an intermediate
-# commit IS published; an approval is a property of the state, not of each step
-# toward it.
-slh_attest_walk() { # slh_attest_walk <proj> <what> <tip> <rev-list-arg...>
-  local proj="$1" what="$2" tip="$3"; shift 3
-  local revs rc c touched roles rp num sf status_text hits n
-  slh_attest_load "$proj" || return 1
-  [ "$SLH_ATTEST_STATE" = "on" ] || return 0
-
-  # THE DIFFERENCE BETWEEN "READ NOTHING" AND "THERE WAS NOTHING", which
-  # slh_scan_walk states for the scan and which is not inherited by being
-  # written underneath it. rev-list FAILING means the range could not be read,
-  # and a check that could not run has not passed. rev-list SUCCEEDING with no
-  # output means the remote already has every commit this ref would publish,
-  # which is the ordinary re-push and correctly checks nothing.
-  revs="$(git -C "$proj" rev-list "$@" 2>/dev/null)" && rc=0 || rc=$?
-  if [ "$rc" != "0" ]; then
-    slh_refuse "SLH-ATTEST-UNVERIFIABLE" "the push-time approval check could not enumerate the commits for $what, so it read nothing and has established nothing about whether this work was approved. A check that could not run has not passed. Push with SETLIST_SKIP_HOOKS=1 if you are willing to own the exception."
-    return 1
-  fi
-  [ -n "$revs" ] || return 0
-
-  roles="$(slh_role_paths "$proj")" || return 1
-  [ -n "$roles" ] || return 0
-
-  # Does this range introduce role-path content at all? A docs-only push
-  # carries no build to be approved, and refusing it would make the mechanism
-  # a toll on every commit rather than a gate on building.
-  touched=0
-  while IFS= read -r c; do
-    [ -n "$c" ] || continue
-    # --name-only over the commit, first parent by default and --cc for a
-    # merge, which is the same reading slh_scan_walk uses for the same reason:
-    # a merge's conflict resolution exists in no parent.
-    local files
-    files="$(git -C "$proj" show --name-only --format= --no-ext-diff --cc "$c" 2>/dev/null)"
-    while IFS= read -r rp; do
-      [ -n "$rp" ] || continue
-      rp="$(printf '%s' "$rp" | tr -s '/')"; rp="${rp#/}"
-      while [ "${rp#./}" != "$rp" ]; do rp="${rp#./}"; done
-      while [ "${rp%/}" != "$rp" ]; do rp="${rp%/}"; done
-      [ -n "$rp" ] || continue
-      if printf '%s\n' "$files" | grep -qE "^$rp/"; then touched=1; fi
-    done <<EOF
-$roles
-EOF
-    [ "$touched" = "1" ] && break
-  done <<EOF
-$revs
-EOF
-  [ "$touched" = "1" ] || return 0
-
-  # THE STATE THIS PUSH PUBLISHES, read from the tip's tree. An unreadable
-  # STATUS.md at the tip is a refusal and not an empty ACTIVE set: "no evidence
-  # of an active spec" and "no active spec" are the two facts this file spends
-  # its length refusing to conflate.
-  if ! git -C "$proj" cat-file -e "$tip:specs/STATUS.md" 2>/dev/null; then
-    slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$what brings feature code, and specs/STATUS.md could not be read from the tree this push would publish, so which spec is being built cannot be established and no approval can be checked against it. Refusing rather than treating an unreadable inventory as a push with nothing active."
-    return 1
-  fi
-  status_text="$(git -C "$proj" show "$tip:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK")"
-  for num in $(slh_attest_active_specs "$status_text"); do
-    # The spec file AS THE TIP HOLDS IT, by the same exact-number-then-hyphen
-    # rule slh_spec_path_for uses, and refusing a multiple match rather than
-    # taking the first: sort order is not a choice of spec (leg F6).
-    hits="$(git -C "$proj" ls-tree -r --name-only "$tip" -- specs/ 2>/dev/null | grep -E "^specs/${num}-[^/]*\.md$" || true)" # fail-open-ok: no match leaves hits empty and the skip below is the close gate's question, not this one
-    n="$(printf '%s\n' "$hits" | grep -c . || true)"
-    [ "$n" = "1" ] || continue
-    sf="$hits"
-    # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided by the
-    # caller, so a non-zero return must not stop the remaining ACTIVE specs
-    # from being checked; the operator gets all the reasons at once.
-    slh_attest_require "$proj" "$sf" "$what" "$tip" || true
-  done
-  return 0
-}
-
-# Which specs are ACTIVE according to a STATUS.md text? The attestation
-# predicate is about the spec being BUILT, and ACTIVE is what "being built"
-# is spelled as. Read through the live-text lexer for the reason every other
-# reader of this file uses it: a fenced example or an indented illustration is
-# content, not an inventory row.
-slh_attest_active_specs() { # slh_attest_active_specs <status-text>
-  printf '%s\n' "$1" | sed 's/\\|/ /g' | awk -F'|' '
-    function trim(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return x }
-    NF >= 4 && toupper(trim($4)) == "ACTIVE" && trim($2) ~ /^[0-9]+[a-z]*$/ { print trim($2) }
-  '
-}
-
 # THE CLOSE VERIFICATION, over the index.
 #
 # It identifies what is being closed by CONTENT rather than by ref name, and
@@ -1642,17 +1104,6 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
     num="${entry%%:*}"; f="${entry#*:}"
     text="$(slh_index_show "$proj" "$f")"
 
-    # THE CLOSE IS THE STRONGEST POINT IN THE ATTESTATION CHAIN, and it is
-    # nearly free: this function already knows which specs the change closes,
-    # so requiring the approval to cover the spec's FINAL bytes costs one call.
-    # A spec legitimately revised mid-build went ACTIVE -> REVISED -> ACTIVE
-    # with Planner sign-off and checkpoint produced a NEW attestation on the
-    # way back, so the legitimate path is the existing lifecycle and needs no
-    # new ceremony here.
-    # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided by the
-    # caller, so a non-zero return must not skip the four checks below.
-    slh_attest_require "$proj" "$f" "$what" || true
-
     # A FENCED EXAMPLE IS NOT A CLOSING REPORT. Ported from close-gate.sh, which
     # learned it as leg 5's F7; this layer never got it, so a spec whose entire
     # Closing report was a quoted ```markdown example satisfied all four checks
@@ -1690,13 +1141,9 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
     local diag answer
     # A FIELD, NOT A SUBSTRING (1.1.0 adversarial review, F8). Anchored past any list
     # bullet so ordinary prose repeating the label cannot decide the check, which
-    # it did in both directions. `head -n1` takes the FIRST field (KL1, ruled
-    # 2026-08-29): the field answers a question once, a later line discussing it
-    # is commentary, and a revision edits the field in place. The answer itself
-    # is anchored to the START of the value (F6-2026), so a line that merely
-    # CONTAINS or CONTRADICTS an answer does not satisfy it. Same change as
-    # close-gate.sh and trunk-audit.sh, which carry the same two rules.
-    diag="$(printf '%s\n' "$text" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | head -n1)"
+    # it did in both directions. `tail -n1` is kept so a revised spec's later
+    # report still wins. Same change as close-gate.sh, which carries the reasoning.
+    diag="$(printf '%s\n' "$text" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | tail -n1)"
     if [ -z "$diag" ]; then
       slh_refuse "SLH-NO-DIAGRAM-FIELD" "spec $num is missing the mandatory field 'Architecture diagram: updated in this commit | no impact'."
     else
@@ -1711,7 +1158,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
       # Asserted across the value space rather than at a spelling: this field has
       # been corrected three times, twice by repairing only the case reported.
       answer="$(printf '%s' "$answer" | sed 's/<[^>]*>//g')"
-      if ! printf '%s' "$answer" | sed 's/^[[:space:]]*//' | grep -qE '^(updated in this commit|no impact)([^A-Za-z]|$)'; then
+      if ! printf '%s' "$answer" | grep -qE 'updated in this commit|no impact'; then
         slh_refuse "SLH-DIAGRAM-UNANSWERED" "spec $num's architecture-diagram field is unanswered; answer it 'updated in this commit' or 'no impact'."
       fi
     fi

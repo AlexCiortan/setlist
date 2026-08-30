@@ -118,6 +118,34 @@ mechanism into a rubber stamp. A spec that genuinely needs to change goes to
 REVISED with Planner sign-off and comes back to ACTIVE, and the rewrite happens
 on that return.
 
+## Signing the approval, when the project declares one (Part 6)
+
+If `.claude/sdd.json` carries `"attestation": {"required": true}`, the same
+ACTIVE flip also writes and SIGNS an approval attestation, in the same commit:
+
+```
+bash "${CLAUDE_PLUGIN_ROOT}/scripts/spec-attest.sh" specs/NNNN-slug.md
+```
+
+That writes `specs/attest/NNNN.json` and `specs/attest/NNNN.sig`. Stage both
+with the Status change and the `Spec-hash:` field; the git hooks refuse a build
+commit whose ACTIVE spec has no valid attestation over its current bytes.
+
+**This step belongs to a session where a HUMAN IS PRESENT, and that is the whole
+of what it is for.** A signature proves a key was used, not that a person
+decided. If a headless run can reach the signing key it can produce this
+document over a spec edited after approval, and every check will pass while
+proving only that the run had the key. So: sign at the moment of approval, in an
+interactive session, and never as a step in an automated build.
+
+**Never re-sign to clear a refusal.** `SLH-ATTEST-STALE` means the spec changed
+after it was approved, which is the thing the mechanism exists to make visible.
+The route back is the lifecycle: REVISED with Planner sign-off, then ACTIVE
+again, and the new attestation is written on that return like the hash is.
+
+If the project declares no attestation block, none of this applies and nothing
+changes: undeclared means off, and off behaves exactly as it always has.
+
 If the script exits 3 (no sha256 tool on this machine), say so and leave the
 field blank rather than inventing a value; the hook will report the check as
 UNVERIFIED, which is the honest state.

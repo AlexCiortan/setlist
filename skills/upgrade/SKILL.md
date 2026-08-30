@@ -219,6 +219,16 @@ When the instance predates this plugin, also:
   would turn an honest "not yet covered" into a false "verified". Tell the human
   the field exists and that the drift warning starts working from the next spec
   that goes ACTIVE.
+- **Mention the new `attestation` block, and migrate NOTHING** (KL3, edition
+  v1.11). It is `"attestation": {"required": false}` and OFF is the shipped
+  default, so an upgraded instance behaves exactly as it did. **Do NOT turn it
+  on during an upgrade.** Turning it on requires deciding where the signing key
+  lives, and that is a decision about the project's threat model rather than a
+  migration step: a key the build process can reach lets a headless run sign its
+  own approval, so switching this on without that conversation would hand
+  somebody an integrity chain whose strength nobody established. Tell the human
+  the block exists, that `"custody": "signer"` with a key they hold is the model
+  that works today, and that `"custody": "forge"` is designed and not yet built.
 - Record all of this inside the umbrella ADR.
 
 ## 4. Instance skill flags (any instance stamped before plugin 1.6)

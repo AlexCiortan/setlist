@@ -139,50 +139,6 @@ if [ "${#SPEC_PATHS[@]}" -gt 0 ] && slh_lifecycle_added "$PROJ" "$STATES_RE" "${
 fi
 
 # ---------------------------------------------------------------------------
-# Cheap check 4: the approval attestation (KL3). THE PRIMARY REFUSAL.
-#
-# This is the first hook that sees a headless session's output, and it fires
-# for the ORDINARY COMMIT, which is what a headless build produces. When the
-# instance declares attestation required, a commit carrying role-path content
-# while a spec is ACTIVE must be covered by a valid attestation over that
-# spec's CURRENT bytes. A spec that drifted after approval fails here, because
-# the attestation covers the approved hash and the current bytes hash to
-# something else.
-#
-# IT DOES NOT PREVENT THE UNAPPROVED BUILD FROM HAPPENING, and saying so here
-# rather than in a caveat is the point: the only layer present when a file is
-# written is the session layer, and that layer has been advisory in mechanism
-# since 2026-08-04. This prevents the result becoming a commit; pre-push
-# prevents it being shared.
-#
-# The predicate lives in the library because pre-push and the close ask the
-# same question, and one reader is the rule this file already follows for the
-# scans and the lifecycle detector.
-# ---------------------------------------------------------------------------
-ATTEST_ROLES="$(slh_role_paths "$PROJ")" || exit 1
-ATTEST_CODE=0
-if [ -n "$ATTEST_ROLES" ]; then
-  while IFS= read -r __rp; do
-    [ -n "$__rp" ] || continue
-    if printf '%s\n' "$STAGED" | grep -qE "^$__rp/"; then ATTEST_CODE=1; fi
-  done <<EOF
-$ATTEST_ROLES
-EOF
-fi
-if [ "$ATTEST_CODE" = "1" ]; then
-  for __num in $(slh_attest_active_specs "$(slh_index_show "$PROJ" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"); do
-    __sf="$(slh_spec_path_for "$PROJ" "$__num")"
-    # A row that names no readable spec file is the close gate's
-    # SLH-CLOSES-NO-SPEC-FILE question, not this one; it is left to the layer
-    # that owns it rather than answered twice with two different codes.
-    [ -n "$__sf" ] || continue
-    # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below,
-    # so a non-zero return must not abort before every ACTIVE spec is checked.
-    slh_attest_require "$PROJ" "$__sf" "staged content" || true
-  done
-fi
-
-# ---------------------------------------------------------------------------
 # The expensive branch: a commit that LANDS A MERGE on the trunk. Two spellings
 # reach here, and the second was found by the oracle rather than reasoned out.
 #

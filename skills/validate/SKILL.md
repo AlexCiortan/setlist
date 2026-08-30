@@ -122,6 +122,16 @@ Checks:
     the value here; that is checkpoint's job at a lifecycle transition, and a
     health check that silently re-stamps a hash would erase the very drift the
     field exists to surface.
+17. If `.claude/sdd.json` declares `"attestation": {"required": true}`, the
+    ACTIVE spec has an approval attestation at `specs/attest/NNNN.json` with its
+    `.sig` beside it (Part 6). **Presence is INFORMATION and absence is not a
+    finding**, on the same rule item 16 states and for the same reason: a
+    project that has not turned the feature on has nothing missing, and a spec
+    approved before the project turned it on acquires one on its next lifecycle
+    transition. **Never write or re-sign one here.** That is checkpoint's job at
+    an approval, in a session where a human is present, and a health check that
+    quietly produced an approval would be manufacturing the exact thing the
+    mechanism exists to make somebody do deliberately.
 
 17. **The git-hook boundary is LIVE** (Part 6). The guarantee is the push-time
     trunk audit, the per-merge hooks are its early warning, and all three parts

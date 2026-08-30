@@ -939,6 +939,31 @@ else
       "rc=$HOOK_RC, decision=$(printf '%s' "$HOOK_OUT" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // empty')"
 fi
 
+# THE ADVISORY LAYER NAMES THE LAYER THAT VERIFIES, and says it does not (KL3
+# section 7.1, applying the KL4-A1 ruling prospectively). One sentence, no second
+# reader: SessionStart has no deny mechanic, so a verifier here could only warn
+# about something the next commit refuses anyway, and a reader in this tree would
+# be both an A9 violation and a dependency between two deliberately separate
+# trees. Asserted on the DRIFT message, because that is the moment a user is
+# most likely to think this notice is the enforcement.
+run_hook "$HOOKS/regrounding-hook.sh" "$SH3" "$(session_payload startup)"
+if sh_context | grep -q 'verified at the git-hook layer, which is the only layer that can refuse'; then
+  ok "spec-hash advisory boundary: the drift notice names the layer that verifies and states this one does not"
+else
+  bad "spec-hash advisory boundary: the drift notice names the layer that verifies and states this one does not" \
+      "a user meeting this warning cannot tell it is advisory, which is the divergence the 2026-08-28 ruling closed by honesty"
+fi
+
+# AND IT STILL HAS NO VERIFIER, asserted structurally rather than by reading the
+# file: one sentence was the whole of the fix, and a second reader arriving in
+# this tree is exactly what this pins against.
+if ! grep -q 'slh_attest_verify\|slh_attest_load' "$HOOKS/regrounding-hook.sh"; then
+  ok "spec-hash advisory boundary: the advisory tree carries NO attestation verifier, only the sentence"
+else
+  bad "spec-hash advisory boundary: the advisory tree carries NO attestation verifier, only the sentence" \
+      "a second reader appeared in templates/hooks/, which is the A9 violation the ruling refused to buy"
+fi
+
 # A spec that is not ACTIVE is not the one being built, so it is not checked.
 SHQ="$WORK/spechash-queued"; sh_fixture "$SHQ" QUEUED yes "Build the thing."
 sed -e 's/Build the thing./Build the OTHER thing./' "$SHQ/specs/0001-thing.md" > "$SHQ/t" && mv "$SHQ/t" "$SHQ/specs/0001-thing.md"
@@ -1054,6 +1079,55 @@ expect_deny "toolchain t4: the scope hook names a no-git code when git is broken
 # turned every Bash call into a warning and t3 would still pass.
 run_hook_brokentool "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'ls -la')"
 expect_allow "toolchain t5 control: broken git, ungoverned payload, still silent"
+
+# F3-2026: THE THIRD SIBLING of the same probe, reinstated in the 2.3.0 cycle
+# from the patch parked with its backlog entry. V19-F1 fixed t3 and t4 in the
+# 2.2.0 cycle and left commit-gate.sh alone, so a broken git made ADDED read
+# empty, every grep over it miss, and a staged em-dash AND a staged secret both
+# report clean at exit 0 with no output.
+#
+# Asserted on the CODE for its siblings' reason: this gate denies an em-dash
+# anyway when git works, so "did it deny" would pass with or without the probe.
+run_hook_brokentool "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "x"')"
+expect_deny "toolchain t6 (F3-2026): the commit gate names a no-git code when git is broken" "CM-NO-GIT"
+
+# F11-2026: THE ADVISORY JSON CONTRACT, asserted on the FIELD and not on the
+# reason text, which is the whole reason this survived three adversarial legs.
+# advise_literal() hardcoded "code":"" while the gates' frozen header promises
+# setlistAdvisory {gate, verdict, code, reason}. It never blocked, so nothing
+# ever failed on it: 1.1.0 filed it as F21, 2.0.0 filed it as F12 with a full
+# reproduction, and both times it was rediscovered rather than fixed. The suite
+# could not notice a regression here at all until this assertion existed.
+#
+# The literal path is reached with jq ABSENT, which is what that path is for.
+run_hook_nojq "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "x"')"
+F11_CODE="$(printf '%s' "$HOOK_OUT" | jq -r '.setlistAdvisory.code // "<absent>"' 2>/dev/null)"
+if [[ -n "$F11_CODE" && "$F11_CODE" != "<absent>" && "$F11_CODE" =~ ^[A-Z][A-Z0-9-]*$ ]]; then
+  ok "F11-2026: a literal-reason deny carries a real setlistAdvisory.code ($F11_CODE), not the empty string"
+else
+  bad "F11-2026: a literal-reason deny carries a real setlistAdvisory.code, not the empty string" \
+      "code=[$F11_CODE]; the gates' own frozen header promises this field and the literal path has emitted an empty one since 1.1.0"
+fi
+
+# KL4-A1: the advisory gate is NOT path-scoped, it still is not, and it now SAYS
+# SO. The ruling of 2026-08-28 closed the divergence by honesty rather than by
+# coupling, so this asserts the SENTENCE and leaves the pinned divergence
+# assertion below exactly as it was: the entry does not close by drift and this
+# is not a claim that it did.
+KL4A1_OUT=0
+for kl4a1_case in "$EMDASH" 'api_key = "abcdefghijklmnop1234"'; do
+  run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "x"')" 2>/dev/null || true
+done
+printf 'a %s b\n' "$EMDASH" > "$CG/note.md"
+git -C "$CG" add -A >/dev/null 2>&1
+run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "x"')"
+if printf '%s' "$HOOK_OUT" | grep -q 'evaluated at the git-hook layer, and this advisory does not read them'; then
+  ok "KL4-A1: the advisory gate's refusal states that path exclusions are evaluated at the git-hook layer and not here"
+else
+  bad "KL4-A1: the advisory gate's refusal states that path exclusions are evaluated at the git-hook layer and not here" \
+      "the user still cannot tell from this message whether the commit will actually be blocked, which is the measured harm the ruling priced"
+fi
+git -C "$CG" rm -q -f --cached note.md >/dev/null 2>&1; rm -f "$CG/note.md"
 
 
 # The blast radius stays narrow in this state too: the session must still be
@@ -3606,8 +3680,10 @@ expect_script "interpreter: the trunk audit CATCHES the outcome the gate let pas
 # hole: A `<<\EOF` heredoc body is read as code by the session gates, and can run your whole gate command before an ordinary `git commit`. | asserted
 # hole: The session gates are text parsers, and a growing list of spellings read a command wrongly. | asserted
 # hole: The session gates' warnings do not reach the agent on current harnesses. | unassertable | a property of the HARNESS, not of these bytes: a shell test can see the hook emit the reason on three channels but not what Claude Code renders. dogfood/advisory-visibility-probe.sh measures it with a live session and a deny-control, and is the check that lifts this limitation when it changes
+# hole: A first push to a brand-new EMPTY remote audits every pushed branch as a trunk candidate. | asserted
 # hole: The trunk audit cannot tell a merge that EDITS a file from ordinary conflict resolution. | asserted
-# hole: A headless build has no integrity chain. | asserted
+# hole: The headless integrity chain is only as strong as where your signing key lives, and a key your build can reach is not custody. | asserted
+# hole: A single-parent trunk commit that closes a spec is content-exempt at the push-time audit. | asserted
 # hole: The set of tested platforms is a list, not a proof. | unassertable | a statement ABOUT the CI matrix rather than about hook behaviour; the matrix in .github/workflows/test.yml is the evidence, and the honest check is reading which platforms it actually runs
 # hole: Secret and style scanning is best-effort early warning, not a guarantee. | asserted
 # hole: git allows one `core.hooksPath`, so Setlist cannot coexist with husky, lefthook or pre-commit, and `refresh-instance.sh --apply` now REFUSES rather than displace one silently. | asserted
@@ -4873,15 +4949,49 @@ else
   assert_true "public README edition: the edition version was resolved from setlist.md" \
     "the Edition header could not be parsed, so the comparison below would compare against nothing" \
     test -n "$ED_V"
-  # Two-component versions only, and never part of a three-component one, so a
-  # plugin version like v1.1.0 is not mistaken for an edition.
-  PUB_EDS="$(sed -E 's/v[0-9]+\.[0-9]+\.[0-9]+/ /g' "$PUBR" | grep -oE 'v[0-9]+\.[0-9]+' | sort -u || true)"
+  # THE CLAIM LIVES ON ONE LINE, and the invariant is anchored there (narrowed
+  # 2026-08-29 by owner ruling; the gate in publish-setlist.sh carries the full
+  # reasoning and the cost). The self-description is the document's statement
+  # about which edition users are getting; a provenance citation elsewhere
+  # ("since v1.7") is a statement about when a claim was first made, and the
+  # old whole-file rule could not tell those apart.
+  PUB_SELF="$(grep -n 'The current edition of the framework document is' "$PUBR" | head -n1 || true)"
+  PUB_SELF_EDS="$(printf '%s\n' "$PUB_SELF" | sed -E 's/v[0-9]+\.[0-9]+\.[0-9]+/ /g' | grep -oE 'v[0-9]+\.[0-9]+' | sort -u || true)"
+  PUB_SELF_STALE="$(printf '%s\n' "$PUB_SELF_EDS" | grep -v '^$' | grep -vx "$ED_V" || true)"
+  if [[ -n "$PUB_SELF" && -z "$PUB_SELF_STALE" && -n "$PUB_SELF_EDS" ]]; then
+    ok "public README edition: the self-description names $ED_V and no other edition"
+  else
+    bad "public README edition: the self-description names $ED_V and no other edition" \
+        "line=[${PUB_SELF:-<absent>}] stale=[$(printf '%s' "$PUB_SELF_STALE" | tr '\n' ' ')]; an absent line is a failure, not a pass, because a check that cannot find its subject has not checked it"
+  fi
+
+  # THE SECOND CHECK, weaker and stated as such: every OTHER two-component
+  # version must sit in a provenance construction. A bare stale version
+  # anywhere in the file still fails, so the narrowing bought the ratified
+  # boundary sentence and not a general exemption. Two-component versions only,
+  # and never part of a three-component one, so a plugin version like v1.1.0 is
+  # not mistaken for an edition.
+  PUB_EDS="$(sed -E 's/v[0-9]+\.[0-9]+\.[0-9]+/ /g' "$PUBR" | sed -E 's/(since|in) v[0-9]+\.[0-9]+/ /g' | grep -oE 'v[0-9]+\.[0-9]+' | sort -u || true)"
   PUB_STALE="$(printf '%s\n' "$PUB_EDS" | grep -v '^$' | grep -vx "$ED_V" || true)"
   if [[ -z "$PUB_STALE" ]]; then
-    ok "public README edition: names only $ED_V, no stale edition version"
+    ok "public README edition: no BARE stale edition version outside a provenance citation"
   else
-    bad "public README edition: names only $ED_V, no stale edition version" \
+    bad "public README edition: no BARE stale edition version outside a provenance citation" \
         "it also names: $(printf '%s' "$PUB_STALE" | tr '\n' ' ')"
+  fi
+
+  # THE NARROWING IS NOT A HOLE, asserted rather than promised: a stale edition
+  # planted BARE in the file must still fail the second check. Without this the
+  # narrowing above is a claim about what the gate still catches, made by the
+  # person who narrowed it.
+  PUBN="$WORK/pub-narrow.md"; sed -e 's/$/ /' "$PUBR" > "$PUBN"
+  printf 'This project has been on edition v0.9 for a while.\n' >> "$PUBN"
+  PUBN_EDS="$(sed -E 's/v[0-9]+\.[0-9]+\.[0-9]+/ /g' "$PUBN" | sed -E 's/(since|in) v[0-9]+\.[0-9]+/ /g' | grep -oE 'v[0-9]+\.[0-9]+' | sort -u || true)"
+  if printf '%s\n' "$PUBN_EDS" | grep -qx 'v0.9'; then
+    ok "public README edition control: a BARE stale version planted in the file is still caught after the narrowing"
+  else
+    bad "public README edition control: a BARE stale version planted in the file is still caught after the narrowing" \
+        "the narrowing let a bare stale edition through, which is a hole and not a scoping decision"
   fi
 fi
 
@@ -4899,23 +5009,58 @@ else
     bad "public README gate: the EDITION-STRING-GATE markers exist in publish-setlist.sh" \
         "could not extract the gate; missing or renamed markers mean this check cannot run, which is a failure rather than a pass"
   else
+    # THE SELF-DESCRIPTION LINE IS NOW THE GATE'S SUBJECT, so every fixture
+    # carries one. That is not fixture bookkeeping: the gate anchors there
+    # structurally (narrowed 2026-08-29), and a fixture without the line would
+    # exercise only the absent-subject refusal and say nothing about the rule.
+    SELF='The current edition of the framework document is setlist.md (edition v9.9).'
+
     # Clean: only the current edition. Must PASS.
-    printf 'Setlist, edition v9.9, the current one.\n' > "$PG/README.public.md"
+    printf '%s\nSetlist, the current one.\n' "$SELF" > "$PG/README.public.md"
     if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
       ok "public README gate: a README naming only the current edition is accepted"
     else
       bad "public README gate: a README naming only the current edition is accepted" "it refused a clean file"
     fi
-    # Stale: names a prior edition too. Must REFUSE.
-    printf 'Setlist, edition v9.9, the current one.\nBut this line still says edition v9.8.\n' > "$PG/README.public.md"
+    # Stale: names a prior edition too, BARE. Must REFUSE.
+    printf '%s\nBut this line still says edition v9.8.\n' "$SELF" > "$PG/README.public.md"
     if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
       bad "public README gate: a README still naming a PRIOR edition is refused" \
           "it accepted a file naming v9.8 alongside v9.9, which is the defect this gate exists for"
     else
       ok "public README gate: a README still naming a PRIOR edition is refused"
     fi
+    # THE SELF-DESCRIPTION ITSELF NAMING A STALE EDITION. This is the defect the
+    # gate was written for and the one the narrowing must not have loosened.
+    printf 'The current edition of the framework document is setlist.md (edition v9.8).\n' > "$PG/README.public.md"
+    if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
+      bad "public README gate: a SELF-DESCRIPTION naming a stale edition is refused" \
+          "the narrowing let the gate's own founding defect through, which would be a hole and not a scoping decision"
+    else
+      ok "public README gate: a SELF-DESCRIPTION naming a stale edition is refused"
+    fi
+    # ABSENT SUBJECT IS A REFUSAL, NOT A PASS. A check that cannot find the line
+    # it judges has not judged it, which is this project's own rule about its
+    # own checks and the reason the narrowing is safe to make at all.
+    printf 'Setlist, edition v9.9, with no self-description anywhere.\n' > "$PG/README.public.md"
+    if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
+      bad "public README gate: a README with NO self-description line is refused" \
+          "the gate passed a file whose subject it could not find, which is the empty-result-as-verdict class"
+    else
+      ok "public README gate: a README with NO self-description line is refused"
+    fi
+    # A PROVENANCE CITATION IS NOT A CLAIM ABOUT THE CURRENT EDITION. This is
+    # what the narrowing bought, asserted rather than assumed, and it is the
+    # ratified boundary sentence's exact shape.
+    printf '%s\nwhere this project has said the real boundary lives since v1.7.\n' "$SELF" > "$PG/README.public.md"
+    if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
+      ok "public README gate: a 'since vX.Y' provenance citation is accepted, which is what the narrowing bought"
+    else
+      bad "public README gate: a 'since vX.Y' provenance citation is accepted, which is what the narrowing bought" \
+          "the gate still cannot tell a citation of when a claim was made from a claim about what users are getting"
+    fi
     # A three-component plugin version must not be read as an edition.
-    printf 'Setlist, edition v9.9, plugin v9.8.1 is irrelevant here.\n' > "$PG/README.public.md"
+    printf '%s\nplugin v9.8.1 is irrelevant here.\n' "$SELF" > "$PG/README.public.md"
     if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
       ok "public README gate: a three-component plugin version is not mistaken for an edition"
     else
@@ -6954,6 +7099,849 @@ else
   ok "refresh F6b: re-refreshing an instance armed by Setlist is not a displacement"
 fi
 
+
+# =============================================================================
+# THE HEADLESS BUILD INTEGRITY CHAIN (KL3), spec 0124, from the ratified design
+# `design-attestation-kl3-2026-08-28.md`.
+#
+# WHAT THESE ASSERTIONS ARE EVIDENCE OF, stated first because A8 requires it and
+# because this is the one feature where the distinction decides the design: a
+# green here is evidence that a SIGNATURE VERIFIED, never that a PERSON
+# APPROVED. Nothing a suite can write establishes the second. That is why the
+# mechanism prints its declared custody on every verification INCLUDING the
+# passes, and why one of the assertions below is about the PASSING message
+# rather than about a refusal. It is the only one that covers the failure mode
+# the design exists inside, and it would be the easiest to leave out.
+#
+# The tokens the verifier may print are a closed set, and the caller refuses
+# anything that is not exactly VERIFIED. The empty-token case is asserted with a
+# deliberately broken verifier rather than argued, because "every failure of the
+# verifier itself lands in the allow branch" is F3-2026's class and asserting it
+# by reading the code is how it survives.
+# =============================================================================
+
+# ssh-keygen is PROBED, not located. `-Y sign` arrived in OpenSSH 8.2 and a
+# host can carry an older binary; a `command -v` that passed for a tool whose
+# subcommand does not exist would leave every assertion below reporting on a
+# mechanism it never reached.
+ATT_HAVE_SSH=0
+if command -v ssh-keygen >/dev/null 2>&1 \
+   && ssh-keygen -q -t ed25519 -N "" -C probe@example.test -f "$WORK/att-probe" >/dev/null 2>&1 \
+   && printf 'probe\n' > "$WORK/att-probe.txt" \
+   && ssh-keygen -Y sign -f "$WORK/att-probe" -n setlist-attestation "$WORK/att-probe.txt" >/dev/null 2>&1; then
+  ATT_HAVE_SSH=1
+fi
+
+# att_fixture <dir> <custody|off> [verify_with]
+# A stamped instance carrying an ACTIVE spec and staged role-path work, which is
+# exactly the shape a headless build produces: the commit is ordinary and it is
+# what pre-commit sees first.
+att_fixture() { # att_fixture <dir> <custody|off> [verify_with]
+  local d="$1" custody="$2" vw="${3:-.claude/approvers.pub}"
+  rm -rf "$d"; mkdir -p "$d/src" "$d/specs/attest" "$d/.claude" "$d/.githooks"
+  git_init "$d"
+  if [[ "$custody" == "off" ]]; then
+    printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+  else
+    printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"},"attestation":{"required":true,"custody":"%s","verify_with":"%s"}}\n' "$custody" "$vw" > "$d/.claude/sdd.json"
+  fi
+  printf '# Spec 0001 - thing\n\nStatus: ACTIVE\n\n## Goal\nBuild the thing.\n\n## Closing report\n- pending\n' > "$d/specs/0001-thing.md"
+  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | ACTIVE | wip |\n' > "$d/specs/STATUS.md"
+  cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" \
+     "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
+  chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+  printf 'seed\n' > "$d/seed.txt"
+  git -C "$d" add -A >/dev/null 2>&1
+  git -C "$d" -c core.hooksPath=/dev/null commit -qm seed >/dev/null 2>&1
+  git -C "$d" config core.hooksPath .githooks
+  # The work: role-path content, which is what makes the predicate apply at all.
+  printf 'work\n' > "$d/src/FEATURE.txt"
+  git -C "$d" add -A >/dev/null 2>&1
+}
+
+# att_sign <dir> [spec-field] [num-field] [hash-override] [verdict]
+# Writes the attestation document and signs it with the fixture's own key. Each
+# override exists so a NEGATIVE case differs from the positive one in exactly
+# one field, which is what makes a red mean what it says.
+att_sign() { # att_sign <dir> [spec] [num] [hash] [verdict]
+  local d="$1" spec="${2:-specs/0001-thing.md}" num="${3:-0001}" h="${4:-}" v="${5:-APPROVED}"
+  [[ -n "$h" ]] || h="$(bash "$ROOT/scripts/spec-hash.sh" "$d/specs/0001-thing.md")"
+  mkdir -p "$d/specs/attest"
+  printf '{\n  "setlist_attestation": 1,\n  "spec": "%s",\n  "spec_number": "%s",\n  "spec_hash": "%s",\n  "verdict": "%s",\n  "approver": "approver@example.test",\n  "custody": "signer",\n  "tool": "setlist/checkpoint",\n  "tool_version": "2.3.0",\n  "at": "2026-08-29T00:00:00Z",\n  "notes": ""\n}\n' \
+    "$spec" "$num" "$h" "$v" > "$d/specs/attest/${num}.json"
+  if [[ ! -f "$WORK/att-key" ]]; then
+    ssh-keygen -q -t ed25519 -N "" -C approver@example.test -f "$WORK/att-key" >/dev/null 2>&1
+  fi
+  printf 'approver@example.test %s\n' "$(cat "$WORK/att-key.pub")" > "$d/.claude/approvers.pub"
+  ssh-keygen -Y sign -f "$WORK/att-key" -n setlist-attestation \
+    "$d/specs/attest/${num}.json" >/dev/null 2>&1
+  mv "$d/specs/attest/${num}.json.sig" "$d/specs/attest/${num}.sig" 2>/dev/null || true
+}
+
+att_commit() { git -C "$1" add -A >/dev/null 2>&1; git -C "$1" commit -qm "attest case" >"$WORK/att-out" 2>&1; }
+att_out() { cat "$WORK/att-out" 2>/dev/null; }
+
+if [[ "$ATT_HAVE_SSH" -eq 1 ]]; then
+
+# --- THE OFF DIRECTION, and it goes first ---------------------------------
+# UNDECLARED MEANS OFF AND OFF MEANS BYTE-IDENTICAL TO AN INSTANCE THAT NEVER
+# HEARD OF THIS. KL4's precedent and its proof method. If this fails, every
+# refusal below is a feature that breaks every existing repository.
+ATT="$WORK/att-off"; att_fixture "$ATT" off
+if att_commit "$ATT"; then
+  if att_out | grep -q 'SLH-ATTEST'; then
+    bad "attest off: an instance declaring no attestation commits with NO attestation output at all" \
+        "it printed an attestation message: off must be silent, not merely permissive"
+  else
+    ok "attest off: an instance declaring no attestation commits with NO attestation output at all"
+  fi
+else
+  bad "attest off: an instance declaring no attestation commits with NO attestation output at all" \
+      "the commit was refused: $(att_out | tr '\n' ' ')"
+fi
+
+# --- THE PASS, AND WHAT IT SAYS WHILE PASSING -----------------------------
+# THE ASSERTION THIS FEATURE WOULD MOST EASILY SHIP WITHOUT. A pass that does
+# not name its custody lets an instance install this, watch its checks go
+# green, and believe it has an integrity chain whose strength nobody ever
+# established. The failure mode is invisible to every test that asks whether
+# signatures verify, and visible in every message.
+ATT="$WORK/att-pass"; att_fixture "$ATT" signer; att_sign "$ATT"
+if att_commit "$ATT"; then
+  if att_out | grep -q 'verified under "signer" custody'; then
+    ok "attest pass: a valid attestation ALLOWS and NAMES the declared custody while passing"
+  else
+    bad "attest pass: a valid attestation ALLOWS and NAMES the declared custody while passing" \
+        "it allowed silently, so a passing chain says nothing about how strong it is: $(att_out | tr '\n' ' ')"
+  fi
+else
+  bad "attest pass: a valid attestation ALLOWS and NAMES the declared custody while passing" \
+      "a correctly signed approval was refused, which is the false-denial direction: $(att_out | tr '\n' ' ')"
+fi
+
+# The same, under the custody that is WEAK BY CONSTRUCTION. This one has to say
+# so out loud: a key the build can reach establishes that the run had the key,
+# not that a person approved. Asserted on a PASS, which is the only place it
+# can be said.
+ATT="$WORK/att-pass-ci"; att_fixture "$ATT" ci-secret; att_sign "$ATT"
+if att_commit "$ATT" && att_out | grep -q 'A KEY THE BUILD CAN REACH'; then
+  ok "attest pass ci-secret: a PASSING verification under a build-reachable key says what it does not prove"
+else
+  bad "attest pass ci-secret: a PASSING verification under a build-reachable key says what it does not prove" \
+      "the green did not state the strength of its own evidence: $(att_out | tr '\n' ' ')"
+fi
+
+# --- THE SIX REFUSALS, EACH ASSERTED ON ITS CODE --------------------------
+# On the CODE and not on the verdict, for the reason the toolchain probes give:
+# these fixtures could be refused for a dozen unrelated reasons and a bare "did
+# it refuse" would pass with or without the mechanism.
+
+ATT="$WORK/att-missing"; att_fixture "$ATT" signer
+if ! att_commit "$ATT" && att_out | grep -q 'SLH-ATTEST-MISSING'; then
+  ok "attest MISSING: role-path work under an ACTIVE spec with no attestation is refused"
+else
+  bad "attest MISSING: role-path work under an ACTIVE spec with no attestation is refused" "$(att_out | tr '\n' ' ')"
+fi
+
+ATT="$WORK/att-malformed"; att_fixture "$ATT" signer; att_sign "$ATT"
+: > "$ATT/specs/attest/0001.json"
+if ! att_commit "$ATT" && att_out | grep -q 'SLH-ATTEST-MALFORMED'; then
+  ok "attest MALFORMED: an EMPTY attestation document is refused and is never a pass"
+else
+  bad "attest MALFORMED: an EMPTY attestation document is refused and is never a pass" "$(att_out | tr '\n' ' ')"
+fi
+
+# The unparseable half of the same code, asserted apart from the empty half:
+# an empty file and a file of garbage reach the reader by different routes.
+ATT="$WORK/att-garbage"; att_fixture "$ATT" signer; att_sign "$ATT"
+printf 'this is not json at all\n' > "$ATT/specs/attest/0001.json"
+if ! att_commit "$ATT" && att_out | grep -q 'SLH-ATTEST-MALFORMED'; then
+  ok "attest MALFORMED b: an UNPARSEABLE attestation document is refused"
+else
+  bad "attest MALFORMED b: an UNPARSEABLE attestation document is refused" "$(att_out | tr '\n' ' ')"
+fi
+
+ATT="$WORK/att-unsigned"; att_fixture "$ATT" signer; att_sign "$ATT"
+rm -f "$ATT/specs/attest/0001.sig"
+if ! att_commit "$ATT" && att_out | grep -q 'SLH-ATTEST-UNSIGNED'; then
+  ok "attest UNSIGNED a: an attestation with no signature is treated exactly as an absent one"
+else
+  bad "attest UNSIGNED a: an attestation with no signature is treated exactly as an absent one" "$(att_out | tr '\n' ' ')"
+fi
+
+# The signature that EXISTS and does not verify: a different route to the same
+# refusal, and the one an attacker takes.
+ATT="$WORK/att-badsig"; att_fixture "$ATT" signer; att_sign "$ATT"
+ssh-keygen -q -t ed25519 -N "" -C other@example.test -f "$WORK/att-other" >/dev/null 2>&1
+ssh-keygen -Y sign -f "$WORK/att-other" -n setlist-attestation "$ATT/specs/attest/0001.json" >/dev/null 2>&1
+mv "$ATT/specs/attest/0001.json.sig" "$ATT/specs/attest/0001.sig" 2>/dev/null || true
+if ! att_commit "$ATT" && att_out | grep -q 'SLH-ATTEST-UNSIGNED'; then
+  ok "attest UNSIGNED b: a signature by a key that is NOT enrolled does not verify and is refused"
+else
+  bad "attest UNSIGNED b: a signature by a key that is NOT enrolled does not verify and is refused" "$(att_out | tr '\n' ' ')"
+fi
+
+# CO1'S CLASS ONE LEVEL DOWN. Perfectly valid, perfectly signed, and about a
+# DIFFERENT spec. A mechanism that checks a claim without checking its SUBJECT
+# is checking nothing, and this row exists because the publish gate learned it
+# the expensive way.
+ATT="$WORK/att-subject"; att_fixture "$ATT" signer
+att_sign "$ATT" "specs/0002-other.md" "0001"
+if ! att_commit "$ATT" && att_out | grep -q 'SLH-ATTEST-SUBJECT'; then
+  ok "attest SUBJECT: a valid, correctly SIGNED attestation naming another spec is refused"
+else
+  bad "attest SUBJECT: a valid, correctly SIGNED attestation naming another spec is refused" "$(att_out | tr '\n' ' ')"
+fi
+
+# THE THREAT ITSELF: a spec edited after approval. The attestation covers the
+# approved hash and the current bytes hash to something else.
+ATT="$WORK/att-stale"; att_fixture "$ATT" signer; att_sign "$ATT"
+# THE EDIT GOES ABOVE THE CLOSING REPORT HEADING, and the first draft of this
+# fixture did not: it appended to the END of the file, which is BELOW that
+# heading and therefore excluded from the hash by the BL-005 recipe. So this
+# case and its control were byte-for-byte the same experiment, and this one
+# reported the mechanism broken while the control reported it working. Caught
+# by running the pair rather than by reading them, which is the whole argument
+# for the control existing.
+sed -e 's/^Build the thing\./Build the OTHER thing, edited after approval./' \
+    "$ATT/specs/0001-thing.md" > "$ATT/t" && mv "$ATT/t" "$ATT/specs/0001-thing.md"
+if ! grep -q 'edited after approval' "$ATT/specs/0001-thing.md"; then
+  bad "attest STALE fixture: the drift was applied ABOVE the Closing report heading" \
+      "the fixture did not drift, so the assertion below would report on nothing"
+fi
+if ! att_commit "$ATT" && att_out | grep -q 'SLH-ATTEST-STALE'; then
+  ok "attest STALE: a spec edited AFTER approval refuses the build's commit (the threat this exists for)"
+else
+  bad "attest STALE: a spec edited AFTER approval refuses the build's commit (the threat this exists for)" "$(att_out | tr '\n' ' ')"
+fi
+
+# The control for STALE, and it is not optional: without it the assertion above
+# is satisfied by a mechanism that refuses every commit. An edit BELOW the
+# Closing report heading is excluded from the hash by the BL-005 recipe, so an
+# ordinary build append must NOT read as drift.
+ATT="$WORK/att-stale-control"; att_fixture "$ATT" signer; att_sign "$ATT"
+printf -- '- an ordinary build append\n' >> "$ATT/specs/0001-thing.md"
+if att_commit "$ATT"; then
+  ok "attest STALE control: an append BELOW the Closing report heading is not drift and still commits"
+else
+  bad "attest STALE control: an append BELOW the Closing report heading is not drift and still commits" \
+      "the mechanism cries wolf on every honest build, which is how a warning gets switched off in a day: $(att_out | tr '\n' ' ')"
+fi
+
+ATT="$WORK/att-unverifiable"; att_fixture "$ATT" signer; att_sign "$ATT"
+rm -f "$ATT/.claude/approvers.pub"
+if ! att_commit "$ATT" && att_out | grep -q 'SLH-ATTEST-UNVERIFIABLE'; then
+  ok "attest UNVERIFIABLE a: an unreadable allowed-signers file refuses, and says the check could not RUN"
+else
+  bad "attest UNVERIFIABLE a: an unreadable allowed-signers file refuses, and says the check could not RUN" "$(att_out | tr '\n' ' ')"
+fi
+
+# A HALF-CONFIGURED CHAIN IS A REFUSAL AND NOT A DEFAULT. Reachable by
+# omission is the one way this must not be reachable, because it is the worst
+# of the four custody states and the easiest to arrive at by accident.
+ATT="$WORK/att-halfconf"; att_fixture "$ATT" signer
+printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"},"attestation":{"required":true}}\n' > "$ATT/.claude/sdd.json"
+if ! att_commit "$ATT" && att_out | grep -q 'SLH-ATTEST-UNVERIFIABLE'; then
+  ok "attest UNVERIFIABLE b: required:true with no custody declared is a REFUSAL, never a default"
+else
+  bad "attest UNVERIFIABLE b: required:true with no custody declared is a REFUSAL, never a default" "$(att_out | tr '\n' ' ')"
+fi
+
+# CUSTODY C IS DECLARABLE AND ITS VERIFIER IS AN OPEN QUESTION WITH THE OWNER.
+# This assertion pins the HONEST state rather than a mechanism: declaring it
+# refuses, saying what it cannot do, which is the design's own doctrine that a
+# gate unable to evaluate its predicate denies. It is pinned in its CURRENT
+# direction so it cannot close by drift, exactly as KL4-A1's pin is.
+ATT="$WORK/att-forge"; att_fixture "$ATT" forge; att_sign "$ATT"
+if ! att_commit "$ATT" && att_out | grep -q 'SLH-ATTEST-UNVERIFIABLE'; then
+  ok "attest forge (PINNED, open with the owner): declared custody C refuses rather than passing on an unrun query"
+else
+  bad "attest forge (PINNED, open with the owner): declared custody C refuses rather than passing on an unrun query" "$(att_out | tr '\n' ' ')"
+fi
+
+# --- THE CALLING CONVENTION, ASSERTED STRUCTURALLY ------------------------
+# F3-2026's class, closed by construction rather than by vigilance. A verifier
+# that prints NOTHING must refuse, and the only honest way to assert that is to
+# break the verifier and watch what the caller does.
+ATT="$WORK/att-mute"; att_fixture "$ATT" signer; att_sign "$ATT"
+# The mute is applied by APPENDING an override rather than by editing the
+# definition, which keeps the mutation one line and keeps it obviously the
+# thing under test. A redefinition later in the file wins in shell.
+printf '\nslh_attest_verify() { return 0; }\n' >> "$ATT/.githooks/setlist-hook-lib.sh"
+if ! grep -q 'slh_attest_verify() { return 0; }' "$ATT/.githooks/setlist-hook-lib.sh"; then
+  bad "attest convention fixture: the muted verifier was installed" "the mutation did not apply, so the assertion below would test nothing"
+fi
+if ! att_commit "$ATT" && att_out | grep -q 'SLH-ATTEST-UNVERIFIABLE'; then
+  ok "attest convention: a verifier that prints NOTHING produces a REFUSAL, not an allow (the F3-2026 class)"
+else
+  bad "attest convention: a verifier that prints NOTHING produces a REFUSAL, not an allow (the F3-2026 class)" \
+      "an empty verifier result reached the allow branch, which is the empty-result-as-verdict class this convention exists to remove: $(att_out | tr '\n' ' ')"
+fi
+
+else
+  # NOT SILENTLY SKIPPED. A dependency that cannot run is reported, never
+  # quietly passed over, which is this project's own rule about its own checks.
+  bad "attest: ssh-keygen is required to exercise the integrity chain and is not usable here" \
+      "the attestation assertions did not run, so this tree carries NO evidence about the KL3 mechanism"
+fi
+
+# A9: ONE VERIFIER, and the count is pinned rather than reviewed. The advisory
+# layer gets one honest sentence and no reader of its own, which is the
+# 2026-08-28 ruling; a second definition arriving anywhere is what this catches.
+ATT_DEFS="$(grep -rl 'slh_attest_verify() {' "$ROOT/templates" "$ROOT/scripts" 2>/dev/null | grep -c . || true)"
+if [[ "$ATT_DEFS" == "1" ]]; then
+  ok "attest A9: exactly ONE file defines slh_attest_verify, and it is the git-hook library"
+else
+  bad "attest A9: exactly ONE file defines slh_attest_verify, and it is the git-hook library" \
+      "found $ATT_DEFS definitions; one rule with two readers is how the two drift apart"
+fi
+if grep -q 'slh_attest_verify() {' "$ROOT/templates/git-hooks/setlist-hook-lib.sh"; then
+  ok "attest A9b: the one definition lives in templates/git-hooks/setlist-hook-lib.sh"
+else
+  bad "attest A9b: the one definition lives in templates/git-hooks/setlist-hook-lib.sh" "it moved out of the only layer that can refuse"
+fi
+
+# THE THREE-WAY HASH LOCKSTEP. The recipe now has THREE implementations in
+# deliberate behavioural lockstep, and the count is pinned so a fourth cannot
+# arrive unasserted. Both cheaper routes are foreclosed: a shared recipe file
+# across the two hook trees is the cross-tree dependency the 2026-08-28 ruling
+# refused, and shelling out to scripts/spec-hash.sh breaks the stamped-hook
+# independence the inline copy exists to preserve. This is the price, it was
+# named in the design before the work started, and it is not optional.
+ATT_LOCK_OK=1
+ATT_LOCK_N=0
+for shl_case in "plain body" "body with - Spec-hash: decoy inside it" "body
+spanning
+several lines"; do
+  SHL="$WORK/attest-lock"; sh_fixture "$SHL" ACTIVE no "$shl_case"
+  A_SCRIPT="$(bash "$ROOT/scripts/spec-hash.sh" "$SHL/specs/0001-thing.md")"
+  A_INLINE="$(awk 'BEGIN{keep=1} /^##[[:space:]]*Closing report/{keep=0} keep' "$SHL/specs/0001-thing.md" \
+    | grep -v '^[-*+[:space:]]*Spec-hash:' | sha256sum | cut -d' ' -f1)"
+  A_HOOK="$(bash -c '. "$1" >/dev/null 2>&1; slh_attest_spec_hash "$2"' _ \
+    "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$SHL/specs/0001-thing.md" 2>/dev/null)"
+  ATT_LOCK_N=$((ATT_LOCK_N + 1))
+  [[ "$A_SCRIPT" == "$A_INLINE" && "$A_SCRIPT" == "$A_HOOK" && -n "$A_SCRIPT" ]] || ATT_LOCK_OK=0
+done
+# A8: the size of what is compared is asserted before the comparison is
+# believed. A lockstep over zero fixtures agrees with itself perfectly.
+if [[ "$ATT_LOCK_N" -eq 3 && "$ATT_LOCK_OK" -eq 1 ]]; then
+  ok "spec-hash lockstep (THREE implementations): script, regrounding hook and git-hook verifier agree on every corpus shape"
+else
+  bad "spec-hash lockstep (THREE implementations): script, regrounding hook and git-hook verifier agree on every corpus shape" \
+      "$ATT_LOCK_N of 3 shapes compared, agreement=$ATT_LOCK_OK; three copies of one recipe that disagree is how a checker and its writer drift apart"
+fi
+
+# The count itself, pinned. Three is a decision with a price attached; a fourth
+# copy arriving without this assertion being changed is the thing to catch.
+# THE MARKER IS THE FIELD EXCLUSION, not the awk range, and that is a
+# correction this assertion made to itself on its first run. The range is
+# spelled on one line in the two hooks and across three lines in
+# scripts/spec-hash.sh, so a pattern matching the compact form found 2 of 3 and
+# would have reported a missing implementation as a missing copy. The `grep -v`
+# that removes the Spec-hash field line is byte-identical in all three, which
+# is the right marker because it is the exclusion the recipe cannot work
+# without.
+ATT_HASH_RE='^[-*+[:space:]]*Spec-hash:'
+ATT_HASH_COPIES="$(grep -lF "$ATT_HASH_RE" \
+  "$ROOT/scripts/spec-hash.sh" "$ROOT/templates/hooks/regrounding-hook.sh" \
+  "$ROOT/templates/git-hooks/setlist-hook-lib.sh" 2>/dev/null | grep -c . || true)"
+ATT_HASH_ALL="$(grep -rlF "$ATT_HASH_RE" "$ROOT/scripts" "$ROOT/templates" 2>/dev/null | grep -c . || true)"
+if [[ "$ATT_HASH_COPIES" == "3" && "$ATT_HASH_ALL" == "3" ]]; then
+  ok "spec-hash lockstep count: the recipe has exactly THREE implementations, all three under lockstep"
+else
+  bad "spec-hash lockstep count: the recipe has exactly THREE implementations, all three under lockstep" \
+      "expected 3 named and 3 total, found $ATT_HASH_COPIES named and $ATT_HASH_ALL total; a fourth copy is a fourth thing that can drift"
+fi
+
+# --- THE PUSH LAYER'S ARM ---------------------------------------------------
+# The guarantee, per the enforcement boundary: a commit that never met
+# pre-commit (--no-verify, an unset core.hooksPath, the per-clone gap) is
+# caught before the work is SHARED. Every fixture below builds its history
+# with the hooks bypassed, which is the only honest way to reach this layer:
+# a fixture whose commits went through pre-commit is testing pre-commit twice.
+att_push_fixture() { # att_push_fixture <dir> <custody|off>
+  local d="$1" custody="$2"
+  att_fixture "$d" "$custody"
+  # THE ROLE-PATH WORK IS COMMITTED ON THE SPEC BRANCH AND NEVER ON main, and
+  # the ordering here is a correction rather than a preference. The first cut
+  # committed the staged work before branching, so main carried feature code
+  # that arrived through no closed spec, and the TRUNK AUDIT refused every
+  # push in this block: the control, the docs-only case and the off case all
+  # went red against bytes that have no approval arm at all. A refusal for the
+  # wrong reason is indistinguishable from the refusal under test, and it was
+  # the CONTROL going red on the pre-feature tree that said so.
+  # `git checkout -b` carries the index across, so the work follows the branch.
+  mkdir -p "$d/.claude/hooks"
+  cp "$ROOT/templates/git-hooks/pre-push" "$d/.githooks/pre-push"
+  cp "$ROOT/scripts/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  chmod +x "$d/.githooks/pre-push"
+  git init -q --bare "$d-rem.git"
+  git -C "$d" remote add origin "$d-rem.git"
+  # The remote is SEEDED so it is not empty: on an empty remote every pushed
+  # ref is a trunk candidate and is audited, so these cases would be refused
+  # for a reason that has nothing to do with approval. The fixture models the
+  # real scenario rather than the convenient one.
+  git -C "$d" -c core.hooksPath=/dev/null push -q origin main:refs/heads/main >/dev/null 2>&1
+  git -C "$d-rem.git" symbolic-ref HEAD refs/heads/main >/dev/null 2>&1
+  git -C "$d" fetch -q origin >/dev/null 2>&1
+  git -C "$d" checkout -q -b spec/0001-thing
+  git -C "$d" -c core.hooksPath=/dev/null commit -qm "work, hooks bypassed" >/dev/null 2>&1
+  # THE PREMISE THIS BLOCK RESTS ON, asserted per fixture rather than once:
+  # main must carry NO role-path content, or the trunk audit refuses every
+  # push here for a reason that is not approval.
+  if git -C "$d" ls-tree -r --name-only main 2>/dev/null | grep -q "^src/"; then
+    bad "attest push fixture: main carries no role-path content ($d)" \
+        "the trunk audit will refuse every push in this block for a reason that is not approval"
+  fi
+}
+att_push() { git -C "$1" push -q origin spec/0001-thing >"$WORK/att-push-out" 2>&1; }
+att_push_out() { cat "$WORK/att-push-out" 2>/dev/null; }
+# The work commit is made on the spec branch with hooks bypassed, so the range
+# this push publishes carries role-path content that pre-commit never saw.
+att_push_work() { # att_push_work <dir>
+  printf 'more work\n' > "$1/src/MORE.txt"
+  git -C "$1" add -A >/dev/null 2>&1
+  git -C "$1" -c core.hooksPath=/dev/null commit -qm "unapproved build, hooks bypassed" >/dev/null 2>&1
+}
+
+if [[ "$ATT_HAVE_SSH" -eq 1 ]]; then
+
+# THE FIXTURE'S OWN PREMISE, ASSERTED BEFORE ANY CASE RUNS. If the work commit
+# did not land, or landed with role-path content the range does not carry,
+# every refusal below passes while testing nothing. The opener of this cycle
+# shipped exactly that defect twice in one sitting, so the premise is checked
+# rather than assumed.
+ATTP="$WORK/attp-premise"; att_push_fixture "$ATTP" signer; att_sign "$ATTP"
+git -C "$ATTP" add -A >/dev/null 2>&1; git -C "$ATTP" -c core.hooksPath=/dev/null commit -qm attest >/dev/null 2>&1
+att_push_work "$ATTP"
+ATTP_RANGE="$(git -C "$ATTP" rev-list origin/main..spec/0001-thing 2>/dev/null | grep -c . || true)"
+ATTP_ROLE="$(git -C "$ATTP" show --name-only --format= spec/0001-thing 2>/dev/null | grep -c '^src/' || true)"
+if [[ "$ATTP_RANGE" -ge 1 && "$ATTP_ROLE" -ge 1 ]]; then
+  ok "attest push fixture: the range carries $ATTP_RANGE commit(s) and role-path content, so the arm has something to judge"
+else
+  bad "attest push fixture: the range carries $ATTP_RANGE commit(s) and role-path content, so the arm has something to judge" \
+      "range=$ATTP_RANGE role-files=$ATTP_ROLE; every push case below would pass while testing nothing"
+fi
+
+# THE CONTROL FIRST, because every refusal below is worthless without it: an
+# approved branch whose spec has not drifted must still PUSH.
+if att_push "$ATTP"; then
+  ok "attest push control: an APPROVED branch whose spec has not drifted still pushes"
+else
+  bad "attest push control: an APPROVED branch whose spec has not drifted still pushes" \
+      "the arm refuses compliant work, which is the false-denial direction and makes every case below meaningless: $(att_push_out | tr '\n' ' ')"
+fi
+
+# THE CASE THE LAYER EXISTS FOR: a build that never met pre-commit. Not a
+# contrived route, and named in Known limitations as a documented hole at
+# commit time precisely because THIS layer is what covers it.
+ATTP="$WORK/attp-missing"; att_push_fixture "$ATTP" signer
+att_push_work "$ATTP"
+if ! att_push "$ATTP" && att_push_out | grep -q 'SLH-ATTEST-MISSING'; then
+  ok "attest push MISSING: an unapproved build that bypassed pre-commit is refused BEFORE it is shared"
+else
+  bad "attest push MISSING: an unapproved build that bypassed pre-commit is refused BEFORE it is shared" "$(att_push_out | tr '\n' ' ')"
+fi
+
+# THE READING THAT DECIDES THE WHOLE ARM: the spec is drifted ONLY IN THE
+# PUSHED TREE and is clean on disk. A verifier that hashed the working copy
+# would pass this, and it would pass it for exactly the push it exists to stop.
+ATTP="$WORK/attp-tree"; att_push_fixture "$ATTP" signer; att_sign "$ATTP"
+git -C "$ATTP" add -A >/dev/null 2>&1; git -C "$ATTP" -c core.hooksPath=/dev/null commit -qm attest >/dev/null 2>&1
+sed -e 's/^Build the thing\./Build the OTHER thing, drifted in the pushed commit only./' \
+    "$ATTP/specs/0001-thing.md" > "$ATTP/t" && mv "$ATTP/t" "$ATTP/specs/0001-thing.md"
+printf 'more work\n' > "$ATTP/src/MORE.txt"
+git -C "$ATTP" add -A >/dev/null 2>&1
+git -C "$ATTP" -c core.hooksPath=/dev/null commit -qm "drift, hooks bypassed" >/dev/null 2>&1
+# Now put the WORKING COPY back to the approved bytes. The tree being pushed
+# still carries the drift; the filesystem does not.
+git -C "$ATTP" show "HEAD~1:specs/0001-thing.md" > "$ATTP/specs/0001-thing.md"
+ATTP_DISK="$(bash "$ROOT/scripts/spec-hash.sh" "$ATTP/specs/0001-thing.md")"
+ATTP_DOC="$(jq -r .spec_hash "$ATTP/specs/attest/0001.json" 2>/dev/null)"
+if [[ "$ATTP_DISK" == "$ATTP_DOC" ]]; then
+  ok "attest push tree fixture: the working copy MATCHES the approval, so only the pushed tree is drifted"
+else
+  bad "attest push tree fixture: the working copy MATCHES the approval, so only the pushed tree is drifted" \
+      "disk=$ATTP_DISK doc=$ATTP_DOC; the case below would not distinguish a tree reader from a disk reader"
+fi
+if ! att_push "$ATTP" && att_push_out | grep -q 'SLH-ATTEST-STALE'; then
+  ok "attest push STALE: a spec drifted ONLY in the pushed tree is refused, so the arm reads the tree and not the disk"
+else
+  bad "attest push STALE: a spec drifted ONLY in the pushed tree is refused, so the arm reads the tree and not the disk" \
+      "a clean working copy satisfied a check about bytes nobody is publishing: $(att_push_out | tr '\n' ' ')"
+fi
+
+# A DOCS-ONLY PUSH CARRIES NO BUILD TO APPROVE. Without this the mechanism is a
+# toll on every commit rather than a gate on building, which is the direction
+# that gets a gate switched off.
+ATTP="$WORK/attp-docs"; att_push_fixture "$ATTP" signer
+# THE BRANCH IS RESET TO THE TRUNK FIRST, because att_push_fixture lands the
+# role-path work commit on it and a "docs-only" branch that carries a build is
+# not the case under test. Found by running it: the assertion went red against
+# the finished arm, and the arm was right. The range has to be docs-only for
+# the words to mean anything.
+git -C "$ATTP" reset -q --hard origin/main
+printf 'notes\n' > "$ATTP/NOTES.md"
+git -C "$ATTP" add -A >/dev/null 2>&1
+git -C "$ATTP" -c core.hooksPath=/dev/null commit -qm "docs only" >/dev/null 2>&1
+ATTP_DOCS_ROLE="$(git -C "$ATTP" diff --name-only origin/main..HEAD 2>/dev/null | grep -c '^src/' || true)"
+if [[ "$ATTP_DOCS_ROLE" != "0" ]]; then
+  bad "attest push docs fixture: the range carries NO role-path content" \
+      "found $ATTP_DOCS_ROLE role-path file(s), so this is not the docs-only case it claims to be"
+fi
+if att_push "$ATTP"; then
+  ok "attest push scope: a push carrying NO role-path content needs no approval and is allowed"
+else
+  bad "attest push scope: a push carrying NO role-path content needs no approval and is allowed" \
+      "a docs-only push was refused, which makes this a toll on every commit rather than a gate on building: $(att_push_out | tr '\n' ' ')"
+fi
+
+# OFF IS OFF AT THIS LAYER TOO, and it is asserted here rather than inferred
+# from the commit layer: two layers, two readers of the same declaration.
+ATTP="$WORK/attp-push-off"; att_push_fixture "$ATTP" off
+att_push_work "$ATTP"
+if att_push "$ATTP" && ! att_push_out | grep -q 'SLH-ATTEST'; then
+  ok "attest push off: an instance declaring no attestation pushes with NO attestation output at all"
+else
+  bad "attest push off: an instance declaring no attestation pushes with NO attestation output at all" "$(att_push_out | tr '\n' ' ')"
+fi
+
+# THE ALLOWED-SIGNERS FILE IS READ FROM THE PUSHED TREE TOO. Enrolment is a
+# commit, so judging a push against whatever this clone has checked out would
+# let a key removed in the pushed range still verify, or refuse a key the push
+# itself enrols. Asserted in the direction that publishes.
+ATTP="$WORK/attp-enrol"; att_push_fixture "$ATTP" signer; att_sign "$ATTP"
+git -C "$ATTP" add -A >/dev/null 2>&1; git -C "$ATTP" -c core.hooksPath=/dev/null commit -qm attest >/dev/null 2>&1
+git -C "$ATTP" rm -q --cached .claude/approvers.pub >/dev/null 2>&1
+printf 'more work\n' > "$ATTP/src/MORE.txt"
+git -C "$ATTP" add src >/dev/null 2>&1
+git -C "$ATTP" -c core.hooksPath=/dev/null commit -qm "drop the enrolled key from the tree" >/dev/null 2>&1
+if ! att_push "$ATTP" && att_push_out | grep -q 'SLH-ATTEST-UNVERIFIABLE'; then
+  ok "attest push enrolment: the allowed-signers file is read from the PUSHED tree, so a push that drops it cannot verify"
+else
+  bad "attest push enrolment: the allowed-signers file is read from the PUSHED tree, so a push that drops it cannot verify" \
+      "the check used this clone's checked-out keys to judge a tree that does not contain them: $(att_push_out | tr '\n' ' ')"
+fi
+
+fi
+
+# THE HELPER AND THE VERIFIER, ROUND TRIP. The writer and the checker are
+# different programs in different trees, and "they agree" is the claim that
+# matters and the one nothing else here makes: every other assertion builds its
+# attestation with the test's own signing code, which proves the VERIFIER works
+# and says nothing about what /setlist:checkpoint actually writes. This drives
+# scripts/spec-attest.sh and then asks the git-hook library's verifier.
+if [[ "$ATT_HAVE_SSH" -eq 1 ]]; then
+  ATTH="$WORK/attest-helper"; att_fixture "$ATTH" signer
+  ssh-keygen -q -t ed25519 -N "" -C helper@example.test -f "$WORK/att-helper-key" >/dev/null 2>&1
+  printf 'helper@example.test %s\n' "$(cat "$WORK/att-helper-key.pub")" > "$ATTH/.claude/approvers.pub"
+  ( cd "$ATTH" && bash "$ROOT/scripts/spec-attest.sh" specs/0001-thing.md \
+      --key "$WORK/att-helper-key" --approver helper@example.test ) >"$WORK/att-helper.out" 2>&1
+  ATTH_TOK="$(bash -c '. "$1" >/dev/null 2>&1; slh_attest_load "$2" >/dev/null 2>&1; slh_attest_verify "$2" "specs/0001-thing.md"' \
+      _ "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ATTH" 2>/dev/null)"
+  if [[ -f "$ATTH/specs/attest/0001.json" && -f "$ATTH/specs/attest/0001.sig" && "$ATTH_TOK" == "VERIFIED" ]]; then
+    ok "attest round trip: what scripts/spec-attest.sh WRITES is what the git-hook verifier ACCEPTS"
+  else
+    bad "attest round trip: what scripts/spec-attest.sh WRITES is what the git-hook verifier ACCEPTS" \
+        "token=[$ATTH_TOK]; the writer and the checker disagree, which is the one defect no single-sided test can see: $(head -3 "$WORK/att-helper.out" | tr '\n' ' ')"
+  fi
+
+  # THE HELPER REFUSES TO WRITE WHAT NOTHING WILL ACCEPT. Under the custody
+  # ruled designed-and-not-built, a signed document would be a file that looks
+  # like an approval and is refused at every layer, which is worse than an
+  # error message because it looks done.
+  ATTH2="$WORK/attest-helper-forge"; att_fixture "$ATTH2" forge
+  ( cd "$ATTH2" && bash "$ROOT/scripts/spec-attest.sh" specs/0001-thing.md \
+      --key "$WORK/att-helper-key" --approver helper@example.test ) >"$WORK/att-helper2.out" 2>&1
+  if [[ ! -f "$ATTH2/specs/attest/0001.json" ]] && grep -q 'DESIGNED AND NOT BUILT' "$WORK/att-helper2.out"; then
+    ok "attest helper: under forge custody it writes NOTHING and says why, rather than signing an unacceptable document"
+  else
+    bad "attest helper: under forge custody it writes NOTHING and says why, rather than signing an unacceptable document" \
+        "$(head -3 "$WORK/att-helper2.out" | tr '\n' ' ')"
+  fi
+fi
+
+# F1-2026, PINNED IN ITS CURRENT DIRECTION AND NOT CLOSED (2.3.0 leg, F1).
+#
+# The NPAR<2 arm of the trunk audit sets LIN_CLOSED_OK on one compliant STATUS
+# row flip and then short-circuits the role-path question for the ENTIRE commit.
+# So a single-parent trunk commit that closes any spec may also carry feature
+# code belonging to a spec that is still open, and the push succeeds.
+#
+# DEFERRED BY OWNER RULING 2026-08-29, together with the chore half, because the
+# obvious narrow fix was MEASURED not to work: a squash has no parent carrying
+# its legitimate content, so the merge arm's provenance question cannot separate
+# an honest squash close from this one. Both look identical to it: one spec file
+# and one role-path file, added, in no parent. Separating them needs a recorded
+# fact this framework does not keep.
+#
+# This asserts the hole AS IT IS, with the negative control beside it, so the
+# public bullet cannot go stale in either direction: if someone fixes the arm,
+# this goes red and the bullet moves in the same commit.
+F1P="$WORK/f1-pin"; rm -rf "$F1P"; mkdir -p "$F1P/src" "$F1P/specs" "$F1P/.claude"
+git_init "$F1P"
+printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$F1P/.claude/sdd.json"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0004 | wip | ACTIVE | in progress |\n| 0005 | docs | ACTIVE | in progress |\n' > "$F1P/specs/STATUS.md"
+printf 'base\n' > "$F1P/base.txt"
+git -C "$F1P" add -A >/dev/null 2>&1; git -C "$F1P" commit -qm seed >/dev/null 2>&1
+F1P_BASE="$(git -C "$F1P" rev-parse HEAD)"
+git -C "$F1P" checkout -q -b spec/0004-wip
+printf 'work in progress; 0004 is still ACTIVE\n' > "$F1P/src/wip.txt"
+git -C "$F1P" add -A >/dev/null 2>&1; git -C "$F1P" commit -qm 'wip on 0004' >/dev/null 2>&1
+git -C "$F1P" checkout -q main
+printf '# Spec 0005\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\nsmoke: PASS\n```\n' > "$F1P/specs/0005-docs.md"
+sed -e 's/| 0005 | docs | ACTIVE | in progress |/| 0005 | docs | CLOSED | done |/' "$F1P/specs/STATUS.md" > "$F1P/t" && mv "$F1P/t" "$F1P/specs/STATUS.md"
+git -C "$F1P" checkout spec/0004-wip -- src/wip.txt 2>/dev/null
+git -C "$F1P" add -A >/dev/null 2>&1; git -C "$F1P" commit -qm 'close spec 0005' >/dev/null 2>&1
+F1P_OUT="$(bash "$ROOT/scripts/trunk-audit.sh" --instance "$F1P" --since "$F1P_BASE" 2>&1)"
+# THE NEGATIVE CONTROL FIRST: the same injected file with NO row flip must be
+# refused. Without it this pin passes against an audit that refuses nothing.
+F1C="$WORK/f1-ctl"; rm -rf "$F1C"; cp -R "$F1P" "$F1C"
+git -C "$F1C" reset -q --hard HEAD~1
+git -C "$F1C" checkout spec/0004-wip -- src/wip.txt 2>/dev/null
+git -C "$F1C" add -A >/dev/null 2>&1; git -C "$F1C" commit -qm 'no close, same file' >/dev/null 2>&1
+F1C_OUT="$(bash "$ROOT/scripts/trunk-audit.sh" --instance "$F1C" --since "$F1P_BASE" 2>&1)"
+if printf '%s' "$F1C_OUT" | grep -q 'VIOLATION'; then
+  ok "F1-2026 control: the same injected file WITHOUT a close is still refused"
+else
+  bad "F1-2026 control: the same injected file WITHOUT a close is still refused" \
+      "the audit refuses nothing here, so the pin below would pass against a dead check"
+fi
+if printf '%s' "$F1P_OUT" | grep -q '0 violations'; then
+  ok "F1-2026 (PINNED, deferred to 2.4.0's intake): a single-parent close is content-exempt, exactly as the public bullet says"
+else
+  bad "F1-2026 (PINNED, deferred to 2.4.0's intake): a single-parent close is content-exempt, exactly as the public bullet says" \
+      "the exemption has changed; if it was FIXED, move the public bullet and this pin in the same commit"
+fi
+
+# LEG F4 (scaffolded evaluated as a boolean) IS DEFERRED, NOT FIXED, and this
+# pin records the hole in its CURRENT direction so it cannot close by drift.
+#
+# The fix is one line and it was WRITTEN and then CUT, on the owner's round-1
+# rule that a fix wanting to grow beyond its narrow shape defers instead. It
+# grew for a reason worth recording, because two standing rules point opposite
+# ways here:
+#
+#   A2's trigger says a NEW deny code is a changed QUESTION and costs a full
+#   leg. The publish-time attestation gate refused the round for exactly that
+#   when the fix raised SH-SCAFFOLDED-SHAPE.
+#
+#   The suite says two denials sharing a code cannot be told apart. Re-scoping
+#   onto the existing SH-SDD-SHAPE to dodge the trigger tripped THAT instead.
+#
+# So the narrow fix does not exist at this size: it needs either a new
+# identifier (a leg) or a shared one (an indistinguishable denial). That is
+# F3-2026's situation at 2.2.0 exactly, and it takes F3-2026's answer: cut,
+# park the patch with its entry, reinstate next cycle. The patch is in the
+# backlog so the next session reinstates rather than rediscovers.
+SCFP="$WORK/scaffold-pin"; rm -rf "$SCFP"; mkdir -p "$SCFP/src" "$SCFP/specs" "$SCFP/.claude"
+git_init "$SCFP"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$SCFP/specs/STATUS.md"
+printf '{"trunk":"main","scaffolded":true,"roles":{"src":"src","tests":"tests"}}\n' > "$SCFP/.claude/sdd.json"
+run_hook "$HOOKS/scope-hook.sh" "$SCFP" "$(jq -nc --arg p "$SCFP/src/x.js" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"}}')"
+if printf '%s' "$HOOK_OUT" | grep -q 'SH-TRUNK-WRITE'; then
+  ok "scaffolded control: a boolean true arms the trunk-write gate"
+else
+  bad "scaffolded control: a boolean true arms the trunk-write gate" "the gate is dead, so the pin below would prove nothing"
+fi
+printf '{"trunk":"main","scaffolded":"yes","roles":{"src":"src","tests":"tests"}}\n' > "$SCFP/.claude/sdd.json"
+run_hook "$HOOKS/scope-hook.sh" "$SCFP" "$(jq -nc --arg p "$SCFP/src/x.js" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"}}')"
+if [[ -z "$HOOK_OUT" ]]; then
+  ok "leg F4 (PINNED, deferred): a non-boolean scaffolded still stands the gate down silently, as the public bullet will say"
+else
+  bad "leg F4 (PINNED, deferred): a non-boolean scaffolded still stands the gate down silently, as the public bullet will say" \
+      "the behaviour changed; if it was FIXED, move this pin and the public bullet in the same commit"
+fi
+
+# THE HEADER STRIP IS POSITIONAL, NOT SHAPED (2.3.0 leg, F3 and F5).
+#
+# A unified diff prefixes every added line with one `+`, so an added line whose
+# CONTENT begins `++ b/` arrives as `+++ b/...` and is indistinguishable by
+# SHAPE from the diff's own file header. The strip was anchored to the header's
+# shape, so it ate the content: a secret on such a line passed both the
+# guarantee layer and the advisory gate at rc=0, silently.
+#
+# The rule that fixes it is positional and it is git's own: a `+++` line is a
+# HEADER only outside a hunk. Once `@@` has been seen, every `+` line is
+# content, whatever it looks like. The scoped scan already worked this way,
+# which is why this defect lived only in the unscoped branch and in the
+# advisory gate's private copy.
+#
+# Asserted on the CODE at the git-hook layer and on the DENIAL at the advisory
+# layer, with a clean twin at each so the fix cannot pass by refusing
+# everything.
+SCANHDR="$WORK/scan-hdr"; rm -rf "$SCANHDR"; mkdir -p "$SCANHDR/src" "$SCANHDR/specs" "$SCANHDR/.claude" "$SCANHDR/.githooks"
+git_init "$SCANHDR"
+printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$SCANHDR/.claude/sdd.json"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$SCANHDR/specs/STATUS.md"
+cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$SCANHDR/.githooks/"
+chmod +x "$SCANHDR/.githooks/pre-commit"
+printf 'seed\n' > "$SCANHDR/seed.txt"
+git -C "$SCANHDR" add -A >/dev/null 2>&1
+git -C "$SCANHDR" -c core.hooksPath=/dev/null commit -qm seed >/dev/null 2>&1
+git -C "$SCANHDR" config core.hooksPath .githooks
+
+# The payload: a secret on a line whose content begins `++ b/`.
+printf '++ b/decoy\nconst t = "ghp_abcdefghijklmnop1234"\n' > "$SCANHDR/src/evil.txt"
+# Put the secret ON the `++ b/` line itself, which is the exact shape.
+printf '++ b/x api_key = "abcdefghijklmnop1234"\n' > "$SCANHDR/src/evil.txt"
+git -C "$SCANHDR" add -A >/dev/null 2>&1
+if git -C "$SCANHDR" commit -qm "header-shaped secret" >"$WORK/scanhdr.out" 2>&1; then
+  bad "scan header F3: a secret on an added line beginning '++ b/' is REFUSED at the git-hook layer" \
+      "it committed clean: the header strip ate the content line, so the scan read nothing and reported nothing"
+else
+  if grep -q 'SLH-SECRET' "$WORK/scanhdr.out"; then
+    ok "scan header F3: a secret on an added line beginning '++ b/' is REFUSED at the git-hook layer"
+  else
+    bad "scan header F3: a secret on an added line beginning '++ b/' is REFUSED at the git-hook layer" \
+        "refused for another reason: $(tr '\n' ' ' < "$WORK/scanhdr.out")"
+  fi
+fi
+# THE CLEAN TWIN: an ordinary `++ b/` line with no secret must still commit, so
+# the fix is a scan and not a ban on a spelling.
+git -C "$SCANHDR" reset -q HEAD -- . 2>/dev/null
+printf '++ b/x just an ordinary line\n' > "$SCANHDR/src/evil.txt"
+git -C "$SCANHDR" add -A >/dev/null 2>&1
+if git -C "$SCANHDR" commit -qm "header-shaped clean" >"$WORK/scanhdr2.out" 2>&1; then
+  ok "scan header F3 twin: an ordinary line beginning '++ b/' still commits, so the fix scans rather than bans"
+else
+  bad "scan header F3 twin: an ordinary line beginning '++ b/' still commits, so the fix scans rather than bans" \
+      "$(tr '\n' ' ' < "$WORK/scanhdr2.out")"
+fi
+
+# THE ADVISORY LAYER'S OWN COPY (leg F5), asserted on its code.
+SCANHDR2="$WORK/scan-hdr-adv"; rm -rf "$SCANHDR2"; mkdir -p "$SCANHDR2/src" "$SCANHDR2/specs" "$SCANHDR2/.claude"
+git_init "$SCANHDR2"
+printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$SCANHDR2/.claude/sdd.json"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$SCANHDR2/specs/STATUS.md"
+printf 'seed\n' > "$SCANHDR2/seed.txt"
+git -C "$SCANHDR2" add -A >/dev/null 2>&1; git -C "$SCANHDR2" commit -qm seed >/dev/null 2>&1
+printf '++ b/x api_key = "abcdefghijklmnop1234"\n' > "$SCANHDR2/src/evil.txt"
+git -C "$SCANHDR2" add -A >/dev/null 2>&1
+run_hook "$HOOKS/commit-gate.sh" "$SCANHDR2" "$(bash_payload 'git commit -m x')"
+expect_deny "scan header F5: the advisory gate names a secret on an added line beginning '++ b/'" "CM-SECRET"
+
+# THE BLOB-PINNED DIFFERENTIAL: off is byte-identical, PROVEN rather than said.
+#
+# The KL3 banner claims that an instance declaring no attestation behaves
+# exactly as one that never heard of the feature. That claim was NARROWED when
+# the claims sweep flagged it, because what the suite proved was only the
+# behavioural half (the off path emits nothing and commits). This is the other
+# half, and it is KL4's method: pin the PRE-FEATURE hook blobs, run both
+# generations over the same cases, and compare stdout, stderr and exit code
+# byte for byte. Absence proven identical rather than asserted.
+#
+# A8: the case count is asserted before the agreement is believed. Two
+# generations that were never run over anything agree perfectly.
+DIFFPRE="$ROOT/test/fixtures/pre-attest-hooks"
+if [[ ! -d "$DIFFPRE" ]]; then
+  ok "attest differential: SKIPPED, the pre-feature hook blobs are not present in this tree (export copy)"
+else
+  DIFFD="$WORK/attest-diff"; rm -rf "$DIFFD"; mkdir -p "$DIFFD"
+  DIFF_N=0; DIFF_BAD=""
+  for diff_case in clean emdash secret lifecycle; do
+    for diff_gen in pre now; do
+      d="$DIFFD/$diff_case-$diff_gen"
+      rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude" "$d/.githooks"
+      git_init "$d"
+      # NO attestation block at all: this is custody D, the honest zero.
+      printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+      printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | ACTIVE | wip |\n' > "$d/specs/STATUS.md"
+      printf '# Spec 0001\n\nStatus: ACTIVE\n' > "$d/specs/0001-thing.md"
+      if [[ "$diff_gen" == "pre" ]]; then
+        cp "$DIFFPRE/pre-commit" "$DIFFPRE/setlist-hook-lib.sh" "$d/.githooks/"
+      else
+        cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
+      fi
+      chmod +x "$d/.githooks/pre-commit"
+      printf 'seed\n' > "$d/seed.txt"
+      git -C "$d" add -A >/dev/null 2>&1
+      git -C "$d" -c core.hooksPath=/dev/null commit -qm seed >/dev/null 2>&1
+      git -C "$d" config core.hooksPath .githooks
+      case "$diff_case" in
+        clean)     printf 'ordinary work\n' > "$d/src/app.js" ;;
+        emdash)    printf 'a %s b\n' "$EMDASH" > "$d/src/app.js" ;;
+        secret)    printf 'const token = "ghp_abcdefghijklmnop1234"\n' > "$d/src/app.js" ;;
+        lifecycle) printf 'work\n' > "$d/src/app.js"; printf '# Spec 0001\n\nStatus: BUILT\n' > "$d/specs/0001-thing.md" ;;
+      esac
+      git -C "$d" add -A >/dev/null 2>&1
+      git -C "$d" commit -qm "case $diff_case" >"$DIFFD/$diff_case-$diff_gen.out" 2>&1
+      printf 'exit=%s\n' "$?" >> "$DIFFD/$diff_case-$diff_gen.out"
+    done
+    DIFF_N=$((DIFF_N + 1))
+    if ! cmp -s "$DIFFD/$diff_case-pre.out" "$DIFFD/$diff_case-now.out"; then
+      DIFF_BAD="$DIFF_BAD $diff_case"
+    fi
+  done
+  if [[ "$DIFF_N" -eq 4 && -z "$DIFF_BAD" ]]; then
+    ok "attest differential: with NO attestation declared, all 4 cases are byte-identical between the pre-feature and current hooks"
+  else
+    bad "attest differential: with NO attestation declared, all 4 cases are byte-identical between the pre-feature and current hooks" \
+        "$DIFF_N of 4 cases compared, differing:${DIFF_BAD:- none}; off must mean off, and this is the half a behavioural assertion cannot reach"
+  fi
+fi
+
+# CO1: THE CITED LEG MUST BE A LEG OF THIS RELEASE, asserted at last.
+#
+# The refusal itself was bought by the owner ruling of 2026-08-21 and has been
+# in the shipped bytes since. What was missing is this: nothing asserted it, so
+# the file's own residual comment went on describing the hole for a week after
+# it closed, CO1 was filed against that comment, and the 2026-08-28 ruling
+# bought a refusal that already existed. A property that is true and unwatched
+# is how that happens, and the assertion is the part that stops it happening
+# again rather than the extraction being the part that fixed anything.
+#
+# Driven against the SHIPPED predicate, extracted from attestation-check.sh
+# rather than reimplemented, for the reason the CI scope check gives: a copy
+# drifts and then the test asserts things about a function that is no longer the
+# one running.
+CO1SH="$ROOT/publish/attestation-check.sh"
+if [[ ! -f "$CO1SH" ]]; then
+  ok "CO1 leg-of-this-release: SKIPPED, publish/ is absent (expected in the public repo)"
+else
+  CO1D="$WORK/co1"; rm -rf "$CO1D"; mkdir -p "$CO1D"
+  awk '/^is_leg_of\(\) \{/,/^\}/' "$CO1SH" > "$CO1D/pred.sh"
+  if [[ ! -s "$CO1D/pred.sh" ]]; then
+    bad "CO1 leg-of-this-release: is_leg_of was extracted from attestation-check.sh" \
+        "could not extract the predicate, so this check cannot run, which is a failure rather than a pass"
+  else
+    printf 'HOSTILE-REVIEW: 2.2.0 PASS\nRESOLVED-TREE: abc\n' > "$CO1D/stale.md"
+    printf 'HOSTILE-REVIEW: 2.3.0 PASS\nRESOLVED-TREE: abc\n' > "$CO1D/same.md"
+    printf 'HOSTILE-REVIEW: 2.3.0 PASS-WITH-FINDINGS\nRESOLVED-TREE: abc\n' > "$CO1D/round2.md"
+    co1_run() { bash -c 'refused_family() { :; }; . "$1"; if is_leg_of "$2" "$3"; then echo ACCEPT; else echo REFUSE; fi' _ "$CO1D/pred.sh" "$1" "$2" 2>/dev/null; }
+    # THE CASE THAT HAD TO STOP: an older release's leg, with its smaller
+    # finding list, satisfying coverage for this release.
+    if [[ "$(co1_run "$CO1D/stale.md" 2.3.0)" == "REFUSE" ]]; then
+      ok "CO1: a leg attesting a PRIOR release is refused as this release's cited leg"
+    else
+      bad "CO1: a leg attesting a PRIOR release is refused as this release's cited leg" \
+          "a record could satisfy replay coverage over a finding list that is not this release's"
+    fi
+    # THE CASE THAT HAD TO KEEP WORKING, and the reason the ruling scoped itself
+    # to the version string ALONE: a fix round cites the leg that reviewed the
+    # PREVIOUS CANDIDATE of the same release, which is the ordinary shape.
+    if [[ "$(co1_run "$CO1D/same.md" 2.3.0)" == "ACCEPT" && "$(co1_run "$CO1D/round2.md" 2.3.0)" == "ACCEPT" ]]; then
+      ok "CO1 control: a SAME-version leg, including PASS-WITH-FINDINGS, is still accepted"
+    else
+      bad "CO1 control: a SAME-version leg, including PASS-WITH-FINDINGS, is still accepted" \
+          "the refusal is over-wide and would refuse a round-2 record citing candidate 1's leg, which is the cost the ruling scoped itself to avoid"
+    fi
+  fi
+fi
+
+# A9 AT THE PUSH LAYER: the range arm has exactly one definition and pre-push
+# reaches the predicate through it rather than asking its own way. Three
+# content-seeing layers already reach the scan through one function; this
+# pins the same property for the approval check before a second reader exists.
+ATTW_DEFS="$(grep -rl 'slh_attest_walk() {' "$ROOT/templates" "$ROOT/scripts" 2>/dev/null | grep -c . || true)"
+ATTW_CALL="$(grep -c 'slh_attest_walk ' "$ROOT/templates/git-hooks/pre-push" 2>/dev/null || true)"
+if [[ "$ATTW_DEFS" == "1" && "$ATTW_CALL" -ge 1 ]]; then
+  ok "attest push A9: one definition of slh_attest_walk, and pre-push reaches the predicate through it"
+else
+  bad "attest push A9: one definition of slh_attest_walk, and pre-push reaches the predicate through it" \
+      "definitions=$ATTW_DEFS callers-in-pre-push=$ATTW_CALL"
+fi
+
 # =============================================================================
 # OWNERSHIP IS WHAT EXECUTES, ASKED WHEREVER HOOKS LIVE (2.0.0 leg, F2+F6).
 #
@@ -8060,12 +9048,42 @@ no impact
 updated in this commit
 updated in this commit (added <auth> box)
 no impact; the a < b case is unchanged
-Foo<T> generic added, updated in this commit
 DIAGOK
-if [[ -z "$DIAG_MERGE_BAD" && -z "$DIAG_AUDIT_BAD" ]]; then
-  ok "diagram value a: an ANSWERED field is accepted whatever else the line contains"
+# THE ANSWER MUST COME FIRST (F6-2026, 2.3.0 round 1), and one shape MOVED out
+# of the corpus above to here rather than being dropped quietly.
+#
+# The field was matched with an UNANCHORED grep, so a line stating the OPPOSITE
+# of an answer satisfied it. The fix anchors the answer to the START of the
+# field's value, which keeps every documented shape (an answer with a
+# parenthetical, an answer with a trailing clause) and refuses two: a line that
+# merely CONTAINS an answer somewhere, and a line that contradicts one.
+#
+# `Foo<T> generic added, updated in this commit` was in the accepted corpus and
+# is now refused. That is a real contract change and it is asserted here rather
+# than left implicit: the field answers a question, so the answer goes first,
+# and commentary follows it.
+DIAG_FIRST_BAD=""
+while IFS= read -r dv; do
+  [[ -n "$dv" ]] || continue
+  dva="$(printf '%s' "$dv" | sed 's/<[^>]*>//g' | sed 's/^[[:space:]]*//')"
+  if printf '%s' "$dva" | grep -qE '^(updated in this commit|no impact)([^A-Za-z]|$)'; then
+    DIAG_FIRST_BAD="$DIAG_FIRST_BAD [$dv]"
+  fi
+done <<'DIAGNO'
+this is NOT no impact, revisit it later
+Foo<T> generic added, updated in this commit
+revisit the diagram: the auth box is wrong
+DIAGNO
+if [[ -z "$DIAG_FIRST_BAD" ]]; then
+  ok "diagram value a2 (F6-2026): a line that merely CONTAINS or CONTRADICTS an answer does not satisfy the field"
 else
-  bad "diagram value a: an ANSWERED field is accepted whatever else the line contains" \
+  bad "diagram value a2 (F6-2026): a line that merely CONTAINS or CONTRADICTS an answer does not satisfy the field" \
+      "these still satisfied it:$DIAG_FIRST_BAD"
+fi
+if [[ -z "$DIAG_MERGE_BAD" && -z "$DIAG_AUDIT_BAD" ]]; then
+  ok "diagram value a: an answer with trailing commentary is accepted; the answer must come FIRST"
+else
+  bad "diagram value a: an answer with trailing commentary is accepted; the answer must come FIRST" \
       "merge refused:${DIAG_MERGE_BAD:- none}  audit flagged:${DIAG_AUDIT_BAD:- none}; a '<' in prose is not the unfilled template"
 fi
 
@@ -10335,8 +11353,11 @@ fi
 # the field reader: every 'Architecture diagram:' reader, in all three lockstep
 # files, must pipe through the rule, so a fourth sibling cannot be blind by
 # default. A new raw field reader fails here before a leg prices it.
-DIAG_RAW="$(grep -rnE "Architecture diagram:'.*tail -n1" "$HOOKS/close-gate.sh" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh" | grep -v 'SLH_LIVE_TEXT_AWK' || true)"
-DIAG_COUNT="$(grep -rcE "Architecture diagram:'.*tail -n1" "$HOOKS/close-gate.sh" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh" | awk -F: '{s+=$2} END{print s+0}')"
+# The selection moved from `tail -n1` to `head -n1` at KL1's ruling (2026-08-29,
+# first-match), so this pin's own pattern moved with it. The PROPERTY is
+# unchanged and is the point: every reader pipes through the live-text rule.
+DIAG_RAW="$(grep -rnE "Architecture diagram:'.*head -n1" "$HOOKS/close-gate.sh" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh" | grep -v 'SLH_LIVE_TEXT_AWK' || true)"
+DIAG_COUNT="$(grep -rcE "Architecture diagram:'.*head -n1" "$HOOKS/close-gate.sh" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh" | awk -F: '{s+=$2} END{print s+0}')"
 if [[ -z "$DIAG_RAW" && "$DIAG_COUNT" -eq 4 ]]; then
   ok "live text h: every Architecture-diagram field reader (4, across the three lockstep files) routes through the live-text rule"
 else
@@ -11185,16 +12206,21 @@ c1: PASS
 # UNCLOSED comment REFUSES rather than swallowing to EOF, which closes the
 # one case a line reader cannot otherwise resolve (a comment opened inside a
 # list item) in the fail-safe direction.
-qa_atx_case "backtick-info-not-a-fence" malformed '## Closing report
-
-```qa-pass-1
-smoke: PASS
-```
+# REORDERED FOR FIRST-BLOCK-WINS (F7-2026, ruled 2026-08-29), not just re-graded.
+# These two shapes used a good first block and a bad SECOND one, so under
+# last-block-wins the second decided and the case read `malformed`. Under
+# first-block-wins a trailing block cannot decide anything, so simply flipping
+# the expectation to `ok` would have left the construction under test unable to
+# change the answer: a green labelled with the verdict instead of the evidence.
+# The construction now comes BEFORE the only real verdict, which is where it can
+# still discriminate: read as a fence opener, it would mis-scope and the reader
+# would not say `ok`.
+qa_atx_case "backtick-info-not-a-fence" ok '## Closing report
 
 ```` ```qa-pass-1 ```` is the fence you need.
 
 ```qa-pass-1
-smoke: it regressed
+smoke: PASS
 ```'
 qa_atx_case "backtick-info-nested-not-promoted" none '## Closing report
 
@@ -11222,16 +12248,35 @@ QA Pass 1 has not been run yet.
 ```qa-pass-1
 example: PASS
 ```'
-qa_atx_case "indented-comment-is-content" malformed '## Closing report
+qa_atx_case "indented-comment-is-content" ok '## Closing report
+
+    <!-- reviewer note kept verbatim in a code block
+
+```qa-pass-1
+smoke: PASS
+```'
+
+# F7-2026's DIRECTION, asserted both ways. A trailing block cannot replace a
+# real verdict, and a MALFORMED first block is not rescued by a good second.
+qa_atx_case "first-block-wins-example-after" ok '## Closing report
 
 ```qa-pass-1
 smoke: PASS
 ```
 
-    <!-- reviewer note kept verbatim in a code block
+An illustrative block, which is not a verdict:
 
 ```qa-pass-1
-smoke: regressed
+this line is prose
+```'
+qa_atx_case "first-block-wins-bad-first" malformed '## Closing report
+
+```qa-pass-1
+this line is prose
+```
+
+```qa-pass-1
+smoke: PASS
 ```'
 qa_atx_case "unclosed-comment-refuses" unclosed-comment '## Closing report
 
@@ -11263,9 +12308,9 @@ Appendix
 criterion: PASS
 ```'
 if [[ -z "$QA_ATX_BAD" ]]; then
-  ok "qa heading corpus: ordinary #-prose is content, real headings still scope, 30 shapes"
+  ok "qa heading corpus: ordinary #-prose is content, real headings still scope, 31 shapes"
 else
-  bad "qa heading corpus: ordinary #-prose is content, real headings still scope, 30 shapes" \
+  bad "qa heading corpus: ordinary #-prose is content, real headings still scope, 31 shapes" \
       "the reader and markdown disagree about what a heading is:$QA_ATX_BAD"
 fi
 

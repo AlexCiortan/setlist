@@ -63,8 +63,24 @@ deny() { advise "$1"; }
 
 # Advise with a fixed literal reason, for the paths where jq is unavailable to
 # escape one. The text must contain no double quotes, backslashes, or newlines.
+#
+# THE CODE IS EXTRACTED HERE TOO (F11-2026), and the reason this went three legs
+# unfixed is worth stating: it never blocks. This function hardcoded `"code":""`
+# while the gates' own frozen header promises
+# `setlistAdvisory {gate, verdict, code, reason}`, so every literal-reason deny
+# emitted a contract violation that nothing failed on. 1.1.0's adversarial review
+# filed it as F21, 2.0.0's filed it as F12 with a full reproduction against a
+# jq-less PATH, and it survived both for the same reason: a defect whose only
+# consequence is a wrong field in a JSON object nobody asserts on is a defect
+# with no way to make itself felt. The suite now asserts .setlistAdvisory.code
+# rather than the reason text, which is what makes a fourth rediscovery
+# impossible rather than unlikely.
+#
+# The extraction is sed, deliberately the SAME expression advise() uses, and it
+# cannot use jq: this whole path exists because jq is unavailable.
 advise_literal() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"commit","verdict":"deny","code":"","reason":"%s"}}\n' "$1" "$1" "$1"
+  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"commit","verdict":"deny","code":"%s","reason":"%s"}}\n' "$1" "$1" "$ADV_CODE" "$1"
   # fail-open-ok: advisory by design; see advise() above.
   exit 0
 }
@@ -695,22 +711,91 @@ if [[ "$AUTOSTAGE" == "YES" ]]; then
   deny "commit gate [CM-AUTOSTAGE-FLAG]: git commit with -a, -i, --all, or --include stages at commit time, so the gate would scan an empty index and check nothing. Stage the exact files with git add first, then run git commit without auto-staging flags."
 fi
 
+# GIT IS PROBED BEFORE ITS ANSWER IS BELIEVED (F3 of the 2.2.0 adversarial
+# review, deferred to this cycle under a recorded owner bound and REINSTATED
+# here from the patch parked with its backlog entry rather than rediscovered).
+#
+# V19-F1 put this probe into close-gate.sh and scope-hook.sh in the 2.2.0 cycle
+# and did not put one here, so this file was the third sibling of a rule that
+# then existed in two places and not the third: A9's exact shape. Measured on
+# the shipped bytes: with git exiting 127, absent from PATH, or present but
+# printing nothing, every read below yields the EMPTY STRING, every grep over it
+# misses, and a staged em-dash AND a staged secret-shaped string are both
+# reported clean at exit 0 with zero bytes of output.
+#
+# The comment at the foot of this file used to say "fail-open-ok: every check
+# above ran against the staged content", which was false on precisely this path:
+# the checks ran against nothing and found nothing, which is not the same as
+# running against content and finding it clean. That is the
+# empty-result-as-verdict class this whole layer exists to remove, asserted in a
+# comment that made it look considered.
+#
+# It RUNS git and checks the OUTPUT as well as the status, like its two
+# siblings: a git that exits 0 and prints nothing disables these reads just as
+# thoroughly. The gate is advisory since v1.7, so this warns and permits; the
+# git hooks are what refuse.
+_cm_gitprobe="$(git -C "$PROJ" rev-parse --git-dir 2>/dev/null)" || _cm_gitprobe=""
+if [[ -z "$_cm_gitprobe" ]]; then
+  deny "commit gate [CM-NO-GIT]: git is not usable here (it is missing, broken, or this is not a git repository), so this gate cannot read the staged diff and would otherwise report every staged line clean having read nothing at all. Run 'git rev-parse --git-dir' in this directory to see the failure; a missing binary, a broken dynamic library, a wrong-architecture build and a directory that is not a repository all look like this. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse)."
+fi
+
+# THE ADVISORY SCANS ARE NOT PATH-SCOPED, AND THEY SAY SO (KL4-A1, owner ruling
+# 2026-08-28: the divergence closes by HONESTY, not by coupling).
+#
+# The git-hook layer honours "scan_exclusions" from .claude/sdd.json through one
+# function in its shared library. This gate runs its own scans, in a different
+# tree, and does not read that set: with vendor/** excluded and a secret in
+# vendor/, this layer objects to a commit the guarantee layer accepts.
+#
+# NEITHER EXPENSIVE ROUTE WAS BOUGHT, and the ruling says why. Sourcing the
+# shared library from templates/hooks/ creates a dependency between two trees
+# that are deliberately separate; a second exclusion reader is an A9 violation
+# of exactly the kind that feature's own acceptance criterion forbids. What
+# makes the divergence costly is not the warning, which is noise from a layer
+# that cannot refuse anything, but the user's inability to tell whether the
+# commit will actually be blocked. One sentence in each refusal answers exactly
+# that question at the moment it is asked, for the price of one string.
+#
+# THE FULL FIX STAYS AVAILABLE AND STAYS UNBOUGHT, on one named condition: field
+# reports showing the over-warning actually costing users. The suite assertion
+# pinning this divergence in its CURRENT direction stays as it is, so the entry
+# cannot close by drift.
+#
 # Staged additions only: lines the commit would introduce.
-ADDED="$(git -C "$PROJ" diff --cached --unified=0 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+# POSITIONAL HEADER CONSUMPTION (2.3.0 leg, F5), the advisory half of the same
+# defect the guarantee layer carried as F3. This read `grep -vE '^\+\+\+'`,
+# which drops the diff's own header AND any added line whose content begins
+# `++`: a unified diff prefixes added lines with one `+`, so `++ b/x` arrives
+# as `+++ b/x` and no single-line pattern can tell it from a header. A secret
+# on such a line was deleted from this gate's input before the scan ran.
+#
+# The separating fact is position, which is git's own structure: a `+++` line
+# is a header only outside a hunk. This gate keeps its own copy rather than
+# sourcing the library, because the two trees are deliberately separate (the
+# KL4-A1 ruling); what is shared is the RULE, and the suite asserts both layers
+# refuse the same payload.
+CG_ADDED_AWK='
+{
+  if ($0 ~ /^diff --git / || $0 ~ /^diff --cc /) { inhunk = 0; next }
+  if (!inhunk && $0 ~ /^@@/) { inhunk = 1; next }
+  if (!inhunk) next
+  if ($0 ~ /^\+/) print
+}'
+ADDED="$(git -C "$PROJ" diff --cached --unified=0 2>/dev/null | awk "$CG_ADDED_AWK" || true)"
 
 # Check 1: em-dash scan on staged new content. The character is built from an
 # escape so this script never contains it literally (repo rule 1 applies to the
 # instances too).
 EMDASH="$(printf '\342\200\224')"
 if printf '%s\n' "$ADDED" | grep -q "$EMDASH"; then
-  deny "commit gate [CM-EMDASH]: staged new content contains an em-dash; replace it with a comma, colon, parentheses, or separate sentences, then retry."
+  deny "commit gate [CM-EMDASH]: staged new content contains an em-dash; replace it with a comma, colon, parentheses, or separate sentences, then retry. NOTE: path exclusions (\"scan_exclusions\" in .claude/sdd.json) are evaluated at the git-hook layer, and this advisory does not read them, so a file your project excludes can be named here and still commit and push cleanly."
 fi
 
 # Check 2: secret scan. Token-shaped, connection-string-shaped, password-shaped.
 # STUB NOTE: the pattern set is a first cut; tune it as dogfood and field runs
 # surface false positives or misses.
 if printf '%s\n' "$ADDED" | grep -qiE '(api[_-]?key|secret|passw(or)?d|token)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{16,}|[a-z][a-z0-9+.-]*://[^/@[:space:]]+:[^@[:space:]]+@'; then
-  deny "commit gate [CM-SECRET]: staged content contains a secret-shaped string; move the value to the environment, reference it, and stage .env.example instead."
+  deny "commit gate [CM-SECRET]: staged content contains a secret-shaped string; move the value to the environment, reference it, and stage .env.example instead. NOTE: path exclusions (\"scan_exclusions\" in .claude/sdd.json) are evaluated at the git-hook layer, and this advisory does not read them, so a file your project excludes can be named here and still commit and push cleanly."
 fi
 
 # Check 3: STATUS-in-same-commit. A staged spec lifecycle transition (Status
@@ -737,7 +822,7 @@ fi
 # B2's INDEX_VERBS pairing is the precedent.
 CM_LIFECYCLE_STATES='DRAFT QUEUED ACTIVE REVISED BUILT PARKED CLOSED'
 CM_STATES_RE="$(printf '%s' "$CM_LIFECYCLE_STATES" | tr ' ' '|')"
-SPEC_ADDED="$(git -C "$PROJ" diff --cached --unified=0 -- 'specs/*.md' ':(exclude)specs/STATUS.md' ':(exclude)specs/TEMPLATE.md' 2>/dev/null | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+SPEC_ADDED="$(git -C "$PROJ" diff --cached --unified=0 -- 'specs/*.md' ':(exclude)specs/STATUS.md' ':(exclude)specs/TEMPLATE.md' 2>/dev/null | awk "$CG_ADDED_AWK" || true)"
 if printf '%s\n' "$SPEC_ADDED" | grep -qE "^\+Status:[[:space:]]*(${CM_STATES_RE})|^\+#+[[:space:]]*Closing report"; then
   if ! git -C "$PROJ" diff --cached --name-only | grep -qx 'specs/STATUS.md'; then
     deny "commit gate [CM-STATUS-MISSING]: this commit changes a spec lifecycle state but does not stage specs/STATUS.md; update the STATUS.md inventory line in the same commit."
@@ -771,18 +856,16 @@ if [[ -n "$IDENTITY_EMAIL" ]]; then
   fi
 fi
 
-# THE GREEN PATH HAS ONE NAMED EXCEPTION, and it is named here because the
-# annotation below was written as though it had none. If git is unusable (missing,
-# broken, or this is not a repository), every read above yields the EMPTY STRING,
-# every grep over it misses, and this path is reached having examined NOTHING
-# rather than having examined content and found it clean. The two are
-# indistinguishable from here. That is F3 of the 2.2.0 leg, deferred to 2.3.0
-# under a recorded owner bound, with the probe its two siblings already carry:
-# close-gate.sh refuses CG-NO-GIT and scope-hook.sh refuses SH-NO-GIT, and this
-# gate does not yet. The guarantee layer is unaffected, because the git hooks
-# still refuse the content; what is missing here is the warning, not the refusal.
+# THE EXCEPTION THIS COMMENT USED TO NAME IS CLOSED. It read "the green path has
+# one named exception", because if git was unusable every read above yielded the
+# empty string and this path was reached having examined NOTHING rather than
+# having examined content and found it clean. The probe above (F3-2026) is that
+# exception's fix, and the annotation is corrected in the same commit rather
+# than left describing a hole that no longer exists: a comment that outlives the
+# defect it documents is the KL6 shape, and this file is not going to teach it
+# twice.
 #
-# fail-open-ok: every check above ran against the staged content it was able to
-# read and found nothing to deny; this is the gate's green path, subject to the
-# exception named directly above.
+# fail-open-ok: git was probed above, so every check above ran against staged
+# content it actually read, and found nothing to deny; this is the gate's green
+# path.
 exit 0

@@ -387,10 +387,32 @@ OURS_TEST='
       regrounding-hook)  ev=SessionStart; tool="" ;;
       *)                 ev=PreToolUse;  tool="" ;;
     esac
+    # A MATCH-ALL MATCHER IS COVERAGE, NOT A GAP (F4-2026, 2.2.0 leg finding F4).
+    #
+    # This test built a regex by interpolation: `test("^(" + ($m // "") + ")$")`.
+    # Two ordinary spellings broke it, both in the direction that reports a
+    # WORKING instance as broken. `"*"` makes `^(*)$`, which is not a valid
+    # regex at all, so jq ERRORS and `jq -e` fails, which this reads as
+    # unwired. An ABSENT matcher makes `^()$`, which matches only the empty
+    # string, so no tool name matches and it also reads as unwired. Measured
+    # both ways on the shipped bytes before the fix.
+    #
+    # The consequence was not cosmetic: --apply exits 3 INCOMPLETE every time,
+    # so an instance whose protection is genuinely live can never certify, and
+    # the documented workaround was to name tools explicitly. Claude Code
+    # treats an absent matcher and `*` as "every tool", so both are FULL
+    # coverage and the check now says so before it builds any regex.
+    #
+    # The empty-$tool case (a hook with no tool to reach, like SessionStart)
+    # keeps its own arm above; this one is about a tool that IS named and a
+    # matcher that covers everything.
     if ! jq -e --arg ev "$ev" --arg tool "$tool" --argjson allowed "$(ours_spellings "$h")" "
           [ (.hooks[\$ev] // [])[]
             | select(any(.hooks[]?; $OURS_TEST))
-            | select((\$tool == \"\") or (.matcher as \$m | \$tool | test(\"^(\" + (\$m // \"\") + \")\$\")))
+            | select((\$tool == \"\")
+                     or ((.matcher // \"\") == \"\")
+                     or (.matcher == \"*\")
+                     or (.matcher as \$m | \$tool | test(\"^(\" + \$m + \")\$\")))
           ] | length > 0" "$SETTINGS" >/dev/null 2>&1; then
       UNWIRED="$UNWIRED $h.sh"
     fi

@@ -9,6 +9,84 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.3.0
+
+**Edition v1.11 (the attestation edition).** The headless build integrity chain. If
+anything builds your project without a human watching (CI, a `claude -p` run, a
+scripted batch), this release is the one that stops an unapproved build's output from
+becoming a commit and, at push, from being shared.
+
+**What it does.** Declare an `attestation` block in `.claude/sdd.json` and
+`/setlist:checkpoint` writes and signs an approval when a spec goes ACTIVE, binding it
+to that spec's exact bytes. The git hooks then refuse a build commit, a push, or a
+close whose spec has drifted since that approval. The existing `Spec-hash` record and
+its session-start warning stay exactly as they were and sit underneath it; the two
+answer different questions, and a spec whose hash was quietly recomputed by hand passes
+the first and fails the second.
+
+**What it is worth, which the mechanism prints rather than leaves you to work out.** A
+signature proves a key was used, not that a person decided. If your signing key sits
+where the build process can read it, a headless run can sign its own approval and the
+chain will verify, establishing that the run had the key, which is not the question. So
+Setlist makes you DECLARE where your key lives and names that declaration in every
+verification it emits, including the ones that pass. `signer` custody (a key you hold,
+which the build cannot read) is the model that addresses the problem.
+
+**Nothing changes unless you turn it on.** No `attestation` block means the feature is
+off, and off is byte-for-byte the behaviour you have today; an upgrade delivers the key
+set to `false` and migrates nothing. Turning it on is a decision about where your key
+lives, not a migration step, and `/setlist:upgrade` will say so rather than doing it for
+you. **`forge` custody is designed and not built:** declaring it refuses and tells you
+why, and its verification arrives with the forge-side required check.
+
+**A correction to an earlier draft of these notes, stated plainly rather than quietly
+fixed.** A draft of this entry claimed four repairs as shipped that were not written.
+The claim was false when it was made. It was caught before release by this project's own
+adversarial review, which reads the changelog as ground truth and reported the code as
+contradicting it; the repairs below are the ones that then actually landed, and the one
+that did not is named as deferred rather than promised again. A release note is a claim
+about bytes, and this one was audited against the bytes before it shipped.
+
+**Also in this release.** A no-git probe in the commit gate, so a broken or missing git
+can no longer make every staged-content check report clean having read nothing. A
+correctly-wired hook is no longer certified NOT WIRED when its matcher is `*` or absent,
+so `/setlist:upgrade` on a working instance no longer exits INCOMPLETE forever. The
+Architecture-diagram field is read as an answer rather than as a sentence containing one,
+and it is decided by the FIRST such field rather than the last, so a later note can
+neither answer nor unanswer it. The QA verdict block is likewise decided by the FIRST
+block, so an illustrative example placed after a real verdict no longer replaces it. A
+secret on an added line whose text begins `++ ` is no longer deleted from the scanners'
+own input at either layer. A `scaffolded` value that is present and not a boolean now
+reports itself instead of silently standing the trunk-write gate down. The advisory
+session gates carry a machine-readable code on every refusal, not only on some. The
+advisory commit gate now says that path exclusions are evaluated at the git-hook layer
+and that it does not read them, so you can tell from the message whether a commit will
+actually be blocked. The Known-limitations list gains the empty-remote trunk-audit
+boundary, which the framework document described and this list did not.
+
+**What is NOT in this release, named rather than promised.** This release's own adversarial
+review found more than it fixed, and the remainder is listed here rather than left for you
+to discover.
+
+A compliant chore close spelled `--ff` or `--squash` is still accepted at commit and
+refused at push. Its scoped fix was measured during the review to widen a more serious
+exemption in the same code, so it is deferred with that measurement published rather than
+taken in a way that would trade a disclosed gap for an undisclosed one. That more serious
+exemption is now a Known limitation in its own right, stated at its real width: a
+single-parent trunk commit that closes a spec is content-exempt at the push-time audit.
+Both are the same underlying gap and they are scheduled together.
+
+A `scaffolded` value that is present and not a boolean still stands the session scope gate
+down silently instead of reporting itself. The one-line fix was written during this cycle
+and cut: it needs a new refusal code, a new code is a new question, and a new question
+under this project's own release rules means a full adversarial review that a repair round
+does not get. It is scheduled for a cycle that owes one anyway. The layer affected is the
+advisory session gate; the git hooks, which are what refuse, are unaffected.
+
+Two defects in this project's own private checking tools were also found and are deferred
+under the rule that a defect in a checker never blocks a release. They do not affect
+anything you install.
+
 ## 2.2.0
 
 **Edition v1.10 (the scoping edition).** The enforcement release. Unlike the two

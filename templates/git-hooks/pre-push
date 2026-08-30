@@ -427,6 +427,22 @@ while read -r _lref _loid rref _roid; do
   esac
   if git -C "$REPO" rev-parse --quiet --verify "${_loid}^{commit}" >/dev/null 2>&1; then
     slh_scan_walk "the history this push adds to $rname" "${SCAN_ARGV[@]}" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below, so a non-zero return must not abort before every ref is read
+    # --- half one-b: THE APPROVAL CHECK, over the same refs and the same range.
+    #
+    # It sits BESIDE the content scan and not inside it, because the two answer
+    # different questions about the same bytes: the scan asks whether the
+    # content is publishable, this asks whether the work was approved. Sharing
+    # a scope is a fact about these two, not a rule, and writing one underneath
+    # the other is how the scan inherited the audit's trunk-only scope and went
+    # blind on every spec-branch push (F2).
+    #
+    # WHY IT IS HERE AT ALL, given pre-commit already refuses: this is the layer
+    # that catches a commit which never met pre-commit. --no-verify, an unset
+    # core.hooksPath and the per-clone gap are all documented holes at commit
+    # time, and the enforcement boundary puts the guarantee in the push-time
+    # audit precisely because of them. An unapproved build stopped here has not
+    # been shared, which is the whole of what this mechanism claims.
+    slh_attest_walk "$REPO" "the history this push adds to $rname" "$_loid" "${SCAN_ARGV[@]}" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below, so a non-zero return must not abort before every ref is read
   else
     slh_refuse "SLH-SCAN-UNRESOLVED-TIP" "the tip this push would put on $rname ($_loid) does not resolve to a commit here, so what it publishes cannot be read. Refusing rather than reporting a scan that did not run."
   fi

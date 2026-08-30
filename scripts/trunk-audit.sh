@@ -433,9 +433,11 @@ CHORES=0
 # for byte and the suite asserts all three are identical, and since the 2.0.0
 # leg (F8) also that they AGREE BY OUTCOME over a corpus, because this audit
 # was blind in lockstep with the hooks it backstops. The reader is scoped: the
-# deciding block is the last qa-pass-1 fence at fence depth zero inside a
-# Closing report section; close-gate.sh carries the full reasoning.
-QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; qa_seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } } else { if (__r == "qa-pass-1" && inclose) { inb = 1; qch = __c; qlen = __m; n = 0; bad = 0; next } fence = 1; fch = __c; flen = __m; next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "") next; if (l ~ /^[A-Za-z0-9._-]+[[:space:]]*:[[:space:]]*(PASS|PARTIAL|FAIL)$/) n++; else bad = 1; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) inclose = 0 } } END { if (incmt) print "unclosed-comment"; else if (inb) print "unclosed"; else if (!qa_seen) print "none"; else if (bad) print "malformed"; else if (n == 0) print "empty"; else print "ok" }'
+# deciding block is the FIRST qa-pass-1 fence at fence depth zero inside a
+# Closing report section (F7-2026, ruled 2026-08-29; it was the LAST until
+# then, which let a later illustrative block replace a real verdict);
+# close-gate.sh carries the full reasoning.
+QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; qa_seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } } else { if (__r == "qa-pass-1" && inclose && !qa_seen) { inb = 1; qch = __c; qlen = __m; n = 0; bad = 0; next } fence = 1; fch = __c; flen = __m; next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "") next; if (l ~ /^[A-Za-z0-9._-]+[[:space:]]*:[[:space:]]*(PASS|PARTIAL|FAIL)$/) n++; else bad = 1; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) inclose = 0 } } END { if (incmt) print "unclosed-comment"; else if (inb) print "unclosed"; else if (!qa_seen) print "none"; else if (bad) print "malformed"; else if (n == 0) print "empty"; else print "ok" }'
 
 # HOISTED, same reason as QA_PASS1_AWK above: the linear close check needs it
 # too. LOCKSTEP: byte-identical to close-gate.sh and setlist-hook-lib.sh. Strips
@@ -533,7 +535,7 @@ while IFS= read -r C; do
         LIN_MISS=""
         printf '%s\n' "$LIN_TEXT" | grep -qE $'^ {0,3}#{1,6}[ \t]+Closing report' || LIN_MISS="$LIN_MISS no-closing-report"
         [[ "$(printf '%s\n' "$LIN_TEXT" | awk "$QA_PASS1_AWK")" == "ok" ]] || LIN_MISS="$LIN_MISS no-qa-verdict"
-        LIN_DIAG="$(printf '%s\n' "$LIN_TEXT" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | tail -n1)" # fail-open-ok: empty is the missing field, tested next
+        LIN_DIAG="$(printf '%s\n' "$LIN_TEXT" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | head -n1)" # fail-open-ok: empty is the missing field, tested next
         LIN_ANS="$(printf '%s' "$LIN_DIAG" | sed -e 's/^[-*+>[:space:]]*Architecture diagram:[[:space:]]*//')"
         # PLACEHOLDER SHAPE, NOT THE CHARACTER '<' (leg F11, here too). This arm
         # kept the pre-F11 predicate after the merge arm below was corrected, so
@@ -541,7 +543,7 @@ while IFS= read -r C; do
         # Same fix, same direction, same reasoning as the merge arm's DIAG_ANSWER.
         LIN_ANS="$(printf '%s' "$LIN_ANS" | sed 's/<[^>]*>//g')"
         if [[ -z "$LIN_DIAG" ]]; then LIN_MISS="$LIN_MISS no-diagram-field"
-        elif ! printf '%s' "$LIN_ANS" | grep -qE 'updated in this commit|no impact'; then LIN_MISS="$LIN_MISS diagram-unanswered"; fi
+        elif ! printf '%s' "$LIN_ANS" | sed 's/^[[:space:]]*//' | grep -qE '^(updated in this commit|no impact)([^A-Za-z]|$)'; then LIN_MISS="$LIN_MISS diagram-unanswered"; fi
         if [[ -n "$LIN_MISS" ]]; then
           printf 'VIOLATION %s  spec %s was marked CLOSED without:%s\n' "$SHORT" "$LIN_NUM" "$LIN_MISS"
           printf '          %s\n' "$SUBJ"
@@ -842,9 +844,10 @@ while IFS= read -r C; do
       # documented.
       #
       # LOCKSTEP with setlist-hook-lib.sh's reader: field-shaped, anchored past a
-      # list bullet, last match wins, and the template placeholder does not count
-      # as an answer.
-      DIAG_LINE="$(printf '%s\n' "$SPEC_TEXT" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | tail -n1)" # fail-open-ok: no line yields empty, which the test below reads as the missing field it is
+      # list bullet, FIRST match wins (KL1, ruled 2026-08-29), the ANSWER
+      # anchored to the start of the value (F6-2026), and the template
+      # placeholder does not count as an answer.
+      DIAG_LINE="$(printf '%s\n' "$SPEC_TEXT" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | head -n1)" # fail-open-ok: no line yields empty, which the test below reads as the missing field it is
       # LOCKSTEP MEANS THE SAME TEST, NOT THE SAME LINE (v1.7 final claims pass).
       #
       # The first cut of this check found the same line as the hook and then
@@ -867,7 +870,7 @@ while IFS= read -r C; do
       # because the genuine unfilled template strips to nothing and stays refused.
       # Asserted across the value space rather than at a spelling: this field has
       # been corrected three times, twice by repairing only the case reported.
-      elif ! printf '%s' "$DIAG_ANSWER" | sed 's/<[^>]*>//g' | grep -qE 'updated in this commit|no impact'; then
+      elif ! printf '%s' "$DIAG_ANSWER" | sed 's/<[^>]*>//g' | sed 's/^[[:space:]]*//' | grep -qE '^(updated in this commit|no impact)([^A-Za-z]|$)'; then
         MISSING="$MISSING diagram-unanswered"
       fi
 
