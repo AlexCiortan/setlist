@@ -1910,6 +1910,18 @@ do
   expect_script "armed $label: a spelling this script stamps stays WIRED" 0 "refreshed the four stamped hooks"
 done
 
+# THE ENUMERATED-SET RESTRICTION, pinned as the documented Known-limitations
+# bullet says (2.4.0 leg F11): `bash <stamped path>` genuinely runs the gate,
+# and the check still reports it NOT WIRED, because the set is the spellings
+# settings.json.tmpl ships and nothing else. Fails safe (over-reports, never
+# certifies a disarmed instance). If this pin flips, the set was widened:
+# widen the bullet in the same commit.
+INST="$WORK/inst-bash-prefix"
+instance_fixture "$INST" 1.0.0 current
+rewire "$INST/.claude/settings.json" "close-gate" 'bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/close-gate.sh'
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "wiring restriction (2.4.0 leg F11, documented): an interpreter-prefixed spelling that runs the stamped file is still reported NOT WIRED" 3 "close-gate.sh"
+
 # The absolute path of the instance itself, which cannot be templated above
 # because it is only known at run time.
 INST="$WORK/inst-armed-absolute"
@@ -2384,14 +2396,42 @@ git -C "$CORP" branch -f chore/cleanup spec/0001-thing
 git -C "$CORP" update-ref refs/remotes/origin/main "$(git -C "$CORP" rev-parse main)"
 git -C "$CORP" branch -f release/2.0 main
 
-corpus_verdict() { # corpus_verdict <command> -> echoes deny|allow
-  local out
+# corpus_verdict <command> -> echoes deny|allow|error
+#
+# THE THIRD STATE IS F9-2026, AND IT IS THIS REPOSITORY'S SIGNATURE DEFECT
+# SITTING INSIDE THE SUITE THAT IS THE FIRST ITEM OF THE A1 TIER.
+#
+# This function returned deny or allow, and everything that was not a deny
+# collapsed to `allow`: a crashed hook, a nonzero exit, output that is not JSON,
+# a hook that never ran at all. So "the gate ALLOWED this" and "the gate
+# produced nothing" were the same answer, and ~60 call sites below cannot tell
+# them apart. That is the same shape as the macOS leg reading `tail`'s exit code
+# and the attestation matching a version string: a check whose FAILURE cannot
+# reach a verdict.
+#
+# The states, and the boundary between the last two is the whole fix:
+#   deny   the gate produced a verdict and it is deny
+#   allow  the gate exited 0 AND either said nothing (allow is silence, which is
+#          this layer's documented contract) or produced parseable JSON whose
+#          verdict is not deny
+#   error  the gate exited NONZERO, or produced output that is not parseable
+#          JSON. Neither of those is an allow, and calling them one is the
+#          defect.
+#
+# `error` is deliberately not equal to `allow`, so every existing call site that
+# tests `== "allow"` now fails on a crashed gate instead of passing on one. That
+# is the point: the fix is worth nothing if the new state is swallowed by the
+# comparison it exists to correct.
+corpus_verdict() {
+  local out rc verdict
   out="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$CORP" bash "$HOOKS/close-gate.sh" 2>/dev/null)"
-  if [[ "$(printf '%s' "$out" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // empty' 2>/dev/null)" == "deny" ]]; then
-    printf 'deny'
-  else
-    printf 'allow'
-  fi
+  rc=$?
+  if [[ "$rc" -ne 0 ]]; then printf 'error'; return; fi
+  # Silence is the documented allow. Anything else must PARSE before it is read.
+  if [[ -z "$out" ]]; then printf 'allow'; return; fi
+  if ! printf '%s' "$out" | jq -e . >/dev/null 2>&1; then printf 'error'; return; fi
+  verdict="$(printf '%s' "$out" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
+  if [[ "$verdict" == "deny" ]]; then printf 'deny'; else printf 'allow'; fi
 }
 
 # CONTROL FIRST (Phase 3 of the hostile-review protocol). A harness that has
@@ -2408,6 +2448,28 @@ if [[ "$(corpus_verdict 'git status')" == "allow" ]]; then
   ok "corpus control b: the harness can observe an allow on an ungoverned command"
 else
   bad "corpus control b: the harness can observe an allow on an ungoverned command" "git status was denied"
+fi
+
+# CONTROL C (F9-2026): the harness can observe an ERROR, and it is not an allow.
+#
+# Without this the third state is a claim rather than a capability, which is the
+# vacuous-comparison family the two controls above already guard against one
+# state at a time. A distinguishing input is constructed rather than waited for:
+# a stand-in gate that exits nonzero having printed nothing is exactly the shape
+# that used to read as `allow`, and the second case is the unparseable-output
+# shape, which used to read as `allow` too.
+CORP_REALHOOKS="$HOOKS"
+HOOKS="$WORK/corp-brokenhook"; rm -rf "$HOOKS"; mkdir -p "$HOOKS"
+printf '#!/usr/bin/env bash\nexit 3\n' > "$HOOKS/close-gate.sh"
+CORP_V_CRASH="$(corpus_verdict 'git status')"
+printf '#!/usr/bin/env bash\nprintf "not json at all\\n"\n' > "$HOOKS/close-gate.sh"
+CORP_V_GARBAGE="$(corpus_verdict 'git status')"
+HOOKS="$CORP_REALHOOKS"
+if [[ "$CORP_V_CRASH" == "error" && "$CORP_V_GARBAGE" == "error" ]]; then
+  ok "corpus control c (F9-2026): a crashed gate and an unparseable gate both read as error, not as allow"
+else
+  bad "corpus control c (F9-2026): a crashed gate and an unparseable gate both read as error, not as allow" \
+      "nonzero-exit read as [$CORP_V_CRASH], unparseable output read as [$CORP_V_GARBAGE]; while either is 'allow', a corpus assertion that passes because the gate never ran is indistinguishable from one that passes because the gate decided"
 fi
 
 # --- the MUST-DENY corpus ----------------------------------------------------
@@ -3683,13 +3745,15 @@ expect_script "interpreter: the trunk audit CATCHES the outcome the gate let pas
 # hole: A first push to a brand-new EMPTY remote audits every pushed branch as a trunk candidate. | asserted
 # hole: The trunk audit cannot tell a merge that EDITS a file from ordinary conflict resolution. | asserted
 # hole: The headless integrity chain is only as strong as where your signing key lives, and a key your build can reach is not custody. | asserted
-# hole: A single-parent trunk commit that closes a spec is content-exempt at the push-time audit. | asserted
+# hole: The close audit's single-parent arm is as strong as your declarations, and a declaration is a claim, not a verified fact. | asserted
+# hole: The hashed range ends at the FIRST line reading `## Closing report`, fences included, and the ownership reader agrees with that cut. | asserted
+# hole: Identity-by-commit governs an alias only while a spec or chore ref still points at that exact commit. | asserted
+# hole: The wiring check recognises only the command spellings `settings.json.tmpl` ships. | asserted
 # hole: The set of tested platforms is a list, not a proof. | unassertable | a statement ABOUT the CI matrix rather than about hook behaviour; the matrix in .github/workflows/test.yml is the evidence, and the honest check is reading which platforms it actually runs
 # hole: Secret and style scanning is best-effort early warning, not a guarantee. | asserted
 # hole: git allows one `core.hooksPath`, so Setlist cannot coexist with husky, lefthook or pre-commit, and `refresh-instance.sh --apply` now REFUSES rather than displace one silently. | asserted
 # hole: A checkout is an enforcement switch: every git hook is inert on a branch without `.claude/sdd.json`. | asserted
 # hole: The `SETLIST_SKIP_HOOKS=1` escape is not read by `pre-push`. | asserted
-# hole: The Architecture-diagram check is decided by the LAST matching line, so a later note can answer or unanswer it. | asserted
 # hole: Merges crafted to evade the trunk audit can succeed, and the list of known routes is maintained rather than complete. | asserted
 # hole: The trunk is recognised by the NAME recorded in `.claude/sdd.json`, so an instance that merges onto a differently-named branch is ungoverned. | asserted
 # LEDGER-END
@@ -5717,6 +5781,46 @@ git -C "$FOR1" branch -f feature/not-spec/0002-x main
 run_hook "$HOOKS/close-gate.sh" "$FOR1" "$(bash_payload 'git merge --no-ff feature/not-spec/0002-x')"
 expect_allow "foreign b: a branch whose name merely contains a spec-like path is not gated as a close"
 
+# THE REF-NAMESPACE ANCHOR (2.4.0 leg F2): a ref the instance does not govern,
+# whose name merely CONTAINS /spec/, must not hijack the classification of an
+# ordinary feature merge. Both leg spellings: a remote NAMED spec, and a
+# nesting namespace in front of spec/.
+git -C "$FOR1" branch -f feature/iso main
+git -C "$FOR1" update-ref refs/remotes/spec/main feature/iso
+run_hook "$HOOKS/close-gate.sh" "$FOR1" "$(bash_payload 'git merge --no-ff feature/iso')"
+expect_allow "foreign b2 (2.4.0 leg F2): a remote NAMED spec does not turn a feature merge into an unclosed close"
+git -C "$FOR1" update-ref -d refs/remotes/spec/main
+git -C "$FOR1" branch -f archive/spec/0099-old feature/iso
+run_hook "$HOOKS/close-gate.sh" "$FOR1" "$(bash_payload 'git merge --no-ff feature/iso')"
+expect_allow "foreign b3 (2.4.0 leg F2): a nesting namespace in front of spec/ is not the governed namespace"
+git -C "$FOR1" branch -D archive/spec/0099-old >/dev/null 2>&1
+# The direction that must NOT loosen, the remote-tracking copy of a GOVERNED
+# spec branch staying governed, is already pinned by the ref-identity corpus
+# below (remote-tracking spellings deny), which the 2.4.0 leg re-verified live.
+
+# THE IDENTITY-BY-COMMIT BOUNDARY (2.4.0 leg F9, documented): an alias is
+# governed only while a spec or chore ref still points at that exact commit.
+# Both spellings pinned as the documented Known-limitations bullet says, so
+# the delisting cannot silently return. The guarantee layers refuse these
+# merges (leg-verified by execution); what these pins record is the session
+# gate's classification boundary, on fresh copies so FOR1 stays untouched.
+FOR3="$WORK/foreign-alias-adv"
+rm -rf "$FOR3"; cp -R "$FOR1" "$FOR3"
+git -C "$FOR3" branch -f tmp/alias spec/0001-thing
+git -C "$FOR3" checkout -q spec/0001-thing 2>/dev/null
+printf 'more\n' >> "$FOR3/src/app.js" 2>/dev/null || printf 'more\n' > "$FOR3/src/later.txt"
+git -C "$FOR3" add -A >/dev/null 2>&1
+git -C "$FOR3" -c core.hooksPath=/dev/null commit -qm "branch advances past the alias" >/dev/null 2>&1
+git -C "$FOR3" checkout -q main 2>/dev/null
+run_hook "$HOOKS/close-gate.sh" "$FOR3" "$(bash_payload 'git merge --no-ff tmp/alias')"
+expect_allow "alias a (2.4.0 leg F9, documented boundary): an alias the spec branch advanced past classifies as an ungoverned sync at the session layer"
+FOR4="$WORK/foreign-alias-del"
+rm -rf "$FOR4"; cp -R "$FOR1" "$FOR4"
+git -C "$FOR4" branch -f tmp/alias spec/0001-thing
+git -C "$FOR4" branch -D spec/0001-thing >/dev/null 2>&1
+run_hook "$HOOKS/close-gate.sh" "$FOR4" "$(bash_payload 'git merge --no-ff tmp/alias')"
+expect_allow "alias b (2.4.0 leg F9, documented boundary): an alias that outlives the deleted spec branch classifies as an ungoverned sync at the session layer"
+
 # Foreign paths in the staged diff beside owned ones: the scan judges content,
 # and this pins that it does not judge ownership (a documented limitation).
 FOR2="$WORK/foreign-staged"
@@ -6830,21 +6934,41 @@ if gh_landed "$GH"; then
   bad "git hooks j: a hook that cannot find its library REFUSES rather than passing" "it passed with no library"
 else ok "git hooks j: a hook that cannot find its library REFUSES rather than passing"; fi
 
-# THE DIAGRAM FIELD'S LAST-MATCH READING (v1.7 second bound leg, F4/F14),
-# documented and pinned. Scope-reduced rather than repaired: the release has
-# corrected field-versus-substring three times already, and the bound forbids a
-# fourth. Asserted in the ALLOW direction, which is the one that publishes.
+# THE DIAGRAM FIELD IS FIRST-LINE-WINS (KL1, ruled 2026-08-29 and shipped in
+# 2.3.0; the public bullet left the list in spec 0126's public-list commit,
+# worded fix-plus-correction because the bullet still described last-wins a
+# day after the mechanics shipped first-wins). This replaces the old
+# either-way "documented hole" pin, whose fixture named the field MID-LINE
+# and so never exercised the anchored reader in either generation: a pin that
+# passes both ways on an input the reader cannot see is the vacuous-comparison
+# class, recorded here so it is not reinvented. Both directions, ANCHORED:
+# a later bullet that repeats the label neither unanswers a real field nor
+# answers a placeholder one.
 DIAGN="$WORK/diag-note"; rm -rf "$DIAGN"; close_fixture "$DIAGN" yes yes answered yes no true
 git -C "$DIAGN" checkout -q spec/0001-thing
-printf -- '- Follow-ups filed: revisit the Architecture diagram: <updated in this commit | no impact>\n' >> "$DIAGN/specs/0001-thing.md"
+printf -- '- Architecture diagram: <updated in this commit | no impact>\n' >> "$DIAGN/specs/0001-thing.md"
 git -C "$DIAGN" add -A >/dev/null 2>&1
-git -C "$DIAGN" commit -qm "a bulleted follow-up naming the field" >/dev/null 2>&1
+git -C "$DIAGN" commit -qm "an anchored later bullet repeating the label" >/dev/null 2>&1
 git -C "$DIAGN" checkout -q main
 run_hook "$HOOKS/close-gate.sh" "$DIAGN" "$(bash_payload "$MERGE_CMD")"
 if [[ -z "$HOOK_OUT" ]]; then
-  ok "diagram note: a later bulleted note decides the diagram field, as Known limitations records (documented hole, still open)"
+  ok "diagram first-wins a: an anchored later placeholder bullet cannot UNANSWER a real field (KL1's refuse direction, closed)"
 else
-  ok "diagram note: the diagram field is no longer decided by a later note, which CLOSES a documented hole; update the bullet and this ledger entry"
+  bad "diagram first-wins a: an anchored later placeholder bullet cannot UNANSWER a real field (KL1's refuse direction, closed)" \
+      "the merge was denied, so a later line is deciding the field again; KL1's class is back"
+fi
+DIAGN2="$WORK/diag-note2"; rm -rf "$DIAGN2"; close_fixture "$DIAGN2" yes yes unanswered yes no true
+git -C "$DIAGN2" checkout -q spec/0001-thing
+printf -- '- Architecture diagram: no impact\n' >> "$DIAGN2/specs/0001-thing.md"
+git -C "$DIAGN2" add -A >/dev/null 2>&1
+git -C "$DIAGN2" commit -qm "an anchored later bullet answering for the field" >/dev/null 2>&1
+git -C "$DIAGN2" checkout -q main
+run_hook "$HOOKS/close-gate.sh" "$DIAGN2" "$(bash_payload "$MERGE_CMD")"
+if [[ -z "$HOOK_OUT" ]]; then
+  bad "diagram first-wins b: an anchored later answering bullet cannot ANSWER a placeholder field (KL1's publish direction, closed)" \
+      "the merge was allowed, so a later line answered a field nobody answered; KL1's class is back"
+else
+  ok "diagram first-wins b: an anchored later answering bullet cannot ANSWER a placeholder field (KL1's publish direction, closed)"
 fi
 
 # THE ESCAPE pre-push DOES NOT READ (v1.7 second bound leg, F9), pinned because
@@ -7661,26 +7785,31 @@ if [[ "$ATT_HAVE_SSH" -eq 1 ]]; then
   fi
 fi
 
-# F1-2026, PINNED IN ITS CURRENT DIRECTION AND NOT CLOSED (2.3.0 leg, F1).
+# F1-2026, FIXED FOR DECLARING CLOSES AND PINNED AS A BOUNDARY FOR THE REST
+# (2.3.0 leg F1; the RP1 ownership arm, spec 0126, design section 8.2).
 #
-# The NPAR<2 arm of the trunk audit sets LIN_CLOSED_OK on one compliant STATUS
-# row flip and then short-circuits the role-path question for the ENTIRE commit.
-# So a single-parent trunk commit that closes any spec may also carry feature
-# code belonging to a spec that is still open, and the push succeeds.
+# The old pin asserted the hole as it was: the NPAR<2 arm's LIN_CLOSED_OK
+# short-circuited the role-path question for the ENTIRE commit on one
+# compliant row flip. The 2026-08-29 ruling deferred the narrow fix because
+# it was MEASURED not to discriminate: an honest squash close and the attack
+# are one spec file plus one role-path file each, neither in any parent.
+# Separating them needed a recorded fact the framework did not keep. It keeps
+# it now: `Owns:` lines in the spec's hashed range, and the arm asks per-file
+# coverage against the declared set instead of exempting the commit.
 #
-# DEFERRED BY OWNER RULING 2026-08-29, together with the chore half, because the
-# obvious narrow fix was MEASURED not to work: a squash has no parent carrying
-# its legitimate content, so the merge arm's provenance question cannot separate
-# an honest squash close from this one. Both look identical to it: one spec file
-# and one role-path file, added, in no parent. Separating them needs a recorded
-# fact this framework does not keep.
-#
-# This asserts the hole AS IT IS, with the negative control beside it, so the
-# public bullet cannot go stale in either direction: if someone fixes the arm,
-# this goes red and the bullet moves in the same commit.
+# THE PIN FLIPPED RED IN THIS COMMIT, exactly as the old pin's own failure
+# message demanded, and is REWRITTEN here rather than deleted: the DECLARING
+# attack (below) audited "1 clean, 0 violations" on the pre-fix bytes,
+# watched, and now refuses on the smuggled file BY NAME. What remains pinned
+# in the old direction is the BOUNDARY: a close that declares NOTHING keeps
+# today's whole-commit exemption exactly (the Spec-hash absence precedent;
+# anything else re-refuses the compliant legacy squash close spec 0121's F4
+# fix exists to permit), and the public bullet is REPLACED by the boundary
+# sentence that SAYS so, never deleted.
 F1P="$WORK/f1-pin"; rm -rf "$F1P"; mkdir -p "$F1P/src" "$F1P/specs" "$F1P/.claude"
 git_init "$F1P"
 printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$F1P/.claude/sdd.json"
+printf '{"setlist_status":1,"specs":{"0004":{"status":"active"},"0005":{"status":"active"}},"chores":{}}\n' > "$F1P/.claude/status.json"
 printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0004 | wip | ACTIVE | in progress |\n| 0005 | docs | ACTIVE | in progress |\n' > "$F1P/specs/STATUS.md"
 printf 'base\n' > "$F1P/base.txt"
 git -C "$F1P" add -A >/dev/null 2>&1; git -C "$F1P" commit -qm seed >/dev/null 2>&1
@@ -7689,13 +7818,17 @@ git -C "$F1P" checkout -q -b spec/0004-wip
 printf 'work in progress; 0004 is still ACTIVE\n' > "$F1P/src/wip.txt"
 git -C "$F1P" add -A >/dev/null 2>&1; git -C "$F1P" commit -qm 'wip on 0004' >/dev/null 2>&1
 git -C "$F1P" checkout -q main
-printf '# Spec 0005\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\nsmoke: PASS\n```\n' > "$F1P/specs/0005-docs.md"
+# The DECLARING close of 0005: it owns src/feat.txt and says so, closes with
+# its recorded facts, and smuggles still-active 0004's file beside its own.
+printf '# Spec 0005\n\nStatus: CLOSED\nOwns: src/feat.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\nsmoke: PASS\n```\n' > "$F1P/specs/0005-docs.md"
+printf 'the declared file\n' > "$F1P/src/feat.txt"
+printf '{"setlist_status":1,"specs":{"0004":{"status":"active"},"0005":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$F1P/.claude/status.json"
 sed -e 's/| 0005 | docs | ACTIVE | in progress |/| 0005 | docs | CLOSED | done |/' "$F1P/specs/STATUS.md" > "$F1P/t" && mv "$F1P/t" "$F1P/specs/STATUS.md"
 git -C "$F1P" checkout spec/0004-wip -- src/wip.txt 2>/dev/null
 git -C "$F1P" add -A >/dev/null 2>&1; git -C "$F1P" commit -qm 'close spec 0005' >/dev/null 2>&1
 F1P_OUT="$(bash "$ROOT/scripts/trunk-audit.sh" --instance "$F1P" --since "$F1P_BASE" 2>&1)"
-# THE NEGATIVE CONTROL FIRST: the same injected file with NO row flip must be
-# refused. Without it this pin passes against an audit that refuses nothing.
+# THE NEGATIVE CONTROL FIRST: the same injected file with NO close at all must
+# be refused. Without it this pin passes against an audit that refuses nothing.
 F1C="$WORK/f1-ctl"; rm -rf "$F1C"; cp -R "$F1P" "$F1C"
 git -C "$F1C" reset -q --hard HEAD~1
 git -C "$F1C" checkout spec/0004-wip -- src/wip.txt 2>/dev/null
@@ -7707,50 +7840,138 @@ else
   bad "F1-2026 control: the same injected file WITHOUT a close is still refused" \
       "the audit refuses nothing here, so the pin below would pass against a dead check"
 fi
-if printf '%s' "$F1P_OUT" | grep -q '0 violations'; then
-  ok "F1-2026 (PINNED, deferred to 2.4.0's intake): a single-parent close is content-exempt, exactly as the public bullet says"
+if printf '%s' "$F1P_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] src/wip.txt'; then
+  ok "F1-2026 (FIXED for declaring closes): the attack refuses ON SHAPE, naming the smuggled file, because still-active 0004's file is not in closing 0005's declared set"
 else
-  bad "F1-2026 (PINNED, deferred to 2.4.0's intake): a single-parent close is content-exempt, exactly as the public bullet says" \
-      "the exemption has changed; if it was FIXED, move the public bullet and this pin in the same commit"
+  bad "F1-2026 (FIXED for declaring closes): the attack refuses ON SHAPE, naming the smuggled file, because still-active 0004's file is not in closing 0005's declared set" \
+      "audit said: $(printf '%s' "$F1P_OUT" | tail -2 | tr '\n' ' ')"
+fi
+# The declared file itself is NOT named: the refusal is per file, not per
+# commit, or the fix would be the old exemption inverted.
+if printf '%s' "$F1P_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] src/feat.txt'; then
+  bad "F1-2026 per-file: the declared file is covered; only the smuggled one refuses" \
+      "src/feat.txt was refused despite being declared, so coverage is not being read per file"
+else
+  ok "F1-2026 per-file: the declared file is covered; only the smuggled one refuses"
 fi
 
-# LEG F4 (scaffolded evaluated as a boolean) IS DEFERRED, NOT FIXED, and this
-# pin records the hole in its CURRENT direction so it cannot close by drift.
+# THE BOUNDARY, PINNED IN ITS DISCLOSED DIRECTION so it cannot close by
+# drift: a close that declares NOTHING (this legacy-shaped instance has no
+# record and no Owns) keeps the whole-commit exemption EXACTLY, and the
+# public boundary sentence says so. If someone widens or closes this, the
+# sentence moves in the same commit.
+F1L="$WORK/f1-legacy"; rm -rf "$F1L"; mkdir -p "$F1L/src" "$F1L/specs" "$F1L/.claude"
+git_init "$F1L"
+printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$F1L/.claude/sdd.json"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0004 | wip | ACTIVE | in progress |\n| 0005 | docs | ACTIVE | in progress |\n' > "$F1L/specs/STATUS.md"
+printf 'base\n' > "$F1L/base.txt"
+git -C "$F1L" add -A >/dev/null 2>&1; git -C "$F1L" commit -qm seed >/dev/null 2>&1
+F1L_BASE="$(git -C "$F1L" rev-parse HEAD)"
+printf '# Spec 0005\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\nsmoke: PASS\n```\n' > "$F1L/specs/0005-docs.md"
+sed -e 's/| 0005 | docs | ACTIVE | in progress |/| 0005 | docs | CLOSED | done |/' "$F1L/specs/STATUS.md" > "$F1L/t" && mv "$F1L/t" "$F1L/specs/STATUS.md"
+printf 'undeclared ride\n' > "$F1L/src/wip.txt"
+git -C "$F1L" add -A >/dev/null 2>&1; git -C "$F1L" commit -qm 'close spec 0005' >/dev/null 2>&1
+F1L_OUT="$(bash "$ROOT/scripts/trunk-audit.sh" --instance "$F1L" --since "$F1L_BASE" 2>&1)"
+if printf '%s' "$F1L_OUT" | grep -q '0 violations'; then
+  ok "F1-2026 boundary (PINNED, disclosed): a close declaring NOTHING keeps the whole-commit exemption exactly, as the boundary sentence says"
+else
+  bad "F1-2026 boundary (PINNED, disclosed): a close declaring NOTHING keeps the whole-commit exemption exactly, as the boundary sentence says" \
+      "the non-declaring exemption changed; behaviour 4 of the ratified design says it must not, and the public sentence must move with any deliberate change here"
+fi
+
+# F2-2026 (leg F4, scaffolded evaluated as a boolean) IS FIXED HERE, and this
+# block is the PIN REWRITTEN in the fix's own commit rather than deleted.
 #
-# The fix is one line and it was WRITTEN and then CUT, on the owner's round-1
-# rule that a fix wanting to grow beyond its narrow shape defers instead. It
-# grew for a reason worth recording, because two standing rules point opposite
-# ways here:
+# What it pinned, in its previous direction: a non-boolean `scaffolded` stood
+# the whole trunk-write gate down in SILENCE, having evaluated nothing. The pin
+# asserted that hole so it could not close by drift, and it went red against
+# these bytes exactly as it was built to.
+#
+# WHY THE FIX EXISTS NOW AND DID NOT AT 2.3.0, because it is not that anyone
+# changed their mind. Two standing rules point opposite ways at fix-round size:
 #
 #   A2's trigger says a NEW deny code is a changed QUESTION and costs a full
-#   leg. The publish-time attestation gate refused the round for exactly that
-#   when the fix raised SH-SCAFFOLDED-SHAPE.
+#   leg. The publish-time attestation gate refused the 2.3.0 round for exactly
+#   that when the fix raised SH-SCAFFOLDED-SHAPE.
 #
 #   The suite says two denials sharing a code cannot be told apart. Re-scoping
 #   onto the existing SH-SDD-SHAPE to dodge the trigger tripped THAT instead.
 #
-# So the narrow fix does not exist at this size: it needs either a new
-# identifier (a leg) or a shared one (an indistinguishable denial). That is
-# F3-2026's situation at 2.2.0 exactly, and it takes F3-2026's answer: cut,
-# park the patch with its entry, reinstate next cycle. The patch is in the
-# backlog so the next session reinstates rather than rediscovers.
+# The entry priced the way out in advance: the cycle that takes it either owes
+# a leg anyway, or needs a distinguishable code that does not already mean
+# something else. The 2.4.0 cycle owes a leg BY COMPUTATION before its first
+# byte, because the status record's deny codes change the guarantee-check
+# identifier set. So the new identifiers cost nothing extra, and the fix ships
+# with the identifiers it wanted rather than with the shared-code workaround.
+#
+# FOUR DIRECTIONS, because three of them are the ones a narrower fix breaks.
 SCFP="$WORK/scaffold-pin"; rm -rf "$SCFP"; mkdir -p "$SCFP/src" "$SCFP/specs" "$SCFP/.claude"
 git_init "$SCFP"
 printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$SCFP/specs/STATUS.md"
+SCFP_PAY="$(jq -nc --arg p "$SCFP/src/x.js" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"}}')"
 printf '{"trunk":"main","scaffolded":true,"roles":{"src":"src","tests":"tests"}}\n' > "$SCFP/.claude/sdd.json"
-run_hook "$HOOKS/scope-hook.sh" "$SCFP" "$(jq -nc --arg p "$SCFP/src/x.js" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"}}')"
+run_hook "$HOOKS/scope-hook.sh" "$SCFP" "$SCFP_PAY"
 if printf '%s' "$HOOK_OUT" | grep -q 'SH-TRUNK-WRITE'; then
   ok "scaffolded control: a boolean true arms the trunk-write gate"
 else
-  bad "scaffolded control: a boolean true arms the trunk-write gate" "the gate is dead, so the pin below would prove nothing"
+  bad "scaffolded control: a boolean true arms the trunk-write gate" "the gate is dead, so the assertions below would prove nothing"
 fi
-printf '{"trunk":"main","scaffolded":"yes","roles":{"src":"src","tests":"tests"}}\n' > "$SCFP/.claude/sdd.json"
-run_hook "$HOOKS/scope-hook.sh" "$SCFP" "$(jq -nc --arg p "$SCFP/src/x.js" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"}}')"
-if [[ -z "$HOOK_OUT" ]]; then
-  ok "leg F4 (PINNED, deferred): a non-boolean scaffolded still stands the gate down silently, as the public bullet will say"
+
+# The fix, asserted on the CODE and across every non-boolean shape the leg
+# measured, not just the string it happened to reproduce with.
+SCFP_SHAPE_MISS=""
+for SCFP_V in '"yes"' '1' '{}' '[]' '"true"'; do
+  printf '{"trunk":"main","scaffolded":%s,"roles":{"src":"src","tests":"tests"}}\n' "$SCFP_V" > "$SCFP/.claude/sdd.json"
+  run_hook "$HOOKS/scope-hook.sh" "$SCFP" "$SCFP_PAY"
+  printf '%s' "$HOOK_OUT" | grep -q 'SH-SCAFFOLDED-SHAPE' || SCFP_SHAPE_MISS="$SCFP_SHAPE_MISS $SCFP_V"
+done
+if [[ -z "$SCFP_SHAPE_MISS" ]]; then
+  ok "F2-2026 (FIXED): every present non-boolean scaffolded refuses with SH-SCAFFOLDED-SHAPE instead of standing the gate down in silence"
 else
-  bad "leg F4 (PINNED, deferred): a non-boolean scaffolded still stands the gate down silently, as the public bullet will say" \
-      "the behaviour changed; if it was FIXED, move this pin and the public bullet in the same commit"
+  bad "F2-2026 (FIXED): every present non-boolean scaffolded refuses with SH-SCAFFOLDED-SHAPE instead of standing the gate down in silence" \
+      "these values still silenced the gate:$SCFP_SHAPE_MISS"
+fi
+
+# THE HONEST ZERO IS THE HALF A FIX BREAKS. Absent and boolean false must stay
+# SILENTLY off: that is what every pre-scaffold instance depends on, and turning
+# it into a refusal would refuse the one-time bootstrap this line exists to
+# permit. Asserted on emptiness, because "allow is silence" here.
+SCFP_ZERO_MISS=""
+printf '{"trunk":"main","scaffolded":false,"roles":{"src":"src","tests":"tests"}}\n' > "$SCFP/.claude/sdd.json"
+run_hook "$HOOKS/scope-hook.sh" "$SCFP" "$SCFP_PAY"
+[[ -z "$HOOK_OUT" ]] || SCFP_ZERO_MISS="$SCFP_ZERO_MISS false"
+printf '{"trunk":"main","roles":{"src":"src","tests":"tests"}}\n' > "$SCFP/.claude/sdd.json"
+run_hook "$HOOKS/scope-hook.sh" "$SCFP" "$SCFP_PAY"
+[[ -z "$HOOK_OUT" ]] || SCFP_ZERO_MISS="$SCFP_ZERO_MISS absent"
+if [[ -z "$SCFP_ZERO_MISS" ]]; then
+  ok "F2-2026 control: boolean false and an absent flag are still SILENTLY off, so the bootstrap this line permits is not refused"
+else
+  bad "F2-2026 control: boolean false and an absent flag are still SILENTLY off, so the bootstrap this line permits is not refused" \
+      "the honest zero now warns for:$SCFP_ZERO_MISS; a fix that refuses the pre-scaffold state has broken the case it exists to allow"
+fi
+
+# F11-2026, THE THIRD EMITTER, and the reason this assertion exists at all.
+#
+# The entry was DISCHARGED 2026-08-29 naming an assertion as what makes a fourth
+# rediscovery impossible rather than unlikely. The discharge was one emitter
+# short: advise_literal() gained the code extraction in commit-gate.sh and
+# close-gate.sh, THIS gate kept "code":"", and the assertion that was supposed
+# to make the class permanent reads commit-gate.sh alone. So the record said the
+# class was closed while a third of it was open, and nothing could notice.
+#
+# That is the entry's own A9 diagnosis, a rule that exists in some of its places
+# and not all, surviving its own discharge note. The fix is one line; the reason
+# it is worth a comment is that the DISCHARGE was the defect, not the code.
+#
+# The literal path is reached with jq ABSENT, which is what that path is for.
+printf '{"trunk":"main","scaffolded":true,"roles":{"src":"src","tests":"tests"}}\n' > "$SCFP/.claude/sdd.json"
+run_hook_nojq "$HOOKS/scope-hook.sh" "$SCFP" "$SCFP_PAY"
+SCFP_CODE="$(printf '%s' "$HOOK_OUT" | jq -r '.setlistAdvisory.code // "<absent>"' 2>/dev/null)"
+if [[ -n "$SCFP_CODE" && "$SCFP_CODE" != "<absent>" && "$SCFP_CODE" =~ ^[A-Z][A-Z0-9-]*$ ]]; then
+  ok "F11-2026 third emitter: the scope hook's literal-reason deny carries a real setlistAdvisory.code ($SCFP_CODE), not the empty string"
+else
+  bad "F11-2026 third emitter: the scope hook's literal-reason deny carries a real setlistAdvisory.code, not the empty string" \
+      "code=[$SCFP_CODE]; two of the three emitters were fixed in 2.3.0 and the entry recorded the whole class as discharged"
 fi
 
 # THE HEADER STRIP IS POSITIONAL, NOT SHAPED (2.3.0 leg, F3 and F5).
@@ -13060,6 +13281,845 @@ if instance_fixture "$KL4_INST2" 1.0.0 >/dev/null 2>&1; then
   fi
 else
   bad "KL4 delivery: the absent-key refresh fixture builds" "instance_fixture failed"
+fi
+
+# =============================================================================
+# RP1: THE STRUCTURED STATUS RECORD (spec 0126, edition v1.12).
+#
+# The machine reads only records whose grammar it owns. These cases pin four
+# properties, in the order a reader should doubt them: the seven jq readers are
+# BYTE-IDENTICAL across the three carriers (the lockstep, extended); the two
+# frozen awk readers are byte-identical to the PRE-RECORD generation pinned in
+# test/fixtures/pre-record-hooks (the absence path retained, proven against
+# the blob rather than inspected); a present-and-malformed record REFUSES on
+# otherwise CLEAN content at every layer that reads it, and never falls back;
+# and absence is byte-identical to the pre-record generation across a case
+# battery, with a discrimination control proving the differential can see a
+# difference at all.
+# =============================================================================
+
+# --- the lockstep, extended to the record readers ---------------------------
+RP1_JQ_NAMES='SLH_RECORD_CHECK_JQ SLH_RECORD_CLOSED_JQ SLH_RECORD_ACTIVE_JQ SLH_RECORD_DONE_JQ SLH_RECORD_STATUS_JQ SLH_RECORD_FACTS_JQ SLH_RECORD_CHORE_FILES_JQ'
+RP1_LOCK_BAD=""
+for RP1_NAME in $RP1_JQ_NAMES; do
+  RP1_REF="$(grep -m1 -E "^[[:space:]]*${RP1_NAME}=" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed 's/^[[:space:]]*//')"
+  [[ -n "$RP1_REF" ]] || RP1_LOCK_BAD="$RP1_LOCK_BAD lib:$RP1_NAME:absent"
+  for RP1_F in "$SCRIPTS/trunk-audit.sh" "$HOOKS/close-gate.sh"; do
+    RP1_GOT="$(grep -m1 -E "^[[:space:]]*${RP1_NAME}=" "$RP1_F" | sed 's/^[[:space:]]*//')"
+    # fail-open-ok: an absent line is recorded as a mismatch, not skipped.
+    [[ "$RP1_GOT" == "$RP1_REF" && -n "$RP1_GOT" ]] || RP1_LOCK_BAD="$RP1_LOCK_BAD $(basename "$RP1_F"):$RP1_NAME"
+  done
+done
+if [[ -z "$RP1_LOCK_BAD" ]]; then
+  ok "record lockstep: all seven SLH_RECORD_*_JQ readers are byte-identical across the hook library, trunk-audit.sh and close-gate.sh"
+else
+  bad "record lockstep: all seven SLH_RECORD_*_JQ readers are byte-identical across the hook library, trunk-audit.sh and close-gate.sh" \
+      "mismatched or absent:$RP1_LOCK_BAD"
+fi
+
+# The advisory commit gate keeps its OWN copy rather than sourcing the library
+# (the KL4-A1 ruling: the trees are separate, the RULE is shared and the suite
+# is what asserts it). Compare VALUES after stripping the differing names.
+RP1_CM_VAL="$(grep -m1 -E '^[[:space:]]*CM_RECORD_CHECK_JQ=' "$HOOKS/commit-gate.sh" | sed 's/^[[:space:]]*CM_RECORD_CHECK_JQ=//')"
+RP1_LIB_VAL="$(grep -m1 -E '^[[:space:]]*SLH_RECORD_CHECK_JQ=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed 's/^[[:space:]]*SLH_RECORD_CHECK_JQ=//')"
+if [[ -n "$RP1_CM_VAL" && "$RP1_CM_VAL" == "$RP1_LIB_VAL" ]]; then
+  ok "record lockstep: commit-gate's CM_RECORD_CHECK_JQ carries the library's grammar byte for byte"
+else
+  bad "record lockstep: commit-gate's CM_RECORD_CHECK_JQ carries the library's grammar byte for byte" \
+      "the advisory copy drifted from the library's, so the two layers would disagree about what parses"
+fi
+
+# --- the frozen readers, byte-identical to the PRE-RECORD blob --------------
+RP1_PRE="$ROOT/test/fixtures/pre-record-hooks"
+if [[ ! -d "$RP1_PRE" ]]; then
+  ok "record frozen readers: SKIPPED, the pre-record hook blobs are not present in this tree (export copy)"
+else
+  RP1_FROZEN_BAD=""
+  for RP1_AWKNAME in QA_PASS1_AWK TEMPLATE_FENCE_AWK LIVE_TEXT_AWK; do
+    for RP1_PAIR in \
+      "templates/git-hooks/setlist-hook-lib.sh:setlist-hook-lib.sh" \
+      "scripts/trunk-audit.sh:trunk-audit.sh" \
+      "templates/hooks/close-gate.sh:close-gate.sh"; do
+      RP1_CUR="$ROOT/${RP1_PAIR%%:*}"; RP1_OLD="$RP1_PRE/${RP1_PAIR#*:}"
+      RP1_CURL="$(grep -m1 -E "^[[:space:]]*(SLH_)?${RP1_AWKNAME}=" "$RP1_CUR" | sed -e 's/^[[:space:]]*//' -e 's/^SLH_//')"
+      RP1_OLDL="$(grep -m1 -E "^[[:space:]]*(SLH_)?${RP1_AWKNAME}=" "$RP1_OLD" | sed -e 's/^[[:space:]]*//' -e 's/^SLH_//')"
+      # fail-open-ok: an empty extraction is a mismatch, never a silent pass.
+      [[ -n "$RP1_CURL" && "$RP1_CURL" == "$RP1_OLDL" ]] || RP1_FROZEN_BAD="$RP1_FROZEN_BAD ${RP1_PAIR%%:*}:$RP1_AWKNAME"
+    done
+  done
+  if [[ -z "$RP1_FROZEN_BAD" ]]; then
+    ok "record frozen readers: the three frozen awk programs are byte-identical to the pre-record generation in all three carriers (the absence path is RETAINED, proven against the pinned blob)"
+  else
+    bad "record frozen readers: the three frozen awk programs are byte-identical to the pre-record generation in all three carriers (the absence path is RETAINED, proven against the pinned blob)" \
+        "drifted:$RP1_FROZEN_BAD; the frozen readers are never repaired and never removed"
+  fi
+fi
+
+# --- a structured fixture builder --------------------------------------------
+# rp1_fixture <dir> -> a stamped-shaped structured instance, spec 0001 active,
+# git hooks wired from the CURRENT templates.
+rp1_fixture() {
+  local d="$1"
+  rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude" "$d/.githooks"
+  git_init "$d"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+  printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{}}\n' > "$d/.claude/status.json"
+  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | ACTIVE | wip |\n' > "$d/specs/STATUS.md"
+  printf '# Spec 0001\n\nStatus: ACTIVE\n\n## Goal\n\nthing\n' > "$d/specs/0001-thing.md"
+  cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
+  chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+  printf 'seed\n' > "$d/seed.txt"
+  git -C "$d" add -A >/dev/null 2>&1
+  git -C "$d" -c core.hooksPath=/dev/null commit -qm seed >/dev/null 2>&1
+  git -C "$d" config core.hooksPath .githooks
+}
+
+# --- the grammar corpus: malformed REFUSES on CLEAN content ------------------
+# The staged content beside the record is an ordinary docs edit, so the refusal
+# is attributable to the record and to nothing else. The corpus enumerates the
+# GRAMMAR (this is a grammar we own, so the corpus can be complete in kind):
+# unparseable, missing version, wrong version type, unknown top-level key,
+# unknown lifecycle token, unknown entry field, non-object entry, bad spec key,
+# bad chore status, files not an array.
+RP1G="$WORK/rp1-grammar"
+rp1_fixture "$RP1G"
+RP1_GRAMMAR_BAD=""
+RP1_GRAMMAR_N=0
+while IFS='	' read -r RP1_LABEL RP1_JSON; do
+  [[ -n "$RP1_LABEL" ]] || continue
+  RP1_GRAMMAR_N=$((RP1_GRAMMAR_N + 1))
+  printf '%s\n' "$RP1_JSON" > "$RP1G/.claude/status.json"
+  printf 'note %s\n' "$RP1_GRAMMAR_N" > "$RP1G/docs.txt"
+  printf '| 0001 | Thing | ACTIVE | wip %s |\n' "$RP1_GRAMMAR_N" >> "$RP1G/specs/STATUS.md"
+  git -C "$RP1G" add -A >/dev/null 2>&1
+  if git -C "$RP1G" commit -qm "grammar $RP1_LABEL" >"$WORK/rp1-grammar.out" 2>&1; then
+    RP1_GRAMMAR_BAD="$RP1_GRAMMAR_BAD $RP1_LABEL:committed"
+    git -C "$RP1G" reset -q --hard HEAD~1 2>/dev/null
+  elif ! grep -q 'SLH-RECORD-MALFORMED' "$WORK/rp1-grammar.out"; then
+    RP1_GRAMMAR_BAD="$RP1_GRAMMAR_BAD $RP1_LABEL:wrong-reason"
+    git -C "$RP1G" reset -q --hard HEAD 2>/dev/null
+  else
+    git -C "$RP1G" reset -q --hard HEAD 2>/dev/null
+  fi
+done <<'RP1GRAMMAR'
+unparseable	not json at all
+missing-version	{"specs":{},"chores":{}}
+version-string	{"setlist_status":"1","specs":{},"chores":{}}
+version-future	{"setlist_status":2,"specs":{},"chores":{}}
+unknown-top-key	{"setlist_status":1,"specs":{},"chores":{},"extra":true}
+unknown-token	{"setlist_status":1,"specs":{"0001":{"status":"finished"}},"chores":{}}
+uppercase-token	{"setlist_status":1,"specs":{"0001":{"status":"CLOSED"}},"chores":{}}
+unknown-field	{"setlist_status":1,"specs":{"0001":{"status":"active","note":"x"}},"chores":{}}
+entry-not-object	{"setlist_status":1,"specs":{"0001":"active"},"chores":{}}
+bad-spec-key	{"setlist_status":1,"specs":{"bogus":{"status":"active"}},"chores":{}}
+qa-not-token	{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"3/4"}},"chores":{}}
+diagram-not-token	{"setlist_status":1,"specs":{"0001":{"status":"closed","diagram":"none"}},"chores":{}}
+chore-bad-status	{"setlist_status":1,"specs":{},"chores":{"CHORE-1":{"status":"finished"}}}
+chore-files-not-array	{"setlist_status":1,"specs":{},"chores":{"CHORE-1":{"status":"done","files":"x"}}}
+chore-bad-key	{"setlist_status":1,"specs":{},"chores":{"chore-1":{"status":"open"}}}
+two-documents	{"setlist_status":1}{"setlist_status":1}
+RP1GRAMMAR
+if [[ "$RP1_GRAMMAR_N" -lt 16 ]]; then
+  bad "record grammar: the corpus enumerates the grammar" \
+      "only $RP1_GRAMMAR_N cases ran; the corpus is broken and proves almost nothing"
+elif [[ -z "$RP1_GRAMMAR_BAD" ]]; then
+  ok "record grammar: all $RP1_GRAMMAR_N malformed shapes REFUSE with SLH-RECORD-MALFORMED on otherwise clean content, and none falls back"
+else
+  bad "record grammar: all $RP1_GRAMMAR_N malformed shapes REFUSE with SLH-RECORD-MALFORMED on otherwise clean content, and none falls back" \
+      "failures:$RP1_GRAMMAR_BAD"
+fi
+
+# The valid twin: a well-formed record edit with the page staged commits clean,
+# so the grammar refuses shapes rather than refusing the feature.
+printf '{"setlist_status":1,"specs":{"0001":{"status":"built"}},"chores":{}}\n' > "$RP1G/.claude/status.json"
+printf '| 0001 | Thing | BUILT | done on branch |\n' >> "$RP1G/specs/STATUS.md"
+git -C "$RP1G" add -A >/dev/null 2>&1
+if git -C "$RP1G" commit -qm "valid lifecycle flip" >"$WORK/rp1-valid.out" 2>&1; then
+  ok "record grammar twin: a well-formed record flip with the page staged commits clean"
+else
+  bad "record grammar twin: a well-formed record flip with the page staged commits clean" \
+      "$(tr '\n' ' ' < "$WORK/rp1-valid.out")"
+fi
+
+# --- the muted reader: the caller refuses what the reader did not say -------
+# The one-token convention is the mechanism, so it is asserted the way the
+# attestation's was: MUTE the reader (a jq that produces nothing at exit 0)
+# over a perfectly VALID record, and watch the caller refuse. A crashed reader
+# and a silent reader are the same non-answer, and neither is exactly "ok".
+# Driven against the shipped library sourced whole, never a re-implementation.
+RP1M="$WORK/rp1-muted"
+rp1_fixture "$RP1M"
+RP1_MUTED_OUT="$(
+  # shellcheck disable=SC1091
+  . "$ROOT/templates/git-hooks/setlist-hook-lib.sh"
+  jq() { return 0; }
+  slh_active_specs "$RP1M" "" 2>&1
+  printf 'rc=%s\n' "$?"
+)"
+if printf '%s' "$RP1_MUTED_OUT" | grep -q 'SLH-RECORD-MALFORMED' && printf '%s' "$RP1_MUTED_OUT" | grep -q 'rc=1'; then
+  ok "record muted reader: a reader that says nothing at exit 0 over a VALID record is refused by its caller (one token out, and it was not ok)"
+else
+  bad "record muted reader: a reader that says nothing at exit 0 over a VALID record is refused by its caller (one token out, and it was not ok)" \
+      "got: $(printf '%s' "$RP1_MUTED_OUT" | tr '\n' ' ')"
+fi
+
+# --- the lifecycle trigger, re-keyed ------------------------------------------
+# Structured: a staged record MODIFICATION without the page is refused; the
+# ADOPTION commit (the record's addition) is not a flip and is not refused; and
+# the advisory gate mirrors both with its own codes.
+RP1L="$WORK/rp1-lifecycle"
+rp1_fixture "$RP1L"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"built"}},"chores":{}}\n' > "$RP1L/.claude/status.json"
+git -C "$RP1L" add -A >/dev/null 2>&1
+if git -C "$RP1L" commit -qm "record flip alone" >"$WORK/rp1-lc.out" 2>&1; then
+  bad "record lifecycle a: a staged record modification without specs/STATUS.md is refused" \
+      "it committed: the record and the page can now drift apart at the write moment checkpoint owns"
+else
+  if grep -q 'SLH-STATUS-MISSING' "$WORK/rp1-lc.out"; then
+    ok "record lifecycle a: a staged record modification without specs/STATUS.md is refused (SLH-STATUS-MISSING, the existing code re-keyed)"
+  else
+    bad "record lifecycle a: a staged record modification without specs/STATUS.md is refused" \
+        "refused for another reason: $(tr '\n' ' ' < "$WORK/rp1-lc.out")"
+  fi
+fi
+run_hook "$HOOKS/commit-gate.sh" "$RP1L" "$(bash_payload 'git commit -m "flip"')"
+expect_deny "record lifecycle b: the advisory gate mirrors the record-without-page demand" "CM-STATUS-MISSING"
+git -C "$RP1L" reset -q --hard HEAD 2>/dev/null
+
+# The ADOPTION commit: a legacy instance gains the record; the addition is an
+# opt-in, not a lifecycle flip, so no page is demanded and the commit lands.
+RP1A="$WORK/rp1-adopt"
+rp1_fixture "$RP1A"
+git -C "$RP1A" rm -q --cached .claude/status.json >/dev/null 2>&1
+rm -f "$RP1A/.claude/status.json"
+git -C "$RP1A" commit -qm "legacy instance" >/dev/null 2>&1
+printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{}}\n' > "$RP1A/.claude/status.json"
+git -C "$RP1A" add -A >/dev/null 2>&1
+if git -C "$RP1A" commit -qm "adoption" >"$WORK/rp1-adopt.out" 2>&1; then
+  ok "record lifecycle c: the ADOPTION commit (record added, page untouched) lands; an opt-in is not a flip"
+else
+  bad "record lifecycle c: the ADOPTION commit (record added, page untouched) lands; an opt-in is not a flip" \
+      "$(tr '\n' ' ' < "$WORK/rp1-adopt.out")"
+fi
+
+# --- the audit's record codes, green direction --------------------------------
+# (Each was watched RED against the pre-record bytes before its fix existed;
+# the observations are in spec 0126 and its commit. These pin the green.)
+RP1B="$WORK/rp1-audit-noclose"
+rp1_fixture "$RP1B"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed"}},"chores":{}}\n' > "$RP1B/.claude/status.json"
+git -C "$RP1B" add -A >/dev/null 2>&1
+git -C "$RP1B" -c core.hooksPath=/dev/null commit -qm "record-only factless close" >/dev/null 2>&1
+RP1B_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1B" 2>&1)" || true
+if printf '%s' "$RP1B_OUT" | grep -q '\[SLH-RECORD-NO-CLOSE\]'; then
+  ok "record audit a: a record flip to closed without close facts is a VIOLATION named SLH-RECORD-NO-CLOSE"
+else
+  bad "record audit a: a record flip to closed without close facts is a VIOLATION named SLH-RECORD-NO-CLOSE" \
+      "audit said: $(printf '%s' "$RP1B_OUT" | tail -2 | tr '\n' ' ')"
+fi
+
+RP1C="$WORK/rp1-audit-nospec"
+rp1_fixture "$RP1C"
+git -C "$RP1C" checkout -qb spec/0002-other
+printf '# Spec 0002\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1C/specs/0002-other.md"
+printf '| 0002 | Other | CLOSED | x |\n' >> "$RP1C/specs/STATUS.md"
+printf 'code\n' > "$RP1C/src/f.js"
+git -C "$RP1C" add -A >/dev/null 2>&1
+git -C "$RP1C" -c core.hooksPath=/dev/null commit -qm "close 0002 without recording it" >/dev/null 2>&1
+git -C "$RP1C" checkout -q main
+git -C "$RP1C" -c core.hooksPath=/dev/null merge -q --no-ff --no-edit spec/0002-other >/dev/null 2>&1
+RP1C_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1C" 2>&1)" || true
+if printf '%s' "$RP1C_OUT" | grep -q '\[SLH-RECORD-NO-SPEC\]'; then
+  ok "record audit b: a merged spec with NO record entry is a VIOLATION named SLH-RECORD-NO-SPEC, and the message names the one-line way out"
+else
+  bad "record audit b: a merged spec with NO record entry is a VIOLATION named SLH-RECORD-NO-SPEC, and the message names the one-line way out" \
+      "audit said: $(printf '%s' "$RP1C_OUT" | tail -2 | tr '\n' ' ')"
+fi
+
+RP1D="$WORK/rp1-audit-malformed"
+rp1_fixture "$RP1D"
+printf 'not json at all\n' > "$RP1D/.claude/status.json"
+printf 'docs\n' > "$RP1D/docs.txt"
+git -C "$RP1D" add -A >/dev/null 2>&1
+git -C "$RP1D" -c core.hooksPath=/dev/null commit -qm "malformed record" >/dev/null 2>&1
+RP1D_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1D" 2>&1)" || true
+if printf '%s' "$RP1D_OUT" | grep -q '\[SLH-RECORD-MALFORMED\]'; then
+  ok "record audit c: a present-and-malformed record is a VIOLATION named SLH-RECORD-MALFORMED, never a fallback to the page readers"
+else
+  bad "record audit c: a present-and-malformed record is a VIOLATION named SLH-RECORD-MALFORMED, never a fallback to the page readers" \
+      "audit said: $(printf '%s' "$RP1D_OUT" | tail -2 | tr '\n' ' ')"
+fi
+
+# The honest structured close, BOTH merge shapes, stays clean: the codes above
+# refuse hand edits, not the feature.
+RP1E="$WORK/rp1-audit-clean"
+rp1_fixture "$RP1E"
+git -C "$RP1E" checkout -qb spec/0001-thing
+printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1E/specs/0001-thing.md"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1E/.claude/status.json"
+sed -e 's/| ACTIVE |/| CLOSED |/' "$RP1E/specs/STATUS.md" > "$RP1E/specs/STATUS.md.new" && mv "$RP1E/specs/STATUS.md.new" "$RP1E/specs/STATUS.md"
+printf 'code\n' > "$RP1E/src/f.js"
+git -C "$RP1E" add -A >/dev/null 2>&1
+git -C "$RP1E" -c core.hooksPath=/dev/null commit -qm "compliant recorded close" >/dev/null 2>&1
+git -C "$RP1E" checkout -q main
+git -C "$RP1E" -c core.hooksPath=/dev/null merge -q --no-ff --no-edit spec/0001-thing >/dev/null 2>&1
+RP1E_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1E" 2>&1)" || true
+if printf '%s' "$RP1E_OUT" | grep -q ' 0 violations'; then
+  ok "record audit d: the honest structured --no-ff close audits clean"
+else
+  bad "record audit d: the honest structured --no-ff close audits clean" \
+      "audit said: $(printf '%s' "$RP1E_OUT" | tail -2 | tr '\n' ' ')"
+fi
+
+RP1F="$WORK/rp1-audit-squash"
+rp1_fixture "$RP1F"
+git -C "$RP1F" checkout -qb spec/0001-thing
+printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1F/specs/0001-thing.md"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1F/.claude/status.json"
+sed -e 's/| ACTIVE |/| CLOSED |/' "$RP1F/specs/STATUS.md" > "$RP1F/specs/STATUS.md.new" && mv "$RP1F/specs/STATUS.md.new" "$RP1F/specs/STATUS.md"
+printf 'code\n' > "$RP1F/src/f.js"
+git -C "$RP1F" add -A >/dev/null 2>&1
+git -C "$RP1F" -c core.hooksPath=/dev/null commit -qm "compliant recorded close" >/dev/null 2>&1
+git -C "$RP1F" checkout -q main
+git -C "$RP1F" -c core.hooksPath=/dev/null merge --squash spec/0001-thing >/dev/null 2>&1
+git -C "$RP1F" -c core.hooksPath=/dev/null commit -qm "squash close of 0001" >/dev/null 2>&1
+RP1F_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1F" 2>&1)" || true
+if printf '%s' "$RP1F_OUT" | grep -q ' 0 violations'; then
+  ok "record audit e: the honest structured SQUASH close audits clean (F4's honest shape, record-verified)"
+else
+  bad "record audit e: the honest structured SQUASH close audits clean (F4's honest shape, record-verified)" \
+      "audit said: $(printf '%s' "$RP1F_OUT" | tail -2 | tr '\n' ' ')"
+fi
+
+# --- the session mirror at close-gate ----------------------------------------
+RP1CG="$WORK/rp1-cg"
+rp1_fixture "$RP1CG"
+git -C "$RP1CG" checkout -qb spec/0001-thing
+printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1CG/specs/0001-thing.md"
+sed -e 's/| ACTIVE |/| CLOSED |/' "$RP1CG/specs/STATUS.md" > "$RP1CG/specs/STATUS.md.new" && mv "$RP1CG/specs/STATUS.md.new" "$RP1CG/specs/STATUS.md"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed"}},"chores":{}}\n' > "$RP1CG/.claude/status.json"
+printf 'code\n' > "$RP1CG/src/f.js"
+git -C "$RP1CG" add -A >/dev/null 2>&1
+git -C "$RP1CG" -c core.hooksPath=/dev/null commit -qm "record without facts" >/dev/null 2>&1
+git -C "$RP1CG" checkout -q main
+run_hook "$HOOKS/close-gate.sh" "$RP1CG" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+expect_deny "record close-gate a: a branch record without close facts is warned CG-RECORD-NO-CLOSE (prose fully compliant, so the record is the only reader that can see it)" "CG-RECORD-NO-CLOSE"
+
+git -C "$RP1CG" checkout -q spec/0001-thing
+printf '{"setlist_status":1,"specs":{},"chores":{}}\n' > "$RP1CG/.claude/status.json"
+git -C "$RP1CG" add -A >/dev/null 2>&1
+git -C "$RP1CG" -c core.hooksPath=/dev/null commit -qm "entry removed" >/dev/null 2>&1
+git -C "$RP1CG" checkout -q main
+run_hook "$HOOKS/close-gate.sh" "$RP1CG" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+expect_deny "record close-gate b: a spec with no record entry is warned CG-RECORD-NO-SPEC" "CG-RECORD-NO-SPEC"
+
+git -C "$RP1CG" checkout -q spec/0001-thing
+printf 'not json at all\n' > "$RP1CG/.claude/status.json"
+git -C "$RP1CG" add -A >/dev/null 2>&1
+git -C "$RP1CG" -c core.hooksPath=/dev/null commit -qm "record garbage" >/dev/null 2>&1
+git -C "$RP1CG" checkout -q main
+run_hook "$HOOKS/close-gate.sh" "$RP1CG" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+expect_deny "record close-gate c: a malformed branch record is warned CG-RECORD-MALFORMED, in the git hooks' own words" "CG-RECORD-MALFORMED"
+
+git -C "$RP1CG" checkout -q spec/0001-thing
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1CG/.claude/status.json"
+git -C "$RP1CG" add -A >/dev/null 2>&1
+git -C "$RP1CG" -c core.hooksPath=/dev/null commit -qm "facts complete" >/dev/null 2>&1
+git -C "$RP1CG" checkout -q main
+run_hook "$HOOKS/close-gate.sh" "$RP1CG" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
+expect_allow "record close-gate d: the compliant recorded close is allowed in silence"
+
+# --- the advisory commit gate's malformed mirror ------------------------------
+RP1CM="$WORK/rp1-cm"
+rp1_fixture "$RP1CM"
+printf 'not json at all\n' > "$RP1CM/.claude/status.json"
+printf 'x\n' >> "$RP1CM/specs/STATUS.md"
+git -C "$RP1CM" add -A >/dev/null 2>&1
+run_hook "$HOOKS/commit-gate.sh" "$RP1CM" "$(bash_payload 'git commit -m x')"
+expect_deny "record commit-gate: a staged malformed record is warned CM-RECORD-MALFORMED at the earliest layer that sees it" "CM-RECORD-MALFORMED"
+
+# --- feature code without a record flip: the structured SLH-CLOSES-NO-SPEC ----
+RP1N="$WORK/rp1-noflip"
+rp1_fixture "$RP1N"
+git -C "$RP1N" checkout -qb spec/0001-thing
+printf 'code\n' > "$RP1N/src/f.js"
+git -C "$RP1N" add -A >/dev/null 2>&1
+git -C "$RP1N" -c core.hooksPath=/dev/null commit -qm "code, no record flip" >/dev/null 2>&1
+git -C "$RP1N" checkout -q main
+if git -C "$RP1N" merge --no-ff --no-edit spec/0001-thing >"$WORK/rp1-noflip.out" 2>&1; then
+  bad "record closes-no-spec: feature code without a record flip or chore is refused at the merge" \
+      "the merge landed; the record path lost the closes-no-spec rule"
+else
+  if grep -q 'SLH-CLOSES-NO-SPEC' "$WORK/rp1-noflip.out"; then
+    ok "record closes-no-spec: feature code without a record flip or chore is refused at the merge, and the message names checkpoint"
+  else
+    bad "record closes-no-spec: feature code without a record flip or chore is refused at the merge" \
+        "refused for another reason: $(tr '\n' ' ' < "$WORK/rp1-noflip.out")"
+  fi
+fi
+
+# --- the chore route through the record ---------------------------------------
+RP1CH="$WORK/rp1-chore"
+rp1_fixture "$RP1CH"
+git -C "$RP1CH" checkout -qb chore/tidy
+printf 'tidied\n' > "$RP1CH/src/tidy.js"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{"CHORE-001":{"status":"done"}}}\n' > "$RP1CH/.claude/status.json"
+printf '- CHORE-001: DONE 2026-08-30. Tidied.\n' >> "$RP1CH/specs/STATUS.md"
+git -C "$RP1CH" add -A >/dev/null 2>&1
+git -C "$RP1CH" -c core.hooksPath=/dev/null commit -qm "chore recorded in the record" >/dev/null 2>&1
+git -C "$RP1CH" checkout -q main
+if git -C "$RP1CH" merge --no-ff --no-edit chore/tidy >"$WORK/rp1-chore.out" 2>&1; then
+  ok "record chore: a chore newly done in the record authorises its merge (the record half of Part 5b)"
+else
+  bad "record chore: a chore newly done in the record authorises its merge (the record half of Part 5b)" \
+      "$(tr '\n' ' ' < "$WORK/rp1-chore.out")"
+fi
+
+# --- THE ABSENCE DIFFERENTIAL: blob-pinned, both directions -------------------
+# A8: the case count is asserted before the agreement is believed, and a
+# DISCRIMINATION control proves the harness can see a difference at all, so a
+# green here is never green because nothing ran.
+if [[ ! -d "$RP1_PRE" ]]; then
+  ok "record differential: SKIPPED, the pre-record hook blobs are not present in this tree (export copy)"
+else
+  RP1DD="$WORK/rp1-diff"; rm -rf "$RP1DD"; mkdir -p "$RP1DD"
+  RP1_DIFF_N=0; RP1_DIFF_BAD=""
+  for RP1_CASE in clean lifecycle emdash close-merge close-gate-deny commit-gate-lc audit-close; do
+    for RP1_GEN in pre now; do
+      d="$RP1DD/$RP1_CASE-$RP1_GEN"
+      rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude" "$d/.githooks"
+      git_init "$d"
+      # NO .claude/status.json anywhere: this is the legacy instance, and the
+      # claim under test is that it cannot tell the generations apart.
+      printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+      printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | ACTIVE | wip |\n' > "$d/specs/STATUS.md"
+      printf '# Spec 0001\n\nStatus: ACTIVE\n\n## Goal\n\nthing\n' > "$d/specs/0001-thing.md"
+      if [[ "$RP1_GEN" == "pre" ]]; then
+        cp "$RP1_PRE/pre-commit" "$RP1_PRE/pre-merge-commit" "$RP1_PRE/setlist-hook-lib.sh" "$d/.githooks/"
+        RP1_CG="$RP1_PRE/close-gate.sh"; RP1_CM="$RP1_PRE/commit-gate.sh"; RP1_TA="$RP1_PRE/trunk-audit.sh"
+      else
+        cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
+        RP1_CG="$HOOKS/close-gate.sh"; RP1_CM="$HOOKS/commit-gate.sh"; RP1_TA="$SCRIPTS/trunk-audit.sh"
+      fi
+      chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+      printf 'seed\n' > "$d/seed.txt"
+      git -C "$d" add -A >/dev/null 2>&1
+      git -C "$d" -c core.hooksPath=/dev/null commit -qm seed >/dev/null 2>&1
+      git -C "$d" config core.hooksPath .githooks
+      : > "$RP1DD/$RP1_CASE-$RP1_GEN.out"
+      case "$RP1_CASE" in
+        clean)
+          printf 'ordinary work\n' > "$d/docs.txt"
+          git -C "$d" add -A >/dev/null 2>&1
+          git -C "$d" commit -qm "clean" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
+        lifecycle)
+          printf '# Spec 0001\n\nStatus: BUILT\n\n## Goal\n\nthing\n' > "$d/specs/0001-thing.md"
+          git -C "$d" add -A >/dev/null 2>&1
+          git -C "$d" commit -qm "flip without page" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
+        emdash)
+          printf 'a %s b\n' "$EMDASH" > "$d/src/app.js"
+          git -C "$d" add -A >/dev/null 2>&1
+          git -C "$d" commit -qm "emdash" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
+        close-merge)
+          git -C "$d" checkout -qb spec/0001-thing 2>/dev/null
+          printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$d/specs/0001-thing.md"
+          sed -e 's/| ACTIVE |/| CLOSED |/' "$d/specs/STATUS.md" > "$d/specs/STATUS.md.new" && mv "$d/specs/STATUS.md.new" "$d/specs/STATUS.md"
+          printf 'code\n' > "$d/src/f.js"
+          git -C "$d" add -A >/dev/null 2>&1
+          git -C "$d" -c core.hooksPath=/dev/null commit -qm "close" >/dev/null 2>&1
+          git -C "$d" checkout -q main 2>/dev/null
+          git -C "$d" merge --no-ff --no-edit spec/0001-thing >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out"
+          # The merge subject line embeds nothing generation-specific; strip
+          # the object names git prints, which differ per repo by hash.
+          sed -e 's/[0-9a-f]\{7,40\}/HASH/g' "$RP1DD/$RP1_CASE-$RP1_GEN.out" > "$RP1DD/$RP1_CASE-$RP1_GEN.out.n" && mv "$RP1DD/$RP1_CASE-$RP1_GEN.out.n" "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
+        close-gate-deny)
+          printf '%s' "$(bash_payload 'git merge --no-ff spec/0009-none')" | CLAUDE_PROJECT_DIR="$d" bash "$RP1_CG" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
+        commit-gate-lc)
+          printf '# Spec 0001\n\nStatus: BUILT\n\n## Goal\n\nthing\n' > "$d/specs/0001-thing.md"
+          git -C "$d" add -A >/dev/null 2>&1
+          printf '%s' "$(bash_payload 'git commit -m flip')" | CLAUDE_PROJECT_DIR="$d" bash "$RP1_CM" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
+        audit-close)
+          git -C "$d" checkout -qb spec/0001-thing 2>/dev/null
+          printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$d/specs/0001-thing.md"
+          sed -e 's/| ACTIVE |/| CLOSED |/' "$d/specs/STATUS.md" > "$d/specs/STATUS.md.new" && mv "$d/specs/STATUS.md.new" "$d/specs/STATUS.md"
+          printf 'code\n' > "$d/src/f.js"
+          git -C "$d" add -A >/dev/null 2>&1
+          git -C "$d" -c core.hooksPath=/dev/null commit -qm "close" >/dev/null 2>&1
+          git -C "$d" checkout -q main 2>/dev/null
+          git -C "$d" -c core.hooksPath=/dev/null merge -q --no-ff --no-edit spec/0001-thing >/dev/null 2>&1
+          bash "$RP1_TA" "$d" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out"
+          # The audit echoes the instance path and commit hashes, which differ
+          # per generation BY CONSTRUCTION (two fixture dirs); normalise both,
+          # because the claim under comparison is behaviour, not the echo.
+          sed -e "s#$d#INSTANCE#g" -e 's/[0-9a-f]\{7,40\}/HASH/g' "$RP1DD/$RP1_CASE-$RP1_GEN.out" > "$RP1DD/$RP1_CASE-$RP1_GEN.out.n" && mv "$RP1DD/$RP1_CASE-$RP1_GEN.out.n" "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
+      esac
+    done
+    RP1_DIFF_N=$((RP1_DIFF_N + 1))
+    if ! cmp -s "$RP1DD/$RP1_CASE-pre.out" "$RP1DD/$RP1_CASE-now.out"; then
+      RP1_DIFF_BAD="$RP1_DIFF_BAD $RP1_CASE"
+    fi
+  done
+  if [[ "$RP1_DIFF_N" -eq 7 && -z "$RP1_DIFF_BAD" ]]; then
+    ok "record differential: with NO record present, all 7 cases are byte-identical between the pre-record and current generations, at every layer"
+  else
+    bad "record differential: with NO record present, all 7 cases are byte-identical between the pre-record and current generations, at every layer" \
+        "$RP1_DIFF_N of 7 cases compared, differing:${RP1_DIFF_BAD:- none}; absent must mean today's behaviour exactly"
+  fi
+
+  # THE DISCRIMINATION CONTROL: a structured input where the generations MUST
+  # diverge, so the identity above is evidence about absence rather than about
+  # a harness that compares nothing.
+  RP1DC="$RP1DD/disc"; rm -rf "$RP1DC-pre" "$RP1DC-now"
+  for RP1_GEN in pre now; do
+    d="$RP1DC-$RP1_GEN"
+    rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude" "$d/.githooks"
+    git_init "$d"
+    printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+    printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{}}\n' > "$d/.claude/status.json"
+    printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | ACTIVE | wip |\n' > "$d/specs/STATUS.md"
+    if [[ "$RP1_GEN" == "pre" ]]; then
+      cp "$RP1_PRE/pre-commit" "$RP1_PRE/pre-merge-commit" "$RP1_PRE/setlist-hook-lib.sh" "$d/.githooks/"
+    else
+      cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
+    fi
+    chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+    printf 'seed\n' > "$d/seed.txt"
+    git -C "$d" add -A >/dev/null 2>&1
+    git -C "$d" -c core.hooksPath=/dev/null commit -qm seed >/dev/null 2>&1
+    git -C "$d" config core.hooksPath .githooks
+    printf '{"setlist_status":1,"specs":{"0001":{"status":"FINISHED"}}}\n' > "$d/.claude/status.json"
+    printf 'x\n' >> "$d/specs/STATUS.md"
+    git -C "$d" add -A >/dev/null 2>&1
+    git -C "$d" commit -qm "malformed record" >"$RP1DD/disc-$RP1_GEN.out" 2>&1
+    printf 'exit=%s\n' "$?" >> "$RP1DD/disc-$RP1_GEN.out"
+  done
+  if cmp -s "$RP1DD/disc-pre.out" "$RP1DD/disc-now.out"; then
+    bad "record differential control: a structured input DIVERGES between the generations" \
+        "the generations agreed on a malformed record, so the identity cases above may be identical because the harness compares nothing"
+  else
+    ok "record differential control: a structured input DIVERGES between the generations, so the 7-case identity is evidence about absence"
+  fi
+fi
+
+# --- the scaffold template and the upgrade's restraint -------------------------
+if [[ -f "$ROOT/templates/claude/status.json" ]]; then
+  RP1_TPL_VERDICT="$(jq -r "$(grep -m1 -E '^[[:space:]]*SLH_RECORD_CHECK_JQ=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed -e "s/^[[:space:]]*SLH_RECORD_CHECK_JQ='//" -e "s/'$//")" "$ROOT/templates/claude/status.json" 2>/dev/null || printf 'malformed')"
+  if [[ "$RP1_TPL_VERDICT" == "ok" ]]; then
+    ok "record template: templates/claude/status.json parses against the shipped grammar (structured from birth means born valid)"
+  else
+    bad "record template: templates/claude/status.json parses against the shipped grammar (structured from birth means born valid)" \
+        "the reader said: $RP1_TPL_VERDICT"
+  fi
+else
+  bad "record template: templates/claude/status.json parses against the shipped grammar (structured from birth means born valid)" \
+      "the template file is missing; stamp.sh names it in the PLAN"
+fi
+
+# --- OWNERSHIP (design section 8): the declared set and the per-file arm ----
+# The lockstep for the Owns reader: TWO homes (the library asks the question
+# at the squash landing, the audit at the pushed history), byte-identical.
+RP1_OWNS_LIB="$(grep -m1 -E '^[[:space:]]*SLH_OWNS_AWK=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed 's/^[[:space:]]*//')"
+RP1_OWNS_TA="$(grep -m1 -E '^[[:space:]]*SLH_OWNS_AWK=' "$SCRIPTS/trunk-audit.sh" | sed 's/^[[:space:]]*//')"
+if [[ -n "$RP1_OWNS_LIB" && "$RP1_OWNS_LIB" == "$RP1_OWNS_TA" ]]; then
+  ok "owns lockstep: SLH_OWNS_AWK is byte-identical in the hook library and trunk-audit.sh"
+else
+  bad "owns lockstep: SLH_OWNS_AWK is byte-identical in the hook library and trunk-audit.sh" \
+      "the two homes of the ownership grammar drifted"
+fi
+
+# The honest DECLARING squash close: files declared, files carried, clean.
+RP1O1="$WORK/rp1-owns-honest"
+rp1_fixture "$RP1O1"
+printf '# Spec 0001\n\nStatus: CLOSED\nOwns: src/feat.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1O1/specs/0001-thing.md"
+printf 'declared work\n' > "$RP1O1/src/feat.txt"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1O1/.claude/status.json"
+sed -e 's/| ACTIVE |/| CLOSED |/' "$RP1O1/specs/STATUS.md" > "$RP1O1/specs/STATUS.md.new" && mv "$RP1O1/specs/STATUS.md.new" "$RP1O1/specs/STATUS.md"
+git -C "$RP1O1" add -A >/dev/null 2>&1
+git -C "$RP1O1" -c core.hooksPath=/dev/null commit -qm "declaring squash-shaped close" >/dev/null 2>&1
+RP1O1_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1O1" 2>&1)" || true
+if printf '%s' "$RP1O1_OUT" | grep -q ' 0 violations'; then
+  ok "owns a: the honest declaring squash close passes on shape (its files were declared during the build)"
+else
+  bad "owns a: the honest declaring squash close passes on shape (its files were declared during the build)" \
+      "audit said: $(printf '%s' "$RP1O1_OUT" | tail -2 | tr '\n' ' ')"
+fi
+
+# The refusal names BOTH honest exits, because a false-deny without a way out
+# teaches the operator to reach for the skip hatch.
+RP1O2="$WORK/rp1-owns-exits"
+rp1_fixture "$RP1O2"
+printf '# Spec 0001\n\nStatus: CLOSED\nOwns: src/feat.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1O2/specs/0001-thing.md"
+printf 'declared\n' > "$RP1O2/src/feat.txt"
+printf 'forgotten\n' > "$RP1O2/src/extra.txt"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1O2/.claude/status.json"
+sed -e 's/| ACTIVE |/| CLOSED |/' "$RP1O2/specs/STATUS.md" > "$RP1O2/specs/STATUS.md.new" && mv "$RP1O2/specs/STATUS.md.new" "$RP1O2/specs/STATUS.md"
+git -C "$RP1O2" add -A >/dev/null 2>&1
+git -C "$RP1O2" -c core.hooksPath=/dev/null commit -qm "undeclared extra" >/dev/null 2>&1
+RP1O2_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1O2" 2>&1)" || true
+if printf '%s' "$RP1O2_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] src/extra.txt' \
+   && printf '%s' "$RP1O2_OUT" | grep -q 'checkpoint' \
+   && printf '%s' "$RP1O2_OUT" | grep -q -- '--no-ff'; then
+  ok "owns b: an undeclared role file in a declaring close refuses naming BOTH honest exits (declare through checkpoint, or the --no-ff route)"
+else
+  bad "owns b: an undeclared role file in a declaring close refuses naming BOTH honest exits (declare through checkpoint, or the --no-ff route)" \
+      "audit said: $(printf '%s' "$RP1O2_OUT" | tail -3 | tr '\n' ' ')"
+fi
+
+# The grammar refusals: a glob, a directory, a below-the-heading line. Each is
+# an exemption wearing a declaration, and each refuses AT THE ARM rather than
+# being read charitably.
+RP1_OWNS_BAD_MISS=""
+while IFS='	' read -r RP1_OLBL RP1_OLINE; do
+  [[ -n "$RP1_OLBL" ]] || continue
+  RP1O3="$WORK/rp1-owns-$RP1_OLBL"
+  rp1_fixture "$RP1O3"
+  printf '# Spec 0001\n\nStatus: CLOSED\n%s\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' "$RP1_OLINE" > "$RP1O3/specs/0001-thing.md"
+  printf 'work\n' > "$RP1O3/src/feat.txt"
+  printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1O3/.claude/status.json"
+  sed -e 's/| ACTIVE |/| CLOSED |/' "$RP1O3/specs/STATUS.md" > "$RP1O3/specs/STATUS.md.new" && mv "$RP1O3/specs/STATUS.md.new" "$RP1O3/specs/STATUS.md"
+  git -C "$RP1O3" add -A >/dev/null 2>&1
+  git -C "$RP1O3" -c core.hooksPath=/dev/null commit -qm "owns $RP1_OLBL" >/dev/null 2>&1
+  bash "$SCRIPTS/trunk-audit.sh" "$RP1O3" 2>&1 | grep -q '\[SLH-OWNS-MALFORMED\]' || RP1_OWNS_BAD_MISS="$RP1_OWNS_BAD_MISS $RP1_OLBL"
+done <<'RP1OWNSBAD'
+glob	Owns: src/*.txt
+dir	Owns: src/
+nospace	Owns:src/feat.txt
+dotdot	Owns: src/../secrets.txt
+RP1OWNSBAD
+# The out-of-range case separately: the declaration sits BELOW the Closing
+# report heading, outside what the attestation signs, so it counts for nothing
+# and refuses rather than being silently ignored while a human reads it.
+RP1O4="$WORK/rp1-owns-range"
+rp1_fixture "$RP1O4"
+printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\nOwns: src/feat.txt\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1O4/specs/0001-thing.md"
+printf 'work\n' > "$RP1O4/src/feat.txt"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1O4/.claude/status.json"
+sed -e 's/| ACTIVE |/| CLOSED |/' "$RP1O4/specs/STATUS.md" > "$RP1O4/specs/STATUS.md.new" && mv "$RP1O4/specs/STATUS.md.new" "$RP1O4/specs/STATUS.md"
+git -C "$RP1O4" add -A >/dev/null 2>&1
+git -C "$RP1O4" -c core.hooksPath=/dev/null commit -qm "owns out of range" >/dev/null 2>&1
+bash "$SCRIPTS/trunk-audit.sh" "$RP1O4" 2>&1 | grep -q '\[SLH-OWNS-MALFORMED\]' || RP1_OWNS_BAD_MISS="$RP1_OWNS_BAD_MISS out-of-range"
+if [[ -z "$RP1_OWNS_BAD_MISS" ]]; then
+  ok "owns c: a glob, a directory, a spaceless label, a dot-dot path and an out-of-range line each refuse SLH-OWNS-MALFORMED at the arm that would consume them"
+else
+  bad "owns c: a glob, a directory, a spaceless label, a dot-dot path and an out-of-range line each refuse SLH-OWNS-MALFORMED at the arm that would consume them" \
+      "not refused:$RP1_OWNS_BAD_MISS"
+fi
+
+# THE CHORE HALF (F5-2026): the compliant --squash chore close is accepted at
+# the COMMIT layer (the squash landing through the real hooks) and at the PUSH
+# layer (the audit), and the widening the 2.3.0 leg warned about does not
+# occur: an undeclared file beside the chore flip still refuses per file.
+RP1O5="$WORK/rp1-owns-chore"
+rp1_fixture "$RP1O5"
+git -C "$RP1O5" checkout -qb chore/tidy 2>/dev/null
+printf 'tidied\n' > "$RP1O5/src/tidy.js"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{"CHORE-002":{"status":"done","files":["src/tidy.js"]}}}\n' > "$RP1O5/.claude/status.json"
+printf -- '- CHORE-002: DONE 2026-08-30. Tidied.\n' >> "$RP1O5/specs/STATUS.md"
+git -C "$RP1O5" add -A >/dev/null 2>&1
+git -C "$RP1O5" -c core.hooksPath=/dev/null commit -qm "chore on branch" >/dev/null 2>&1
+git -C "$RP1O5" checkout -q main 2>/dev/null
+git -C "$RP1O5" merge --squash chore/tidy >/dev/null 2>&1
+if git -C "$RP1O5" commit -qm "squash chore close" >"$WORK/rp1-owns-chore.out" 2>&1; then
+  ok "owns d (F5-2026): the compliant --squash CHORE close is accepted at the commit layer"
+else
+  bad "owns d (F5-2026): the compliant --squash CHORE close is accepted at the commit layer" \
+      "$(tr '\n' ' ' < "$WORK/rp1-owns-chore.out")"
+fi
+RP1O5_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1O5" 2>&1)" || true
+if printf '%s' "$RP1O5_OUT" | grep -q ' 0 violations'; then
+  ok "owns e (F5-2026): the same chore close is accepted at the push layer, so the two layers stop disagreeing"
+else
+  bad "owns e (F5-2026): the same chore close is accepted at the push layer, so the two layers stop disagreeing" \
+      "audit said: $(printf '%s' "$RP1O5_OUT" | tail -2 | tr '\n' ' ')"
+fi
+# The non-widening control: the chore route exempts ITS declared files only.
+RP1O6="$WORK/rp1-owns-chorewide"
+rp1_fixture "$RP1O6"
+printf 'tidied\n' > "$RP1O6/src/tidy.js"
+printf 'smuggled beside the chore\n' > "$RP1O6/src/extra.js"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{"CHORE-002":{"status":"done","files":["src/tidy.js"]}}}\n' > "$RP1O6/.claude/status.json"
+printf -- '- CHORE-002: DONE 2026-08-30. Tidied.\n' >> "$RP1O6/specs/STATUS.md"
+git -C "$RP1O6" add -A >/dev/null 2>&1
+git -C "$RP1O6" -c core.hooksPath=/dev/null commit -qm "chore flip with a rider" >/dev/null 2>&1
+RP1O6_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1O6" 2>&1)" || true
+if printf '%s' "$RP1O6_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] src/extra.js'; then
+  ok "owns f (F5-2026 non-widening): a chore flip exempts nothing but its declared files; the rider refuses by name"
+else
+  bad "owns f (F5-2026 non-widening): a chore flip exempts nothing but its declared files; the rider refuses by name" \
+      "audit said: $(printf '%s' "$RP1O6_OUT" | tail -2 | tr '\n' ' ')"
+fi
+
+# THE LIBRARY'S HALF AT THE SQUASH LANDING: the same question, asked at the
+# earliest layer that can refuse it, with the first honest exit then taken and
+# the landing succeeding.
+RP1O7="$WORK/rp1-owns-landing"
+rp1_fixture "$RP1O7"
+git -C "$RP1O7" checkout -qb spec/0001-thing 2>/dev/null
+printf '# Spec 0001\n\nStatus: CLOSED\nOwns: src/feat.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1O7/specs/0001-thing.md"
+printf 'declared\n' > "$RP1O7/src/feat.txt"
+printf 'smuggled\n' > "$RP1O7/src/wip.txt"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1O7/.claude/status.json"
+sed -e 's/| ACTIVE |/| CLOSED |/' "$RP1O7/specs/STATUS.md" > "$RP1O7/specs/STATUS.md.new" && mv "$RP1O7/specs/STATUS.md.new" "$RP1O7/specs/STATUS.md"
+git -C "$RP1O7" add -A >/dev/null 2>&1
+git -C "$RP1O7" -c core.hooksPath=/dev/null commit -qm "close with smuggle" >/dev/null 2>&1
+git -C "$RP1O7" checkout -q main 2>/dev/null
+git -C "$RP1O7" merge --squash spec/0001-thing >/dev/null 2>&1
+if git -C "$RP1O7" commit -qm "squash close" >"$WORK/rp1-owns-landing.out" 2>&1; then
+  bad "owns g: the squash landing refuses the undeclared file at the commit layer too" \
+      "the landing succeeded carrying an undeclared role file"
+else
+  if grep -q 'SLH-OWNS-UNDECLARED' "$WORK/rp1-owns-landing.out"; then
+    ok "owns g: the squash landing refuses the undeclared file at the commit layer too"
+  else
+    bad "owns g: the squash landing refuses the undeclared file at the commit layer too" \
+        "refused for another reason: $(tr '\n' ' ' < "$WORK/rp1-owns-landing.out")"
+  fi
+fi
+# The first honest exit: declare it, and the same landing succeeds.
+printf '# Spec 0001\n\nStatus: CLOSED\nOwns: src/feat.txt\nOwns: src/wip.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1O7/specs/0001-thing.md"
+git -C "$RP1O7" add specs/0001-thing.md >/dev/null 2>&1
+if git -C "$RP1O7" commit -qm "squash close, declared" >"$WORK/rp1-owns-landing2.out" 2>&1; then
+  ok "owns h: declaring the file (the first honest exit) lets the same landing succeed"
+else
+  bad "owns h: declaring the file (the first honest exit) lets the same landing succeed" \
+      "$(tr '\n' ' ' < "$WORK/rp1-owns-landing2.out")"
+fi
+
+# THE DELETION AXIS (2.4.0 leg F7): a deleted path cannot carry unspecced
+# content to the trunk, which is the only question the per-file arm is asked.
+# The merge arm's own sibling already filters (--diff-filter=A at the
+# provenance check); the single-parent arm must not read a deletion as a file
+# the close "does not declare". Two closes: 0001 brings src/old.txt declared,
+# 0002 brings src/new.txt declared and DELETES src/old.txt.
+RP1O8="$WORK/rp1-owns-delete"
+rp1_fixture "$RP1O8"
+printf '# Spec 0001\n\nStatus: CLOSED\nOwns: src/old.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1O8/specs/0001-thing.md"
+printf 'first\n' > "$RP1O8/src/old.txt"
+printf '# Spec 0002\n\nStatus: ACTIVE\n\n## Goal\n\nother\n' > "$RP1O8/specs/0002-other.md"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"},"0002":{"status":"active"}},"chores":{}}\n' > "$RP1O8/.claude/status.json"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n| 0002 | Other | ACTIVE | wip |\n' > "$RP1O8/specs/STATUS.md"
+git -C "$RP1O8" add -A >/dev/null 2>&1
+git -C "$RP1O8" -c core.hooksPath=/dev/null commit -qm "declaring close of 0001" >/dev/null 2>&1
+printf '# Spec 0002\n\nStatus: CLOSED\nOwns: src/new.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1O8/specs/0002-other.md"
+printf 'second\n' > "$RP1O8/src/new.txt"
+git -C "$RP1O8" rm -q src/old.txt >/dev/null 2>&1
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"},"0002":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1O8/.claude/status.json"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n| 0002 | Other | CLOSED | done |\n' > "$RP1O8/specs/STATUS.md"
+git -C "$RP1O8" add -A >/dev/null 2>&1
+git -C "$RP1O8" -c core.hooksPath=/dev/null commit -qm "declaring close of 0002, retiring src/old.txt" >/dev/null 2>&1
+RP1O8_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1O8" 2>&1)" || true
+if printf '%s' "$RP1O8_OUT" | grep -q ' 0 violations' \
+   && ! printf '%s' "$RP1O8_OUT" | grep -q 'SLH-OWNS-UNDECLARED'; then
+  ok "owns i (2.4.0 leg F7): a declaring close that DELETES a role-path file audits clean; stop shipping a file is not smuggling one"
+else
+  bad "owns i (2.4.0 leg F7): a declaring close that DELETES a role-path file audits clean; stop shipping a file is not smuggling one" \
+      "audit said: $(printf '%s' "$RP1O8_OUT" | tail -3 | tr '\n' ' ')"
+fi
+
+# The false-negative guard beside it: the deletion filter must not mask an
+# undeclared ADDITION riding the same close.
+RP1O9="$WORK/rp1-owns-delete-smuggle"
+rp1_fixture "$RP1O9"
+printf '# Spec 0001\n\nStatus: CLOSED\nOwns: src/old.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1O9/specs/0001-thing.md"
+printf 'first\n' > "$RP1O9/src/old.txt"
+printf '# Spec 0002\n\nStatus: ACTIVE\n\n## Goal\n\nother\n' > "$RP1O9/specs/0002-other.md"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"},"0002":{"status":"active"}},"chores":{}}\n' > "$RP1O9/.claude/status.json"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n| 0002 | Other | ACTIVE | wip |\n' > "$RP1O9/specs/STATUS.md"
+git -C "$RP1O9" add -A >/dev/null 2>&1
+git -C "$RP1O9" -c core.hooksPath=/dev/null commit -qm "declaring close of 0001" >/dev/null 2>&1
+printf '# Spec 0002\n\nStatus: CLOSED\nOwns: src/new.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1O9/specs/0002-other.md"
+printf 'second\n' > "$RP1O9/src/new.txt"
+printf 'smuggled\n' > "$RP1O9/src/sneak.txt"
+git -C "$RP1O9" rm -q src/old.txt >/dev/null 2>&1
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"},"0002":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1O9/.claude/status.json"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n| 0002 | Other | CLOSED | done |\n' > "$RP1O9/specs/STATUS.md"
+git -C "$RP1O9" add -A >/dev/null 2>&1
+git -C "$RP1O9" -c core.hooksPath=/dev/null commit -qm "close of 0002 with a rider" >/dev/null 2>&1
+RP1O9_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1O9" 2>&1)" || true
+if printf '%s' "$RP1O9_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] src/sneak.txt' \
+   && ! printf '%s' "$RP1O9_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] src/old.txt'; then
+  ok "owns j (2.4.0 leg F7 guard): the deletion filter does not mask an undeclared addition riding the same close"
+else
+  bad "owns j (2.4.0 leg F7 guard): the deletion filter does not mask an undeclared addition riding the same close" \
+      "audit said: $(printf '%s' "$RP1O9_OUT" | tail -3 | tr '\n' ' ')"
+fi
+
+# The library's half at the squash landing: the same deletion, refused today at
+# the earliest layer, must land once declared coverage holds for what ARRIVES.
+# A REAL `merge --squash` then commit, because the landing arm keys on the
+# squash-completion state and a hand-staged equivalent never enters it.
+RP1OA="$WORK/rp1-owns-delete-landing"
+rp1_fixture "$RP1OA"
+printf '# Spec 0001\n\nStatus: CLOSED\nOwns: src/old.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1OA/specs/0001-thing.md"
+printf 'first\n' > "$RP1OA/src/old.txt"
+printf '# Spec 0002\n\nStatus: ACTIVE\n\n## Goal\n\nother\n' > "$RP1OA/specs/0002-other.md"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"},"0002":{"status":"active"}},"chores":{}}\n' > "$RP1OA/.claude/status.json"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n| 0002 | Other | ACTIVE | wip |\n' > "$RP1OA/specs/STATUS.md"
+git -C "$RP1OA" add -A >/dev/null 2>&1
+git -C "$RP1OA" -c core.hooksPath=/dev/null commit -qm "declaring close of 0001" >/dev/null 2>&1
+git -C "$RP1OA" checkout -qb spec/0002-other 2>/dev/null
+printf '# Spec 0002\n\nStatus: CLOSED\nOwns: src/new.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1OA/specs/0002-other.md"
+printf 'second\n' > "$RP1OA/src/new.txt"
+git -C "$RP1OA" rm -q src/old.txt >/dev/null 2>&1
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"},"0002":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1OA/.claude/status.json"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n| 0002 | Other | CLOSED | done |\n' > "$RP1OA/specs/STATUS.md"
+git -C "$RP1OA" add -A >/dev/null 2>&1
+git -C "$RP1OA" -c core.hooksPath=/dev/null commit -qm "build 0002, retiring src/old.txt" >/dev/null 2>&1
+git -C "$RP1OA" checkout -q main 2>/dev/null
+git -C "$RP1OA" -c merge.ff=true merge --squash spec/0002-other >/dev/null 2>&1
+if git -C "$RP1OA" commit -qm "squash close of 0002, retiring src/old.txt" >"$WORK/rp1-owns-del-landing.out" 2>&1; then
+  ok "owns k (2.4.0 leg F7): the squash landing accepts a declaring close whose only extra path is a deletion"
+else
+  bad "owns k (2.4.0 leg F7): the squash landing accepts a declaring close whose only extra path is a deletion" \
+      "$(tr '\n' ' ' < "$WORK/rp1-owns-del-landing.out")"
+fi
+
+# THE FENCED-QUOTE LAYOUT (2.4.0 leg F1, ruled option C 2026-09-01): a fenced
+# copy of the Closing-report template ABOVE the declaration ends the hashed
+# range early, the reader and spec-hash.sh agree on that cut byte for byte, and
+# the ruling keeps them agreed: the layout REFUSES, and the refusal must name
+# the actual cause and the one-edit fix instead of stating the opposite of the
+# file's contents. If a later change fence-strips the reader, this pin flips
+# and the Known-limitations bullet, spec-hash.sh and the attestation-custody
+# question all have to move in the same commit.
+RP1OB="$WORK/rp1-owns-fenced"
+rp1_fixture "$RP1OB"
+printf '# Spec 0001\n\nStatus: CLOSED\n\nI will fill this in at the close:\n\n```markdown\n## Closing report\n\nArchitecture diagram: <updated in this commit | no impact>\n```\n\nOwns: src/feat.txt\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1OB/specs/0001-thing.md"
+printf 'declared\n' > "$RP1OB/src/feat.txt"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1OB/.claude/status.json"
+sed -e 's/| ACTIVE |/| CLOSED |/' "$RP1OB/specs/STATUS.md" > "$RP1OB/specs/STATUS.md.new" && mv "$RP1OB/specs/STATUS.md.new" "$RP1OB/specs/STATUS.md"
+git -C "$RP1OB" add -A >/dev/null 2>&1
+git -C "$RP1OB" -c core.hooksPath=/dev/null commit -qm "close with a fenced template quote above the declaration" >/dev/null 2>&1
+RP1OB_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1OB" 2>&1)" || true
+if printf '%s' "$RP1OB_OUT" | grep -q '\[SLH-OWNS-MALFORMED\]' \
+   && printf '%s' "$RP1OB_OUT" | grep -q 'fences included' \
+   && printf '%s' "$RP1OB_OUT" | grep -q 'one edit'; then
+  ok "owns l (2.4.0 leg F1, ruled option C): the fenced-quote layout refuses WITH the honest message naming the cause and the one-edit fix"
+else
+  bad "owns l (2.4.0 leg F1, ruled option C): the fenced-quote layout refuses WITH the honest message naming the cause and the one-edit fix" \
+      "audit said: $(printf '%s' "$RP1OB_OUT" | tail -3 | tr '\n' ' ')"
+fi
+
+# stamp.sh delivers the record in BOTH modes; refresh-instance.sh (the upgrade
+# deliverer) must NEVER deliver it: mention the field, migrate NOTHING.
+if grep -qE '^add claude/status\.json' "$SCRIPTS/stamp.sh"; then
+  ok "record delivery a: stamp.sh stamps .claude/status.json (structured from birth, both modes)"
+else
+  bad "record delivery a: stamp.sh stamps .claude/status.json (structured from birth, both modes)" \
+      "no add line names claude/status.json"
+fi
+if grep -q 'status\.json' "$SCRIPTS/refresh-instance.sh"; then
+  bad "record delivery b: refresh-instance.sh never delivers or creates the record (BL-005: mention the field, migrate NOTHING)" \
+      "refresh-instance.sh mentions status.json; the upgrade path must not touch the record"
+else
+  ok "record delivery b: refresh-instance.sh never delivers or creates the record (BL-005: mention the field, migrate NOTHING)"
 fi
 
 # --- summary -----------------------------------------------------------------

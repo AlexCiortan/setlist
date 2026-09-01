@@ -53,6 +53,7 @@ documentation, never copied into instances.
 | `specs/STATUS.md.tmpl` | `specs/STATUS.md` | always |
 | `claude/settings.json.tmpl` | `.claude/settings.json` | always (model line only when opusplan verified) |
 | `claude/sdd.json.tmpl` | `.claude/sdd.json` | always |
+| `claude/status.json` | `.claude/status.json` | always, byte-verbatim (the structured status record, RP1: stamped instances are structured from birth in both modes; upgrades never receive it, and opt in through checkpoint's human-confirmed transcription) |
 | `claude/agents/qa-verifier.md` | `.claude/agents/qa-verifier.md` | always |
 | `claude/skills/scaffold/SKILL.md.tmpl` | `.claude/skills/scaffold/SKILL.md` | new projects (retrofits get no generated skill; the health check ships as `/setlist:validate`) |
 | `claude/skills/browser-qa/SKILL.md` | `.claude/skills/browser-qa/SKILL.md` | ui = yes |

@@ -151,6 +151,28 @@ Checks:
     clone legitimately lacks them and the fix is to re-run the refresh.
     Report what is missing and the exact command that restores it.
 
+18. **The status record versus the page** (Part 3, edition v1.12). In a
+    structured instance (`.claude/status.json` present), cross-check the
+    record against specs/STATUS.md: a spec whose record token and inventory
+    row disagree, a chore done in one and open in the other. **Divergence is
+    INFORMATION, never a finding that blocks**, matching item 16's posture and
+    for the load-bearing reason: the machine acts on the record, the page is
+    for people, and a blocking sync check would make the human page
+    load-bearing again, which is the disease the record cures. Report each
+    divergence with both values so the human can fix the page (or discover the
+    hand edit). The record's ABSENCE is not information and not a finding:
+    a legacy instance is a supported state. A record that is present and
+    MALFORMED is a FINDING: every gate that reads it refuses, so the instance
+    cannot close anything until it is fixed, and this check is the friendly
+    version of the message the hooks will deliver anyway.
+19. **Double declaration** (Part 6, edition v1.12): one file in two specs'
+    `Owns:` sets, or in a spec's set and a chore's `files`. INFORMATION, never
+    a finding: the audit checks coverage per closing spec, so a double
+    declaration is legal and sometimes honest (a file that genuinely changed
+    hands), and refusing it would need a cross-spec read at declaration time
+    whose cost nobody has measured. Report the file and both owners; the human
+    decides whether it is a handoff or a lie.
+
 ## Gotchas (field-observed)
 
 - A finding is not always a framework defect. A missing SessionStart wiring

@@ -66,8 +66,25 @@ deny() { advise "$1"; }
 
 # Advise with a fixed literal reason, for the paths where jq is unavailable to
 # escape one. The text must contain no double quotes, backslashes, or newlines.
+#
+# THE CODE IS EXTRACTED HERE TOO, AND THIS IS THE THIRD EMITTER (F11-2026).
+#
+# This function hardcoded `"code":""` while the gates' own frozen header
+# promises `setlistAdvisory {gate, verdict, code, reason}`. Three adversarial
+# legs filed that and none of them fixed it, because it never blocks and so
+# nothing ever failed on it. The 2.3.0 cycle fixed TWO of the three emitters,
+# commit-gate.sh and close-gate.sh, and the entry recorded the class as closed.
+# It was not: this file kept the empty string, and the suite's assertion
+# exercised commit-gate.sh alone, so nothing could notice. That is A9's exact
+# shape, a rule that exists in some of its places, surviving its own discharge
+# note. The assertion added with this fix reads THIS gate, so the record and the
+# bytes now agree in all three.
+#
+# The extraction is sed, deliberately the SAME expression the escaping path
+# uses, and it cannot use jq: this whole path exists because jq is absent.
 advise_literal() {
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"scope","verdict":"deny","code":"","reason":"%s"}}\n' "$1" "$1" "$1"
+  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"scope","verdict":"deny","code":"%s","reason":"%s"}}\n' "$1" "$1" "$ADV_CODE" "$1"
   # fail-open-ok: advisory by design; see advise() above.
   exit 0
 }
@@ -167,8 +184,56 @@ fi
 
 # Active only after /scaffold flips the flag, so the one-time bootstrap
 # scaffold on main is not blocked.
+#
+# THE FLAG IS EVALUATED AS A BOOLEAN, NOT COMPARED AS A STRING (2.3.0 leg, F4;
+# backlog F2-2026, whose patch was parked here and is reinstated by this cycle).
+#
+# This read `[[ "$(jq -r '.scaffolded // false')" == "true" ]] || exit 0`. jq -r
+# renders a boolean true as the text "true", which works, and renders every
+# OTHER present value as some other text, which fell through to `exit 0` and
+# STOOD THE WHOLE TRUNK-WRITE GATE DOWN having evaluated nothing. Measured on
+# the shipped bytes: "yes", 1, {} and [] each silenced it completely.
+#
+# That is the empty-result-as-verdict class expressed as a comparison rather
+# than as a pipe, and its direction is the dangerous one: the gate goes QUIET
+# rather than loud, so an instance whose config drifted to a non-boolean gets
+# no trunk protection and no message saying so.
+#
+# THREE OUTCOMES, and the third is the one that was missing. A boolean true
+# arms. Absent or boolean false is OFF, silently, because that is the honest
+# zero every pre-scaffold instance depends on and turning it into a refusal
+# would refuse the bootstrap this line exists to permit. Anything else PRESENT
+# is a refusal with a named code, on the doctrine this file applies everywhere
+# else: a gate that cannot evaluate its predicate denies.
+#
+# THE IDENTIFIERS ARE NEW, AND THAT IS THIS CYCLE PAYING A PRICE THE LAST ONE
+# COULD NOT. The 2.3.0 round drafted SH-SCAFFOLDED-SHAPE, was refused by the
+# publish-time attestation gate because a new guarantee-check identifier is a
+# changed QUESTION rather than a repair to how an existing question is asked,
+# re-scoped onto the existing SH-SDD-SHAPE to dodge that, and was then refused
+# by the suite's rule that two denials sharing a code cannot be told apart. Two
+# standing rules pointing opposite ways is why the fix does not exist at fix-
+# round size, and the entry priced the way out in advance: the cycle that takes
+# it either owes a leg anyway, or needs a distinguishable code that does not
+# already mean something else. THIS CYCLE OWES A LEG BY COMPUTATION before its
+# first byte, so the new identifiers cost nothing extra and the shared-code
+# workaround is not bought. The re-scope was a constraint, never a preference.
+#
+# The string "true" is deliberately in the refusing set rather than quietly
+# accepted. It happens to work today by rendering identically, which is exactly
+# what makes it worth refusing: a value that works by coincidence is a value
+# that stops working when the coincidence does, and the shipped template writes
+# a real boolean.
+SH_SCAFFOLDED="$(jq -r 'if (.scaffolded == null) then "off" elif (.scaffolded == true) then "on" elif (.scaffolded == false) then "off" else "shape" end' "$SDD_JSON" 2>/dev/null)" || SH_SCAFFOLDED=""
+if [[ "$SH_SCAFFOLDED" == "shape" ]]; then
+  deny_literal "scope hook [SH-SCAFFOLDED-SHAPE]: .claude/sdd.json has a scaffolded value that is present and is not a boolean, so this gate cannot tell whether the trunk rule is in force and would otherwise stand down in silence, allowing feature code straight onto the trunk. Set scaffolded to true or false (a JSON boolean, not a quoted string). Gates report their verdict and PERMIT: advisory since v1.7, so this warns and the git hooks are what refuse."
+fi
+if [[ -z "$SH_SCAFFOLDED" ]]; then
+  deny_literal "scope hook [SH-SCAFFOLDED-UNREADABLE]: the scaffolded flag in .claude/sdd.json could not be read (the reader returned no verdict), so whether the trunk rule is in force is not established. Refusing to proceed on an unread configuration rather than standing down in silence. Check jq --version and jq . .claude/sdd.json. Gates report their verdict and PERMIT: advisory since v1.7, so this warns and the git hooks are what refuse."
+fi
 # fail-open-ok: pre-scaffold, the trunk rule is deliberately not yet in force.
-[[ "$(jq -r '.scaffolded // false' "$SDD_JSON")" == "true" ]] || exit 0
+# Reached only for a value this gate READ and understood as false or absent.
+[[ "$SH_SCAFFOLDED" == "on" ]] || exit 0
 
 # The trunk branch name is recorded in sdd.json at stamp or upgrade time
 # (F6-2); main is only the fallback for instances stamped before the field

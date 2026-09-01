@@ -22,7 +22,13 @@ specs/TEMPLATE.md, which is the same text, stamped at bootstrap.
   that must be CLOSED first; `Owner docs:` is the Builder's read budget for
   this spec; `QA binding:` declares how Pass 1 verifies it, decided at
   authoring time, never improvised at close; `Design contract:` cites the
-  locked redline for design-heavy work, or "none (functional)".
+  locked redline for design-heavy work, or "none (functional)". Two are
+  MACHINE-written and never authored by hand: `Spec-hash:` (checkpoint, at the
+  ACTIVE flip) and `Owns:` lines (checkpoint, as the build acquires role-path
+  files; edition v1.12, one verbatim file per line, no placeholder in the
+  template on purpose). Do not add, edit or imitate either while authoring:
+  the audit reads their exact grammar, and a hand-written declaration is a
+  claim checkpoint never made.
 - Acceptance criteria are dual-purpose: a human checklist AND the verbatim
   prompt that drives automated QA Pass 1. Write each as a concrete, checkable
   statement naming observable behavior, never implementation; if two readers

@@ -24,7 +24,8 @@ full mandate when in doubt:
    frequent, reviewable commits.
 4. If a spec's lifecycle state changed (Status line, or a Closing report
    landed), specs/STATUS.md carries the matching one-line inventory update in
-   the SAME commit.
+   the SAME commit, and in a structured instance the status record moves with
+   it (the section below; the record and the page always travel together).
 5. Never push without being asked; destructive operations always ask first.
 
 ## Branch lifecycle
@@ -94,6 +95,46 @@ declared, the fix is for someone to declare one, not for this skill to pick.
 - `tags`: an annotated tag on the trunk is the release. See the cut-release
   section for the ceremony.
 - `version-file`: the bump rides the close commit as ordinary checkpoint work.
+
+## The status record: this command is its ONE writer (Part 3, edition v1.12)
+
+In a structured instance (`.claude/status.json` exists), this command owns every
+write to the machine inventory, and each write rides the SAME commit as the
+human-page edit it mirrors. The gates read the record, not the page, so a write
+this command skips is a fact the machine never learns:
+
+- **Spec cut:** add `specs.<num>: {"status": "queued"}` (or the state being
+  cut to) beside the new STATUS.md row.
+- **Lifecycle flip:** update the one token beside the row edit. Tokens are the
+  Part 5 states, lowercase, one word.
+- **File acquisition (`Owns:`):** as the build brings role-path files to the
+  spec, append `Owns: <repo-relative-file>` lines to the spec's HEADER (above
+  the Closing report heading), one verbatim file per line. REFUSE to write a
+  glob, a directory, a `./`-prefixed or quoted path: a declared set you cannot
+  enumerate is an exemption wearing a declaration, and the audit reads exactly
+  that grammar. Under declared attestation custody these appends drift the
+  hash; that is the mechanism working, and the re-attestation happens at your
+  next invocation, where the human already is.
+- **Close (on the branch, before the merge):** flip `status` to `closed` and
+  write the close facts from the QA you just gated: `"qa_pass_1": "ok"` and
+  `"diagram": "updated"` or `"no-impact"`. The single-parent audit refuses a
+  close whose facts are missing (`SLH-RECORD-NO-CLOSE`), so a close that skips
+  this is unpushable, correctly.
+- **Chores:** record the chore under `chores.<id>` with its `files` (the
+  declared set the audit checks per file) as the chore is worked, and flip
+  `status` to `"done"` beside the archive line.
+- **The one-time transcription (upgraded instances only):** when asked to
+  create the record for an instance that predates it, read STATUS.md, PRINT
+  the full list of what you would record (every spec number with its state,
+  every chore with its state), and write the file ONLY after the human
+  confirms the list. Never unattended: an unconfirmed transcription launders
+  the page readers' possible misreadings into the authoritative record.
+  Transcribed closed specs get NO close facts; only closes made after the
+  record exists carry them.
+
+A spec with no entry cannot close (`SLH-RECORD-NO-SPEC`); the fix is one
+invocation of this command to record it, which backfills the entry from the
+row the human is already looking at.
 
 ## Writing the Spec-hash when a spec goes ACTIVE (Part 6)
 
@@ -209,7 +250,11 @@ item and retry.
 - Stage-and-commit compounds are denied by design. `git add X && git commit`
   would scan an empty index, so every staged-content check would pass
   vacuously; an em-dash file reached a trunk exactly this way before the gate
-  closed the hole. Stage first, then commit as its own command.
+  closed the hole. Stage first, then commit as its own command. Treat the
+  denial as a discipline, not a proof: the 2.4.0 review recorded one spelling
+  the parser cannot see (`&` immediately followed by punctuation loses the
+  concurrency marker), so the absence of a warning never certifies a compound
+  as safe. The git pre-commit hook scans the real index either way.
 - Pasted tool output is new content. A QA report pasted verbatim into a
   Closing report has carried em-dashes into staged content; the commit gate
   denies exactly this. Fix the paste before staging; the scan exempts nothing.

@@ -104,6 +104,13 @@ add root/env.example           .env.example
 add specs/STATUS.md.tmpl       specs/STATUS.md
 add claude/settings.json.tmpl  .claude/settings.json
 add claude/sdd.json.tmpl       .claude/sdd.json
+# The structured status record (RP1, edition v1.12): stamped instances are
+# structured FROM BIRTH, in both modes. Upgrades never receive this file (the
+# BL-005 rule: mention the field, migrate NOTHING); an upgraded instance opts
+# in through checkpoint's human-confirmed transcription, so the one path that
+# creates the record unattended is a birth, where there is nothing to
+# transcribe and therefore nothing to launder.
+add claude/status.json         .claude/status.json
 add claude/agents/qa-verifier.md .claude/agents/qa-verifier.md
 add hooks/scope-hook.sh        .claude/hooks/scope-hook.sh
 add hooks/commit-gate.sh       .claude/hooks/commit-gate.sh

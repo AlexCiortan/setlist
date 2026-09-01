@@ -822,47 +822,11 @@ fi
 # B2's INDEX_VERBS pairing is the precedent.
 CM_LIFECYCLE_STATES='DRAFT QUEUED ACTIVE REVISED BUILT PARKED CLOSED'
 CM_STATES_RE="$(printf '%s' "$CM_LIFECYCLE_STATES" | tr ' ' '|')"
-# THE RECORD, OR THE PAGE (RP1, edition v1.12). In a STRUCTURED instance (the
-# index carries .claude/status.json) the lifecycle-flip detection is a staged
-# change to the record, not a parse of spec markdown: the record is the
-# machine inventory, so the record moving IS the lifecycle fact. A staged
-# MODIFICATION (never the addition, which is the opt-in) asks for the human
-# page in the same commit, exactly what /setlist:checkpoint writes anyway. A
-# staged record that does not parse against the grammar is warned here, at the
-# earliest layer that sees it; the git hooks are what refuse it.
-#
-# This gate keeps its own copy of the grammar rather than sourcing the
-# library, because the two trees are deliberately separate (the KL4-A1
-# ruling); what is shared is the RULE, and the suite asserts this value is
-# byte-identical to the library's SLH_RECORD_CHECK_JQ.
-CM_RECORD_CHECK_JQ='if (type != "object") or (.setlist_status != 1) or (((keys - ["setlist_status","specs","chores"]) | length) > 0) or (((.specs // {}) | type) != "object") or (((.chores // {}) | type) != "object") then "malformed" elif (((.specs // {}) | to_entries | all((.key | test("^[0-9]+[a-z]*$")) and (.value | if type != "object" then false else (((keys - ["status","qa_pass_1","diagram"]) | length) == 0) and (.status as $s | (["draft","queued","active","revised","built","parked","closed"] | index($s)) != null) and ((.qa_pass_1 == null) or (.qa_pass_1 == "ok")) and ((.diagram == null) or (.diagram == "updated") or (.diagram == "no-impact")) end))) | not) then "malformed" elif (((.chores // {}) | to_entries | all((.key | test("^CHORE-[0-9]+$")) and (.value | if type != "object" then false else (((keys - ["status","files"]) | length) == 0) and ((.status == "open") or (.status == "done")) and ((.files == null) or (((.files | type) == "array") and (.files | all(type == "string")))) end))) | not) then "malformed" else "ok" end'
-# ONE DENY SITE, TWO TRIGGERS: the suite's rule that two denials sharing a
-# code cannot be told apart binds the SITES, so the structured and legacy
-# triggers set the message and one deny carries the code.
-CM_SM_MSG=""
-if [ -n "$(git -C "$PROJ" ls-files --cached -- .claude/status.json 2>/dev/null)" ]; then
-  if git -C "$PROJ" diff --cached --name-only --diff-filter=M 2>/dev/null | grep -qx '.claude/status.json'; then
-    if ! git -C "$PROJ" diff --cached --name-only | grep -qx 'specs/STATUS.md'; then
-      CM_SM_MSG="this commit changes the status record (.claude/status.json) but does not stage specs/STATUS.md; /setlist:checkpoint writes the record and the human inventory page in the same commit, so a record change arriving alone is a hand edit or half a checkpoint."
-    fi
+SPEC_ADDED="$(git -C "$PROJ" diff --cached --unified=0 -- 'specs/*.md' ':(exclude)specs/STATUS.md' ':(exclude)specs/TEMPLATE.md' 2>/dev/null | awk "$CG_ADDED_AWK" || true)"
+if printf '%s\n' "$SPEC_ADDED" | grep -qE "^\+Status:[[:space:]]*(${CM_STATES_RE})|^\+#+[[:space:]]*Closing report"; then
+  if ! git -C "$PROJ" diff --cached --name-only | grep -qx 'specs/STATUS.md'; then
+    deny "commit gate [CM-STATUS-MISSING]: this commit changes a spec lifecycle state but does not stage specs/STATUS.md; update the STATUS.md inventory line in the same commit."
   fi
-  if git -C "$PROJ" diff --cached --name-only 2>/dev/null | grep -qx '.claude/status.json'; then
-    CM_REC_STAGED="$(git -C "$PROJ" show ':.claude/status.json' 2>/dev/null || true)"
-    CM_REC_VERDICT="$(printf '%s' "$CM_REC_STAGED" | jq -r "$CM_RECORD_CHECK_JQ" 2>/dev/null || printf 'malformed')"
-    if [ "$CM_REC_VERDICT" != "ok" ]; then
-      deny "commit gate [CM-RECORD-MALFORMED]: the staged .claude/status.json is not a well-formed status record, so no gate can read a close or chore fact from it and the git hooks will refuse it outright rather than falling back to the STATUS.md page. Only /setlist:checkpoint writes this file; fix the staged copy (Part 3 of the edition shows the grammar)."
-    fi
-  fi
-else
-  SPEC_ADDED="$(git -C "$PROJ" diff --cached --unified=0 -- 'specs/*.md' ':(exclude)specs/STATUS.md' ':(exclude)specs/TEMPLATE.md' 2>/dev/null | awk "$CG_ADDED_AWK" || true)"
-  if printf '%s\n' "$SPEC_ADDED" | grep -qE "^\+Status:[[:space:]]*(${CM_STATES_RE})|^\+#+[[:space:]]*Closing report"; then
-    if ! git -C "$PROJ" diff --cached --name-only | grep -qx 'specs/STATUS.md'; then
-      CM_SM_MSG="this commit changes a spec lifecycle state but does not stage specs/STATUS.md; update the STATUS.md inventory line in the same commit."
-    fi
-  fi
-fi
-if [ -n "$CM_SM_MSG" ]; then
-  deny "commit gate [CM-STATUS-MISSING]: $CM_SM_MSG"
 fi
 
 # Check 4: git identity (BL-007, new in plugin 1.1.0). One machine often holds a

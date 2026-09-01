@@ -229,6 +229,27 @@ When the instance predates this plugin, also:
   somebody an integrity chain whose strength nobody established. Tell the human
   the block exists, that `"custody": "signer"` with a key they hold is the model
   that works today, and that `"custody": "forge"` is designed and not yet built.
+- **Mention the status record, and migrate NOTHING** (RP1, edition v1.12;
+  BL-005's precedent applied a third time). An upgrade NEVER creates
+  `.claude/status.json`: stamp parity explicitly excludes it, because the only
+  path that may create the record unattended is a birth, where there is
+  nothing to transcribe and therefore nothing to launder. Until the file
+  exists the instance is a legacy instance and loses nothing: the page readers
+  keep deciding, byte-identically. Tell the human the record exists, that new
+  instances are structured from birth, and that opting in is
+  `/setlist:checkpoint`'s one-time transcription: it reads STATUS.md, prints
+  exactly what it would record, and writes the file only after the human
+  confirms the list. Never run that transcription yourself during the upgrade,
+  and never unattended: an unconfirmed transcription launders the frozen
+  readers' possible misreadings into the authoritative record.
+  **Check for a name collision first**: presence is the switch, so a project
+  that already tracks its OWN `.claude/status.json` (some deploy tools write
+  one) reads as present-and-malformed the moment the 2.4.0 hooks arm, and
+  role-path trunk writes and closes refuse with `SLH-RECORD-MALFORMED` whose
+  message assumes a corrupted record rather than a foreign owner (measured,
+  2.4.0 review). If the file exists and is not Setlist's, surface it to the
+  human BEFORE arming: the honest exits are relocating the foreign file or
+  declining the record path, never overwriting their file.
 - Record all of this inside the umbrella ADR.
 
 ## 4. Instance skill flags (any instance stamped before plugin 1.6)

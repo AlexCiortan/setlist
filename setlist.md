@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.11 (the attestation edition)**
+**Edition v1.12 (the record edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -319,6 +319,8 @@ project-root/
 │   ├── settings.json              # model + permission rules + hook wiring (below)
 │   ├── sdd.json                   # instance config read by the hooks and /setlist:checkpoint:
 │   │                              #   role paths, gate command, scaffolded flag
+│   ├── status.json                # THE STATUS RECORD (v1.12): the machine inventory the
+│   │                              #   gates read; /setlist:checkpoint is its ONE writer
 │   ├── skills/
 │   │   ├── scaffold/SKILL.md      # bootstrap only: one-time scaffold (Part 6)
 │   │   └── browser-qa/SKILL.md    # web UIs: the QA Pass 1 binding (Part 5)
@@ -443,6 +445,58 @@ there: transcripts persist, get summarized, and get shared. Treat it as burned: 
 delete it, and record the rotation debt in the repo where the release or deploy work will
 see it (a ROADMAP row, a chore), not in the chat. Two field incidents in one week produced
 this rule.
+
+### The status record: `.claude/status.json` (new in v1.12)
+
+**The machine reads only records whose grammar it owns.** Prose is for people; a gate that
+reads prose is a gate whose grammar is someone else's renderer, and it will lose to that
+renderer one finding at a time, forever. So close and chore state live in a record the
+mechanism defines: `.claude/status.json`, the instance-level machine inventory, holding
+per-spec lifecycle state, per-chore completion state, and per-spec close facts. STATUS.md
+stays, specs stay, Closing reports stay, humans keep reading and writing all of them; what
+ends is the machine deriving facts from them.
+
+The grammar, in full, because a grammar this small is the point:
+
+```json
+{
+  "setlist_status": 1,
+  "specs": {
+    "0142": { "status": "closed", "qa_pass_1": "ok", "diagram": "no-impact" },
+    "0143": { "status": "active" }
+  },
+  "chores": {
+    "CHORE-007": { "status": "done", "files": ["docs/runbook.md"] }
+  }
+}
+```
+
+- `specs.<num>.status` admits the lifecycle tokens Part 5 defines, lowercase, one token.
+  `qa_pass_1` admits exactly `ok`; `diagram` admits exactly `updated` or `no-impact`. All
+  three close facts are written at the close, by checkpoint, in the close commit on the
+  branch. One token per fact, because a record that can express a tally will be read as
+  prose.
+- `chores.<id>.status` admits `open` or `done`; `files` is the chore's declared set
+  (Part 6's ownership question), present from the first checkpoint that touches the chore.
+- Unknown top-level keys, unknown tokens, wrong types, a missing `setlist_status`, or
+  unparseable JSON are all MALFORMED: a refusal at every gate that reads the record, never
+  a pass, and NEVER a fallback to the page readers, because a fallback would let one
+  deliberate syntax error buy back the frozen page readers' residual class.
+
+**One writer.** `/setlist:checkpoint` is the only writer of this file (and of the `Owns:`
+lines in spec headers, Appendix C). The stamp creates it for new and retrofitted
+instances, so they are structured from birth; an upgraded instance opts in through
+checkpoint's human-confirmed transcription (Part 8c) and until then is a legacy instance
+that loses nothing it had. "Only writer" is a protocol statement, not a mechanical one:
+this is git, and the gates verify the record's SHAPE and CONSEQUENCES, not its authorship.
+Authorship binding is what the attestation is for, where declared.
+
+**The record and the page can disagree, and whose problem that is.** Checkpoint writes
+both in the same commit, so divergence means someone edited one by hand.
+`/setlist:validate` cross-checks and reports divergence as INFORMATION, never a finding
+that blocks: a blocking sync check would make the human page load-bearing again, which is
+the disease this record cures. The machine acts on the record; a hand-edited STATUS.md can
+lie to a human reader until validate is run, and Part 6's boundary text says so.
 
 ### Numbering namespaces
 
@@ -888,6 +942,18 @@ chores collapse to an archive line and never said what one looked like, so the e
 layer had nothing to read: it refused every `chore/<slug>` merge that touched a role path,
 which is precisely the work Part 5b prescribes, and advised the operator to "route it as a
 chore branch" while they were standing on one.
+
+**The machine half of that record moved to the status record in v1.12.** In a structured
+instance (Part 3: `.claude/status.json` present), the fact a gate reads is
+`chores.<id>.status` flipping to `done`, written by `/setlist:checkpoint` in the same
+commit as the archive line, together with `chores.<id>.files`: the chore's declared set,
+the files this chore is allowed to bring to the trunk. The single-parent close audit asks
+per-file coverage against that set (Part 6), which is what finally lets a compliant
+`--squash` or fast-forward chore close through both layers without widening any spec
+exemption to chores. The archive line above stays, FOR PEOPLE: it is the human record in
+the bounded page, and only legacy instances still have gates reading it. A chore's
+declaration has no attestation coverage (the attestation binds spec bytes only), so the
+chore route is the weaker one by exactly that much, and the public boundary text says so.
 
 **What the archive line proves, and what it does not.** It is a DECLARATION, not a
 verification. A closed spec carries acceptance criteria, a QA report with a pasted verdict,
@@ -1642,6 +1708,19 @@ where that layer ends. Everything below is a real hole, known and accepted, not 
   before, and it is written here rather than left in a private note precisely because that
   is the difference between a deferral and an accident.
 
+- **The single-parent close arm is as strong as your declarations, and a declaration is a
+  claim, not a verified fact (new in v1.12).** A declaring close is audited file by file
+  against its `Owns:` set, so a close can no longer exempt a whole commit by one record
+  flip. But the declaration travels in the same commit it justifies: whoever writes the
+  close can write the declaration, and the hooks verify coverage, not truth. Under a
+  declared attestation custody the declaration sits inside the approved, signed spec
+  bytes, so falsifying it costs a human re-approval; without one it is an explicit,
+  diffable line in history that review and `/setlist:validate` can catch, and nothing
+  more. A spec that declares nothing keeps the pre-v1.12 whole-commit exemption, so the
+  audit is only as complete as your adoption; a chore's declaration lives in the record,
+  which no attestation covers, so the chore route is the weaker one by exactly that much.
+  And the record is what the hooks read: a hand-edited STATUS.md page can disagree with it
+  until validate reports the divergence, as information.
 - **`--no-verify` bypasses git hooks**, and `git push --no-verify` bypasses `pre-push`. This
   is a genuine hole and a different KIND of hole: a deliberate act with an obvious name, not
   an apostrophe in a commit message. The framework's own escape hatch, `SETLIST_SKIP_HOOKS=1`,
@@ -1932,6 +2011,54 @@ history and does not re-judge closes that predate the block. A spec written toda
 block, and adding it is mechanical: one line per criterion, taken from the report already
 pasted below it.
 
+### The status record is what the gates read (new in v1.12)
+
+In a structured instance (Part 3: `.claude/status.json` present in the tree under
+judgment), every close and chore fact above is read FROM THE RECORD, not from rendered
+markdown: which inventory entries are live, which entry flips close a spec (the diff of
+the record at two revisions), whether a close carries its facts (`qa_pass_1: ok` and a
+`diagram` token, written by checkpoint at the close), which chores newly read `done`, and,
+new with the record, which files a close is allowed to bring (below). The frozen page
+readers that used to decide these questions are RETAINED BYTE-IDENTICAL as the permanent
+absence path: an instance without the record behaves exactly as it did before the record
+existed, proven by a pinned differential in the shipped suite rather than asserted, and
+the two freeze documents' residual classes remain the record for that path. The readers
+are never repaired and never removed; there is no mixed mode within an instance, because
+mixed mode is two readers per fact, which is how drift becomes invisible.
+
+**Failure semantics, in the calling convention the attestation established:** every record
+reader prints one token and its caller refuses anything that is not exactly the pass
+token, so an empty result is a refusal by construction. The codes:
+
+| Condition | Code |
+|---|---|
+| record present and unreadable (syntax, shape, unknown token, missing version) | `SLH-RECORD-MALFORMED` |
+| close of a spec with no record entry, in a structured instance | `SLH-RECORD-NO-SPEC` (the fix is one line: run checkpoint to record the spec) |
+| close facts absent or not the exact tokens at a close | `SLH-RECORD-NO-CLOSE` |
+| an `Owns:` declaration outside the grammar (a glob, a directory, out of range) | `SLH-OWNS-MALFORMED` |
+| an undeclared role-path file in a declaring spec's single-parent close | `SLH-OWNS-UNDECLARED` |
+
+The session gates mirror these as warnings in the same words (`CG-RECORD-*`,
+`CM-RECORD-MALFORMED`), because that layer has no deny mechanic; the git hooks are what
+refuse. Present-and-malformed is never a pass and never a fallback.
+
+**The ownership question (the single-parent close arm).** A spec declares the role-path
+files it owns as `Owns:` header lines (Appendix C), written by checkpoint as the spec
+acquires files, INSIDE the hashed range, so a declared attestation custody signs the
+declaration and a headless edit to it costs a human re-approval. At a single-parent close
+(a `--squash` or fast-forward close; a `--no-ff` merge keeps the merge arm's provenance
+question), the audit asks, for each role-path file the commit BRINGS (an add or a modify; a
+deleted path arrives nowhere and is outside this question, exactly as the merge arm's
+provenance sibling already reads it): is it in the closing
+spec's declared set, read from the spec's bytes in that commit? Every file covered:
+clean. Any file not covered: refused, with the two honest exits named (declare it through
+checkpoint, or take the `--no-ff` route). A chore flip is audited the same way against
+`chores.<id>.files`. **A spec that declares nothing closes under the pre-v1.12 rules,
+whole-commit exemption included**: absence of the declaration is never a widened pass and
+never a refusal of the honest legacy close, on the same precedent as `Spec-hash` absence.
+The declaration is a claim and the arm verifies coverage, not truth; the Known
+limitations text below carries that boundary in full.
+
 ### The stamped hooks (`.claude/hooks/`)
 
 A gate becomes a hook exactly when its predicate is decidable by a grep or an exit code;
@@ -2059,7 +2186,18 @@ project's `RUNBOOK.md` with the concrete commands for that stack.
    it triggered is observed and reported, or its debt is recorded.
 7. **Next.** Shift+Tab, repeat from 1. Between specs is when open chores get done.
 
-### Blast radius beyond the working tree (new in v1.7)
+**What checkpoint records along the way (new in v1.12).** `/setlist:checkpoint` is the ONE
+writer of the status record (Part 3), and the loop above is exactly where its writes
+happen: the spec's entry lands at the cut beside its STATUS.md row; every lifecycle flip
+updates the one token in the same commit as the row edit; as the build acquires role-path
+files, checkpoint appends `Owns:` lines to the spec header (Appendix C), one verbatim
+repo-relative file each, refusing a glob or a directory at declaration time because a
+declared set you cannot enumerate is an exemption wearing a declaration. Under declared
+attestation custody those appends drift the hash, the SessionStart warning fires, and
+re-attestation happens at the next checkpoint, WHERE THE HUMAN ALREADY IS: the ownership
+set is precisely a thing an approver should re-approve. At the close, checkpoint writes
+the close facts (`qa_pass_1`, `diagram`) into the record from the QA it just gated, on the
+branch, before the merge.
 
 The rest of this document reasons about the repo and the working tree. It says nothing about
 the MACHINE the session runs on, and for any project whose product mutates a host
@@ -2374,7 +2512,12 @@ table; `.gitignore` and `.env.example` skeletons; **`.claude/settings.json` with
 `opusplan` (only if verified) plus the fallback chain, the permission rules, and the hook
 wiring**;
 **`.claude/sdd.json`** (the role paths, the gate command `/scaffold` fills, the
-`scaffolded` flag); **the four stamped hooks in `.claude/hooks/`, enabled** (three gates
+`scaffolded` flag); **`.claude/status.json`, the status record (new in v1.12), so a
+stamped instance is structured from birth**: born with `setlist_status: 1` and empty
+maps, born valid against the grammar the gates read, with `/setlist:checkpoint` its one
+writer from the first spec on (tell the user this file exists and that checkpoint owns
+it, one sentence in the hand-off); **the four stamped hooks in `.claude/hooks/`,
+enabled** (three gates
 plus session re-grounding); the `scaffold` skill (web UIs also get `browser-qa`; the
 health check ships as `/setlist:validate`); the `.claude/agents/qa-verifier.md`
 stub; **the framework markdown itself
@@ -2468,6 +2611,11 @@ The Part 8 Step 3 file set, generated in the same two phases, with retrofit diff
   dependency graph, never from intent.
 - No `/scaffold` is emitted: the project is already scaffolded, and the health check
   ships as `/setlist:validate` (web UIs still get `browser-qa`).
+- **A retrofit is structured from birth too (new in v1.12):** the stamp writes
+  `.claude/status.json` with empty maps in retrofit mode exactly as in new mode, and the
+  existing specs the inventory found get their entries at their next checkpoint touch,
+  never back-filled by the stamp. Only the UPGRADE path (Part 8c) withholds the record,
+  because only an upgrade has history a transcription could misread.
 - The framework markdown is committed into the repo.
 - The retrofit lands as ONE commit on the default branch, message prefix `framework:`.
   Spec-scoped commit granularity resumes at the first spec.
@@ -2554,6 +2702,22 @@ action.
   nothing, and an approval manufactured during a migration attests to less. Tell the human
   the block exists and what `signer` custody costs and buys; let them decide in a session
   of their own.
+- **Mention the status record, and migrate NOTHING (new in v1.12; BL-005's precedent
+  applied a third time).** An upgrade never creates `.claude/status.json`: stamp parity
+  above explicitly EXCLUDES it, because the one path that may create the record
+  unattended is a birth, where there is nothing to transcribe and therefore nothing to
+  launder. Until the file exists the instance is a legacy instance and loses nothing it
+  had: the page readers keep deciding, byte-identically. **Opting in is
+  `/setlist:checkpoint`'s one-time, human-confirmed transcription**: checkpoint reads
+  STATUS.md, lists exactly what it would record (each spec's number and lifecycle state,
+  each chore and its state), and writes the file only after the human confirms the list.
+  Never unattended, because an automatic transcriber would read the page with the frozen
+  readers one last time and write their output into the authoritative record, converting
+  "a reader may misread a page" into "a reader's misreading is now the record". A human
+  confirming the transcription is the difference between migrating data and laundering
+  it. Transcribed closed specs carry no close facts and that is correct: the record does
+  not manufacture evidence about closes it never saw, and only specs closed AFTER the
+  record exists are held to the record's close facts.
 - **Accepted deviations are recorded, not erased.** If the repo keeps a non-canonical
   layout (paths are roles), say so inside the umbrella ADR; a future chore can relocate.
 - **Close like any chore:** gates pass (docs-only, so results must match pre-migration), a
@@ -2734,6 +2898,20 @@ The durable ideas; everything in Parts 1-10 is one implementation of them.
 
 The contents of `specs/TEMPLATE.md`, emitted by bootstrap. Every spec starts as a copy.
 
+One header field is machine-written and machine-read (new in v1.12): **`Owns:` lines**,
+zero or more, appended by `/setlist:checkpoint` as the build acquires role-path files.
+Each is `Owns: ` at column 0 followed by ONE verbatim repo-relative file: no globs, no
+quoting, no directories, because a declared set you cannot enumerate is an exemption
+wearing a declaration. They sit in the header, INSIDE the hashed range, so a declared
+attestation custody signs the declaration; the single-parent close audit reads them
+(Part 6, the ownership question). The hashed range ends at the FIRST line reading
+`## Closing report`, fences included, because that byte-same cut is what attestation
+signs: keep any quoted copy of this template BELOW your declarations, or the
+declarations fall outside the range and the close refuses with the fix named. The template deliberately ships NO `Owns:` line, not
+even a placeholder: a placeholder is bytes the grammar would have to read, and the
+declaration is checkpoint's act at acquisition, not an authoring chore. A spec that never
+declares closes under the pre-v1.12 rules.
+
 ````markdown
 # Spec NNNN - <feature name>
 
@@ -2848,6 +3026,45 @@ judgment. Appendix A is the part worth keeping; everything else is implementatio
 ---
 
 ## Changelog
+
+- **v1.12 (the record edition).** This delta list is authoritative for
+  `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases
+  (this edition ships as plugin 2.4.0), the edition counts revisions of this document.
+  v1.12 moves because the PROTOCOL changes: what a status record IS, what a close
+  writes, and what the audit asks.
+
+  **THE MACHINE READS ONLY RECORDS WHOSE GRAMMAR IT OWNS (Parts 3, 5b, 6, 7).** Close
+  and chore state live in `.claude/status.json`: per-spec lifecycle tokens, one-token
+  close facts (`qa_pass_1: ok`; `diagram: updated | no-impact`), per-chore completion
+  and declared files. `/setlist:checkpoint` is the one writer; the gates are the
+  readers. STATUS.md stays, specs stay, Closing reports stay, and humans keep all of
+  them; what ends is the machine deriving facts from rendered markdown, which is the
+  architecture that cost two frozen readers, twelve adversarial rounds each, and a
+  documented residual class including a carried MAJOR.
+
+  **ABSENT IS TODAY, MALFORMED REFUSES (Parts 3, 6).** No record means the page readers
+  decide, byte-identically to v1.11: the frozen readers are retained unchanged as the
+  permanent absence path, and the shipped suite proves the identity against pinned
+  pre-record bytes rather than asserting it. A record that is present and unreadable
+  refuses at every layer that reads it (`SLH-RECORD-*`; the session gates mirror the
+  same words), never a pass, never a fallback, and there is no mixed mode.
+
+  **A CLOSE DECLARES WHAT IT OWNS (Parts 5b, 6, 7, Appendix C).** Checkpoint appends
+  `Owns:` header lines as a spec acquires role-path files, inside the hashed range, so
+  declared attestation custody signs the declaration. The single-parent close audit
+  stops exempting a whole commit on one flip and asks per-file coverage against the
+  declared set; chores take the same question against `chores.<id>.files`, which is
+  what finally admits the compliant `--squash` and fast-forward chore close at both
+  layers. A spec that declares nothing closes under the pre-v1.12 rules exactly, and
+  the Known-limitations boundary states the residual: the hooks verify coverage, not
+  truth. **Appendix C CHANGES this time** (unlike v1.11): `Owns:` is documented as a
+  machine-written header field, and the template deliberately ships no placeholder for
+  it.
+
+  **Bootstrap and Retrofit stamp the record (Parts 8, 8b)**, so new and retrofitted
+  instances are structured from birth; **Upgrade mentions the file and migrates NOTHING
+  (Part 8c)**, BL-005's precedent applied a third time, with the one-time opt-in a
+  human-confirmed transcription by checkpoint, never unattended.
 
 - **v1.11 (the attestation edition).** This delta list is authoritative for
   `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases

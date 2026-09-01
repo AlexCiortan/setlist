@@ -47,7 +47,13 @@ jobs:
   hooks:
     name: hook suite (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    # 30 minutes until 2026-08-30, when the RP1 cycle grew the suite past 1060
+    # cases and the Linux leg (which runs shellcheck, the seam and the
+    # macOS-equivalent toolchain on top of the shared steps) was CANCELLED at
+    # the cap mid mutation-check with every completed step green. The cap
+    # exists to fail a HANG loudly, not to race the honest wall clock, so it
+    # moves to 50: a hang still dies, and a green run no longer can.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:

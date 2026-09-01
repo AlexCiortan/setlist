@@ -9,6 +9,51 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.4.0
+
+**Edition v1.12 (the record edition).** Close and chore state become a record the
+machine owns. The gates stop deriving facts from rendered markdown, which is the
+architecture that produced the reader-class defects this changelog has been reporting
+for four releases, and read `.claude/status.json` instead: a small JSON inventory with
+one-token facts, written only by `/setlist:checkpoint`.
+
+**What it does.** New and retrofitted instances are stamped with the record from birth.
+Checkpoint records each spec at its cut, updates its lifecycle token at each flip,
+writes the close facts (`qa_pass_1`, `diagram`) at the close, and records chores with
+the files they touch. The git hooks and the push-time audit read those facts; the
+STATUS.md page and the spec's Closing report stay exactly what they were, FOR PEOPLE,
+and `/setlist:validate` reports record-versus-page divergence as information.
+
+**A close now declares what it owns.** As a build acquires role-path files, checkpoint
+appends `Owns:` lines to the spec's header. A single-parent close (`--squash` or
+fast-forward) of a declaring spec is audited FILE BY FILE against that declared set,
+so a close can no longer exempt a whole commit by flipping one status row: the
+smuggled file is refused by name, with the two honest exits named in the message.
+Chore closes take the same per-file question against the chore's declared files, which
+is what finally lets a compliant `--squash` or fast-forward CHORE close through both
+layers (the 2.2.0 release notes' item 4 debt, `F5-2026`, closed without widening
+anything). The residual is disclosed in Known limitations rather than papered over:
+the hooks verify coverage, not truth, and a spec that declares nothing closes under
+the previous rules exactly.
+
+**Nothing changes unless the record exists.** An instance without `.claude/status.json`
+behaves byte-for-byte as it did on 2.3.0, proven by a pinned differential in the
+shipped test suite rather than asserted; the two frozen page readers are retained
+byte-identical as that path, permanently. A record that is present and malformed
+REFUSES with a named code and never falls back. `/setlist:upgrade` mentions the record
+and migrates nothing; opting an existing instance in is a one-time, human-confirmed
+transcription by checkpoint.
+
+**Known limitations moves by fixing, for the first time in this campaign.** The
+Architecture-diagram last-match bullet leaves the list: its mechanical halves
+(first-line-wins, the anchored answer) shipped in 2.3.0, the bullet had been stale
+since, and the class itself cannot exist on the structured path, where the diagram
+answer is a one-token record field. The single-parent content-exemption bullet is
+REPLACED by a design boundary stating the declarations model and its limits, because
+the exemption persists for closes that declare nothing and saying otherwise would be
+an over-claim. The counts move with the bullets: 22 design boundaries, 11 open
+limitations, 2 upstream conditions, 35 in all.
+
 ## 2.3.0
 
 **Edition v1.11 (the attestation edition).** The headless build integrity chain. If

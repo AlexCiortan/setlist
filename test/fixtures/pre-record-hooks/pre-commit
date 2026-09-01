@@ -124,43 +124,17 @@ STATES_RE="$(printf '%s' "$SLH_LIFECYCLE_STATES" | tr ' ' '|')"
 # its own promise rather than an improvement.
 # fail-open-ok: a grep that filters everything out means this commit stages no
 # spec file, so there is no lifecycle transition to pair with an inventory row.
-if slh_record_present "$PROJ" ""; then
-  # THE RECORD, OR THE PAGE (RP1, edition v1.12). In a structured instance the
-  # lifecycle-flip detection is A STAGED CHANGE TO .claude/status.json, not a
-  # parse of the spec's markdown: the record is the machine inventory, so the
-  # record moving IS the lifecycle fact, and the frozen fence reader stops
-  # being load-bearing here. A staged MODIFICATION (never the addition: the
-  # adoption commit that creates the record is an opt-in, not a flip) demands
-  # the human page in the same commit, which is what checkpoint writes anyway.
-  if git -C "$PROJ" diff --cached --name-only --diff-filter=M 2>/dev/null | grep -qx '.claude/status.json'; then
-    if ! printf '%s\n' "$STAGED" | grep -qx 'specs/STATUS.md'; then
-      slh_refuse "SLH-STATUS-MISSING" "this commit changes the status record (.claude/status.json) but does not stage specs/STATUS.md; /setlist:checkpoint writes the record and the human inventory page in the same commit, so a record change arriving alone is a hand edit or half a checkpoint."
-    fi
-  fi
-  # A STAGED RECORD MUST PARSE, at the earliest layer that can refuse it. This
-  # is where a hand edit outside checkpoint gets caught before it is history:
-  # present-and-malformed refuses, never a pass, never a fallback to the page.
-  if printf '%s\n' "$STAGED" | grep -qx '.claude/status.json'; then
-    __REC_STAGED="$(slh_record_show "$PROJ" "")"
-    if [ "$(slh_record_verdict "$__REC_STAGED")" != "ok" ]; then
-      slh_refuse "SLH-RECORD-MALFORMED" "the staged .claude/status.json is not a well-formed status record (Part 3 of the edition: setlist_status 1; specs.<num> with a lowercase lifecycle token, qa_pass_1 exactly ok, diagram exactly updated or no-impact; chores.<id> open or done with files as an array). Only /setlist:checkpoint writes this file; fix the staged copy rather than committing a record no gate can read, because every gate that reads it refuses a malformed record outright."
-    fi
-  fi
-else
-  # fail-open-ok: a grep that filters everything out means this commit stages no
-  # spec file, so there is no lifecycle transition to pair with an inventory row.
-  SPEC_LIST="$(printf '%s\n' "$STAGED" | grep -E '^specs/.*\.md$' | grep -vx 'specs/STATUS.md' | grep -vx 'specs/TEMPLATE.md' || true)"
-  SPEC_PATHS=()
-  while IFS= read -r __sp; do
-    [ -n "$__sp" ] || continue
-    SPEC_PATHS+=("$__sp")
-  done <<EOF
+SPEC_LIST="$(printf '%s\n' "$STAGED" | grep -E '^specs/.*\.md$' | grep -vx 'specs/STATUS.md' | grep -vx 'specs/TEMPLATE.md' || true)"
+SPEC_PATHS=()
+while IFS= read -r __sp; do
+  [ -n "$__sp" ] || continue
+  SPEC_PATHS+=("$__sp")
+done <<EOF
 $SPEC_LIST
 EOF
-  if [ "${#SPEC_PATHS[@]}" -gt 0 ] && slh_lifecycle_added "$PROJ" "$STATES_RE" "${SPEC_PATHS[@]}"; then
-    if ! printf '%s\n' "$STAGED" | grep -qx 'specs/STATUS.md'; then
-      slh_refuse "SLH-STATUS-MISSING" "this commit changes a spec lifecycle state but does not stage specs/STATUS.md; update the inventory row in the same commit."
-    fi
+if [ "${#SPEC_PATHS[@]}" -gt 0 ] && slh_lifecycle_added "$PROJ" "$STATES_RE" "${SPEC_PATHS[@]}"; then
+  if ! printf '%s\n' "$STAGED" | grep -qx 'specs/STATUS.md'; then
+    slh_refuse "SLH-STATUS-MISSING" "this commit changes a spec lifecycle state but does not stage specs/STATUS.md; update the inventory row in the same commit."
   fi
 fi
 
@@ -196,17 +170,7 @@ $ATTEST_ROLES
 EOF
 fi
 if [ "$ATTEST_CODE" = "1" ]; then
-  # THE ACTIVE SET COMES FROM THE RECORD in a structured instance (RP1), from
-  # the page otherwise; slh_active_specs owns that switch and refuses a
-  # malformed record itself. THE STATUS IS CARRIED ACROSS THE SUBSHELL: the
-  # helper's slh_refuse ran in a command-substitution child, so the refusal it
-  # recorded there died with that process and only the return code survives.
-  # Re-recording it here is what makes the decision at the bottom see it.
-  if ! __ACTIVE_SPECS="$(slh_active_specs "$PROJ" "")"; then
-    SLH_REFUSED=1
-    __ACTIVE_SPECS=""
-  fi
-  for __num in $__ACTIVE_SPECS; do
+  for __num in $(slh_attest_active_specs "$(slh_index_show "$PROJ" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"); do
     __sf="$(slh_spec_path_for "$PROJ" "$__num")"
     # A row that names no readable spec file is the close gate's
     # SLH-CLOSES-NO-SPEC-FILE question, not this one; it is left to the layer
@@ -248,13 +212,6 @@ fi
 if [ -n "$LANDING" ] && slh_on_trunk "$PROJ" "$TRUNK"; then
   printf 'setlist pre-commit: this commit completes a %s onto %s, so the close\n' "$LANDING" "$TRUNK" >&2
   printf '  verification runs here (git fires no pre-merge-commit for this path).\n' >&2
-  # A squash landing produces a SINGLE-PARENT commit, so the ownership
-  # question (design 8.2) applies here exactly as it does at the audit's
-  # NPAR<2 arm; a stalled true merge keeps the merge arm's provenance
-  # question instead.
-  SLH_CLOSE_SINGLE_PARENT=0
-  # shellcheck disable=SC2034  # read by slh_verify_close in the sourced library, which is the contract its header comment states
-  [ "$LANDING" = "squash merge" ] && SLH_CLOSE_SINGLE_PARENT=1
   # fail-open-ok: both refusals are recorded in SLH_REFUSED and decided below, so
   # a non-zero return must not abort before every check has had its say.
   slh_verify_close "$PROJ" "$TRUNK" "this $LANDING" || true

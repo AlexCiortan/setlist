@@ -479,31 +479,6 @@ if ! jq -e -s 'length == 1 and (.[0] | type == "object")' "$SDD_JSON" >/dev/null
   deny_literal "close gate [CG-SDD-SHAPE]: .claude/sdd.json is not a single JSON OBJECT (it does not parse, or it is an array, or it contains more than one document), so this gate cannot read the trunk name and cannot tell whether this merge lands on the trunk. It would otherwise allow every merge unchecked. Fix the file (jq -s . .claude/sdd.json shows both the syntax and how many documents it holds), then retry. Gates report their verdict and PERMIT: advisory since v1.7, so this warns and the git hooks are what refuse."
 fi
 
-# THE STRUCTURED STATUS RECORD (RP1, edition v1.12). Where the merged branch's
-# tree carries .claude/status.json, this gate's close questions are answered
-# from the record and the frozen page readers further down DO NOT RUN for that
-# close; where it is absent, the page path below is byte-identical to what
-# shipped before the record existed. Present-and-malformed is warned as a
-# refusal-in-waiting, never a pass, never a fallback: the git-hook layer is
-# what refuses, in the same words, and this gate's job is saying so EARLY.
-#
-# LOCKSTEP: the seven SLH_RECORD_*_JQ assignments below are byte-identical to
-# templates/git-hooks/setlist-hook-lib.sh and scripts/trunk-audit.sh, asserted
-# by the suite exactly as the three frozen awk readers are. The full grammar
-# reasoning lives with the library's copy.
-SLH_RECORD_CHECK_JQ='if (type != "object") or (.setlist_status != 1) or (((keys - ["setlist_status","specs","chores"]) | length) > 0) or (((.specs // {}) | type) != "object") or (((.chores // {}) | type) != "object") then "malformed" elif (((.specs // {}) | to_entries | all((.key | test("^[0-9]+[a-z]*$")) and (.value | if type != "object" then false else (((keys - ["status","qa_pass_1","diagram"]) | length) == 0) and (.status as $s | (["draft","queued","active","revised","built","parked","closed"] | index($s)) != null) and ((.qa_pass_1 == null) or (.qa_pass_1 == "ok")) and ((.diagram == null) or (.diagram == "updated") or (.diagram == "no-impact")) end))) | not) then "malformed" elif (((.chores // {}) | to_entries | all((.key | test("^CHORE-[0-9]+$")) and (.value | if type != "object" then false else (((keys - ["status","files"]) | length) == 0) and ((.status == "open") or (.status == "done")) and ((.files == null) or (((.files | type) == "array") and (.files | all(type == "string")))) end))) | not) then "malformed" else "ok" end'
-# shellcheck disable=SC2034  # defined in every carrier so the suite pins the FULL reader set byte-identical; this carrier consumes a subset and the siblings consume the rest
-SLH_RECORD_CLOSED_JQ='((.specs // {}) | to_entries[] | select(.value.status == "closed") | .key)'
-# shellcheck disable=SC2034  # defined in every carrier so the suite pins the FULL reader set byte-identical; this carrier consumes a subset and the siblings consume the rest
-SLH_RECORD_ACTIVE_JQ='((.specs // {}) | to_entries[] | select(.value.status == "active") | .key)'
-# shellcheck disable=SC2034  # defined in every carrier so the suite pins the FULL reader set byte-identical; this carrier consumes a subset and the siblings consume the rest
-SLH_RECORD_DONE_JQ='((.chores // {}) | to_entries[] | select(.value.status == "done") | .key)'
-# shellcheck disable=SC2034  # defined in every carrier so the suite pins the FULL reader set byte-identical; this carrier consumes a subset and the siblings consume the rest
-SLH_RECORD_STATUS_JQ='((.specs // {})[$num]) | if . == null then "absent" else .status end'
-SLH_RECORD_FACTS_JQ='((.specs // {})[$num]) | if . == null then "absent" elif ((.status == "closed") and (.qa_pass_1 == "ok") and ((.diagram == "updated") or (.diagram == "no-impact"))) then "ok" else "missing" end'
-# shellcheck disable=SC2034  # defined in every carrier so the suite pins the FULL reader set byte-identical; this carrier consumes a subset and the siblings consume the rest
-SLH_RECORD_CHORE_FILES_JQ='(((.chores // {})[$id].files) // []) | .[]'
-
 # The trunk branch name is recorded in sdd.json at stamp or upgrade time
 # (F6-2); main is only the fallback for instances stamped before the field
 # existed.
@@ -1404,14 +1379,7 @@ while IFS= read -r seg; do
     # judging?), and the rest of this gate already refuses such questions
     # rather than guessing.
     SEG_ALL="$(git -C "$PROJ" for-each-ref --points-at "$SEG_SHA" --format='%(refname)' refs/heads refs/remotes 2>/dev/null \
-                | grep -E '^refs/(heads|remotes/[^/]+)/(spec|chore)/')" # fail-open-ok: no spec or chore ref at this commit means the merge is a sync or an integration merge, which this gate has never governed; the emptiness is the classification
-    # The predicate is ANCHORED to the namespaces this instance governs (2.4.0
-    # leg F2): refs/heads/spec/... and a remote-tracking copy one level down.
-    # The unanchored '/(spec|chore)/' matched the token in ANY path segment, so
-    # a remote NAMED spec (refs/remotes/spec/main) or a nesting namespace
-    # (refs/heads/archive/spec/0099-old) hijacked the classification and an
-    # ordinary feature merge was refused as an unclosed spec, with 'main' fed
-    # to the spec-number lookup.
+                | grep -E '/(spec|chore)/')" # fail-open-ok: no spec or chore ref at this commit means the merge is a sync or an integration merge, which this gate has never governed; the emptiness is the classification
     if [[ -n "$SEG_ALL" ]]; then
       SEG_SPECS="$(printf '%s\n' "$SEG_ALL" | grep -E '/spec/' || true)"
       if [[ -n "$SEG_SPECS" ]]; then
@@ -1636,32 +1604,6 @@ for MERGED_REF in $MERGED_REFS; do
       deny "close gate [CG-SPEC-NOT-AUTHORED]: branch $MERGED_REF does not modify $SPEC_PATH, so the Closing report it would be judged on was written by earlier work on spec $SPEC_NUM and already sits on $TRUNK. Reusing a closed spec's number carries unreviewed changes onto the trunk against somebody else's evidence. Open a spec with a NEW number for this work, or commit this branch's own Closing report to $SPEC_PATH."
     fi
 
-    # THE RECORD, OR THE PAGE (RP1, edition v1.12). A branch whose tree carries
-    # .claude/status.json is judged by the record: the entry checkpoint wrote
-    # at the close IS the record of a completed close, and the prose Closing
-    # report is a human artifact this gate then leaves to humans. The page
-    # checks below this block are the ABSENCE path only; running both would be
-    # two readers per fact. These three warnings mirror the git-hook layer's
-    # SLH-RECORD table in the same words, because this layer has no deny
-    # mechanic: the git hooks are what refuse.
-    CG_RECORD_STRUCTURED=0
-    if git -C "$PROJ" cat-file -e "${MERGED_REF}:.claude/status.json" 2>/dev/null; then
-      CG_RECORD_STRUCTURED=1
-      CG_REC="$(git -C "$PROJ" show "${MERGED_REF}:.claude/status.json" 2>/dev/null || true)" # fail-open-ok: unreadable-but-present reads as empty, which is not "ok" below and warns
-      CG_REC_VERDICT="$(printf '%s' "$CG_REC" | jq -r "$SLH_RECORD_CHECK_JQ" 2>/dev/null || printf 'malformed')"
-      if [[ "$CG_REC_VERDICT" != "ok" ]]; then
-        deny "close gate [CG-RECORD-MALFORMED]: .claude/status.json on branch $MERGED_REF is not a well-formed status record, so no close fact can be read from it and the git hooks will refuse this merge outright. Nothing falls back to the STATUS.md page. Only /setlist:checkpoint writes this file; fix the record on the branch (jq . .claude/status.json shows the syntax; Part 3 of the edition shows the grammar), then merge."
-      fi
-      CG_FACTS="$(printf '%s' "$CG_REC" | jq -r --arg num "$SPEC_NUM" "$SLH_RECORD_FACTS_JQ" 2>/dev/null || printf 'malformed')"
-      if [[ "$CG_FACTS" == "absent" ]]; then
-        deny "close gate [CG-RECORD-NO-SPEC]: spec $SPEC_NUM has no entry in .claude/status.json on branch $MERGED_REF, so this close is not recorded and the git hooks will refuse it. Run /setlist:checkpoint to record the spec (a spec cut before the record existed gets its entry backfilled at its next checkpoint touch), close through checkpoint, then merge."
-      fi
-      if [[ "$CG_FACTS" != "ok" ]]; then
-        deny "close gate [CG-RECORD-NO-CLOSE]: spec $SPEC_NUM's entry in .claude/status.json on branch $MERGED_REF does not carry its close facts (status closed, qa_pass_1 ok, diagram updated or no-impact), so the git hooks will refuse this merge. /setlist:checkpoint writes these at the close; run the close through checkpoint rather than editing the record by hand, then merge."
-      fi
-    fi
-    if [[ "$CG_RECORD_STRUCTURED" == "0" ]]; then
-
     # A FENCED EXAMPLE IS NOT A CLOSING REPORT (leg 5, F7).
     #
     # Every check below reads SPEC_TEXT as one flat string, so a spec that
@@ -1884,7 +1826,6 @@ for MERGED_REF in $MERGED_REFS; do
       END { exit found ? 0 : 1 }
     '; then
       deny "close gate [CG-NO-STATUS-ROW]: specs/STATUS.md on branch $MERGED_REF has no inventory row marking spec $SPEC_NUM CLOSED; update the row in the same commit as the Closing report, then merge."
-    fi
     fi
   fi
 done

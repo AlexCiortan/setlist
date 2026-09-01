@@ -452,52 +452,6 @@ TEMPLATE_FENCE_AWK='function __f(k,  i){ if(k) for(i=1;i<=n;i++) print b[i]; n=0
 # chore archive line, so an illustration cannot be counted as a record.
 SLH_LIVE_TEXT_AWK='{ __l=$0; sub(/\r$/,"",__l); __para=PARA; PARA=0; if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (inhtml) { if (index(tolower(__l), htag)) inhtml = 0; next } if (!fence) { while ((__ci=index(__l, "<!--")) > 0) { __after=substr(__l, __ci+2); __cj=index(__after, "-->"); if (__cj > 0) { __l = substr(__l, 1, __ci-1) substr(__after, __cj+3) } else { __l = substr(__l, 1, __ci-1); incmt = 1; break } } } __t=__l; __d=0; while (1) { __save=__t; sub(/^ ? ? ?/,"",__t); if (__t ~ /^>/) { sub(/^> ?/,"",__t); __d++ } else { __t=__save; break } } if (fence) { if (__d==fbq && !(__t ~ /^(    |\t)/)) { __x=__t; sub(/^[[:space:]]*/,"",__x); __c=substr(__x,1,1); if (__c==fch) { __m=0; while(substr(__x,__m+1,1)==__c) __m++; __raw=substr(__x,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=flen && __r=="") fence=0 } } next } __hx=tolower(__t); sub(/^[[:space:]]*/,"",__hx); if (__hx ~ /^<(script|style|textarea|pre)([ \t>]|$)/) { if (__hx ~ /^<script/) htag="</script>"; else if (__hx ~ /^<style/) htag="</style>"; else if (__hx ~ /^<textarea/) htag="</textarea>"; else htag="</pre>"; if (index(__hx, htag)) { next } inhtml=1; next } __ic=__t; __peeled=0; while (1) { __s2=__ic; sub(/^ ? ? ?/,"",__ic); if (__ic ~ /^([-*+]|[0-9]+[.)])[ \t]/) { sub(/^([-*+]|[0-9]+[.)]) ?/,"",__ic); __peeled=1 } else if (__ic ~ /^>/) { sub(/^> ?/,"",__ic); __peeled=1 } else { __ic=__s2; break } } if (__peeled && __ic ~ /^(    |\t)/) { next } if (__d>0 && __t ~ /^(    |\t)/) { next } if (__d==0 && __t ~ /^(    |\t)/) { if (!__para) next } __o=__t; sub(/^([-*+]|[0-9]+[.)])[[:space:]]+/,"",__o); sub(/^[[:space:]]*/,"",__o); __c=substr(__o,1,1); if (__c=="`" || __c=="~") { __m=0; while(substr(__o,__m+1,1)==__c) __m++; __raw=substr(__o,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { fence=1; fch=__c; flen=__m; fbq=__d; next } } if ((__d>0 || __peeled) && __ic ~ /^[[:space:]]*[|]/) next; print __l; if (__l ~ /^[[:space:]]*$/) { intable=0 } else if (__d==0) { __ps=__t; sub(/^[[:space:]]*/,"",__ps); if (__ps ~ /^\|?[ \t|:-]*-[ \t|:-]*$/ && index(__ps,"|")) { intable=1 } else if (index(__ps,"|") && intable) { } else { intable=0; if (!(__ps ~ /^#+([ \t]|$)/) && !(__ps ~ /^[-=]+[ \t]*$/) && !(__ps ~ /^[*_]+[ \t]*$/)) PARA=1 } } }'
 
-# THE STRUCTURED STATUS RECORD (RP1, edition v1.12). Where a tree carries
-# .claude/status.json, inventory, chore and close facts are read from the
-# record and the three frozen readers above DO NOT RUN for it; where it is
-# absent, the page path below is byte-identical to what shipped before the
-# record existed (the pre-record differential in the suite proves that rather
-# than asserting it). PRESENT AND MALFORMED IS A VIOLATION, never a pass and
-# never a fallback to the page readers: a fallback would let one deliberate
-# syntax error buy back the frozen readers' documented residual class. The
-# audit refuses per COMMIT, so a range whose early commits predate the record
-# is judged page-wise there and record-wise from the adoption commit on.
-#
-# LOCKSTEP: the seven SLH_RECORD_*_JQ assignments are byte-identical to
-# templates/git-hooks/setlist-hook-lib.sh and templates/hooks/close-gate.sh,
-# asserted by the suite exactly as the three frozen awk readers are. The full
-# grammar reasoning lives with the library's copy.
-SLH_RECORD_CHECK_JQ='if (type != "object") or (.setlist_status != 1) or (((keys - ["setlist_status","specs","chores"]) | length) > 0) or (((.specs // {}) | type) != "object") or (((.chores // {}) | type) != "object") then "malformed" elif (((.specs // {}) | to_entries | all((.key | test("^[0-9]+[a-z]*$")) and (.value | if type != "object" then false else (((keys - ["status","qa_pass_1","diagram"]) | length) == 0) and (.status as $s | (["draft","queued","active","revised","built","parked","closed"] | index($s)) != null) and ((.qa_pass_1 == null) or (.qa_pass_1 == "ok")) and ((.diagram == null) or (.diagram == "updated") or (.diagram == "no-impact")) end))) | not) then "malformed" elif (((.chores // {}) | to_entries | all((.key | test("^CHORE-[0-9]+$")) and (.value | if type != "object" then false else (((keys - ["status","files"]) | length) == 0) and ((.status == "open") or (.status == "done")) and ((.files == null) or (((.files | type) == "array") and (.files | all(type == "string")))) end))) | not) then "malformed" else "ok" end'
-SLH_RECORD_CLOSED_JQ='((.specs // {}) | to_entries[] | select(.value.status == "closed") | .key)'
-# shellcheck disable=SC2034  # defined in every carrier so the suite pins the FULL reader set byte-identical; this carrier consumes a subset and the siblings consume the rest
-SLH_RECORD_ACTIVE_JQ='((.specs // {}) | to_entries[] | select(.value.status == "active") | .key)'
-SLH_RECORD_DONE_JQ='((.chores // {}) | to_entries[] | select(.value.status == "done") | .key)'
-SLH_RECORD_STATUS_JQ='((.specs // {})[$num]) | if . == null then "absent" else .status end'
-SLH_RECORD_FACTS_JQ='((.specs // {})[$num]) | if . == null then "absent" elif ((.status == "closed") and (.qa_pass_1 == "ok") and ((.diagram == "updated") or (.diagram == "no-impact"))) then "ok" else "missing" end'
-SLH_RECORD_CHORE_FILES_JQ='(((.chores // {})[$id].files) // []) | .[]'
-
-# THE OWNERSHIP FACT (RP1, design section 8): `Owns:` header lines inside the
-# spec's HASHED RANGE (first line to the line before "## Closing report", the
-# same boundary scripts/spec-hash.sh cuts, so declared attestation custody
-# signs the declaration). Grammar: `Owns: ` at column 0, ONE verbatim
-# repo-relative path, no globs, no quoting, no directories, because a declared
-# set you cannot enumerate is an exemption wearing a declaration. The reader
-# prints paths, or lines starting with "!" for anything outside the grammar
-# (out of range, wrong shape), and the consumer REFUSES on any "!" token:
-# SLH-OWNS-MALFORMED at the arm that would have consumed it.
-# LOCKSTEP: byte-identical to templates/git-hooks/setlist-hook-lib.sh, which
-# asks the same question of the STAGED close at the squash landing.
-SLH_OWNS_AWK='{ l=$0; sub(/\r$/,"",l) } l ~ /^##[[:space:]]*Closing report/{r=1} l ~ /^Owns:/{ if(r==1){print "!range";next} if(substr(l,1,6) != "Owns: "){print "!shape";next} p=substr(l,7); if(p=="" || p ~ /^[ \t]/ || p ~ /[ \t]$/ || index(p,"*") || index(p,"?") || index(p,"[") || index(p,"]") || index(p,"\\") || index(p,"\"") || index(p,"\047") || substr(p,1,1)=="/" || substr(p,1,2)=="./" || substr(p,length(p),1)=="/" || p ~ /(^|\/)\.\.(\/|$)/){print "!shape";next} print p }'
-
-record_present_at() { git -C "$INSTANCE" cat-file -e "$1:.claude/status.json" 2>/dev/null; }
-# fail-open-ok: unreadable-but-present yields empty text, which is not "ok" to
-# record_verdict, so every consumer treats it as the malformed record it is.
-record_at() { git -C "$INSTANCE" show "$1:.claude/status.json" 2>/dev/null || true; }
-# ONE TOKEN OUT, the attestation verifier's calling convention: the caller
-# refuses anything that is not exactly "ok", so an empty result, a crashed jq
-# or a truncated read refuses BY CONSTRUCTION. jq's exit status is carried.
-record_verdict() { printf '%s' "$1" | jq -r "$SLH_RECORD_CHECK_JQ" 2>/dev/null || printf 'malformed'; }
-
 while IFS= read -r C; do
   [[ -n "$C" ]] || continue
   AUDITED=$((AUDITED + 1))
@@ -538,140 +492,11 @@ while IFS= read -r C; do
     # Did this commit COMPLIANTLY close a spec? Set by the loop below and read
     # by the touches-role decision at the end of this arm (F4).
     LIN_CLOSED_OK=0
-    LIN_STRUCTURED=0
-    LIN_NEWLY=""
-    LIN_CHORE_NEW=""
-    LIN_DECLARING=0
-    LIN_BLOCKLESS=0
-    LIN_CHORE_FLIP=0
-    LIN_OWNS_SHAPE_BAD=0
-    LIN_OWNS_LIST=""
-    if [[ -n "$P1" ]] && record_present_at "$C"; then
-      # THE RECORD DECIDES (RP1). The commit's own tree carries the status
-      # record, so which specs this commit newly closes is a diff of two jq
-      # queries, and the close facts are the tokens checkpoint wrote, not a
-      # parse of the spec's rendered markdown.
-      LIN_STRUCTURED=1
-      LIN_REC_C="$(record_at "$C")"
-      if [[ "$(record_verdict "$LIN_REC_C")" != "ok" ]]; then
-        printf 'VIOLATION %s  [SLH-RECORD-MALFORMED] .claude/status.json at this commit is not a well-formed status record, so no close or chore fact can be read from it. Nothing falls back to the page readers. Only /setlist:checkpoint writes this file; fix the record.\n' "$SHORT"
-        printf '          %s\n' "$SUBJ"
-        VIOLATIONS=$((VIOLATIONS + 1))
-      elif record_present_at "$P1"; then
-        LIN_REC_P1="$(record_at "$P1")"
-        if [[ "$(record_verdict "$LIN_REC_P1")" != "ok" ]]; then
-          printf 'VIOLATION %s  [SLH-RECORD-MALFORMED] .claude/status.json at the parent is not a well-formed status record, so which specs this commit NEWLY closes cannot be computed against it.\n' "$SHORT"
-          printf '          %s\n' "$SUBJ"
-          VIOLATIONS=$((VIOLATIONS + 1))
-        else
-          LIN_C_CLOSED="$(printf '%s' "$LIN_REC_C" | jq -r "$SLH_RECORD_CLOSED_JQ" 2>/dev/null || printf '\n!jq-failed')"
-          LIN_P1_CLOSED="$(printf '%s' "$LIN_REC_P1" | jq -r "$SLH_RECORD_CLOSED_JQ" 2>/dev/null || printf '\n!jq-failed')"
-          if printf '%s\n' "$LIN_C_CLOSED$LIN_P1_CLOSED" | grep -q '^!jq-failed$'; then
-            printf 'VIOLATION %s  [SLH-RECORD-MALFORMED] jq failed while reading the status record, so the closing set cannot be established; a reader that could not run has not read.\n' "$SHORT"
-            VIOLATIONS=$((VIOLATIONS + 1))
-          else
-            for LIN_NUM in $LIN_C_CLOSED; do
-              printf '%s\n' "$LIN_P1_CLOSED" | grep -qxF -- "$LIN_NUM" && continue
-              LIN_NEWLY="$LIN_NEWLY $LIN_NUM"
-            done
-            # Chores newly done in this commit's record (F5-2026's half): the
-            # same before-and-after rule as the specs, and the declared set is
-            # chores.<id>.files, gathered below into the same per-file
-            # question. The widening the 2.3.0 leg warned about came from
-            # exempting the COMMIT on the archive line's presence; per-file
-            # coverage against the chore's declared files cannot reproduce it.
-            LIN_C_DONE="$(printf '%s' "$LIN_REC_C" | jq -r "$SLH_RECORD_DONE_JQ" 2>/dev/null || true)"   # fail-open-ok: an empty done set flips no chore and grants nothing
-            LIN_P1_DONE="$(printf '%s' "$LIN_REC_P1" | jq -r "$SLH_RECORD_DONE_JQ" 2>/dev/null || true)" # fail-open-ok: as above, empty grants nothing
-            for LIN_CN in $LIN_C_DONE; do
-              printf '%s\n' "$LIN_P1_DONE" | grep -qxF -- "$LIN_CN" && continue
-              LIN_CHORE_NEW="$LIN_CHORE_NEW $LIN_CN"
-            done
-          fi
-        fi
-      fi
-      # THE ADOPTION COMMIT CLOSES NOTHING: a record present here and absent at
-      # the parent is the instance opting in, and entries arriving already
-      # closed are transcription. Demanding close facts of them would refuse
-      # every opt-in whose history predates the record; granting the exemption
-      # would let an adoption commit buy what a close must earn. LIN_NEWLY
-      # stays empty: nothing demanded, nothing granted.
-    fi
-    if [[ "$LIN_STRUCTURED" == "1" ]]; then
-      for LIN_NUM in $LIN_NEWLY; do
-        # Same narrowing as the library (leg F6): the exact number then a
-        # hyphen, and a count rather than head -n1, because 0002b is a
-        # different spec and a pick among several is a guess.
-        # -z and a NUL-aware grep (F1's class, on the spec side): a spec file whose
-        # name carries a non-ASCII byte, a quote, a backslash or a control character
-        # is emitted QUOTED by --name-only and would miss this pattern, so the audit
-        # would report "no spec file" about a spec that is present. Same defect as
-        # the role reader, opposite consequence: there it under-refuses, here it
-        # over-refuses.
-        LIN_HITS="$(git -C "$INSTANCE" ls-tree -r -z --name-only "$C" 2>/dev/null | grep -zE "^specs/${LIN_NUM}-[^/]*\.md$" | tr '\0' '\n' || true)" # fail-open-ok: no file yields empty, handled as its own violation below
-        if [ -n "$LIN_HITS" ] && [ "$(printf '%s\n' "$LIN_HITS" | grep -c .)" -ne 1 ]; then
-          printf 'VIOLATION %s  spec %s has several files matching specs/%s-*.md, so its close cannot be verified: %s\n' \
-            "$SHORT" "$LIN_NUM" "$LIN_NUM" "$(printf '%s' "$LIN_HITS" | tr '\n' ' ')"
-          VIOLATIONS=$((VIOLATIONS + 1)); SEEN_BAD=1
-          continue
-        fi
-        LIN_FILE="$LIN_HITS"
-        if [[ -z "$LIN_FILE" ]]; then
-          printf 'VIOLATION %s  spec %s marked CLOSED with no specs/%s-*.md to verify\n' "$SHORT" "$LIN_NUM" "$LIN_NUM"
-          VIOLATIONS=$((VIOLATIONS + 1)); continue
-        fi
-        # THE CLOSE FACTS ARE THE RECORD'S TOKENS (RP1): qa_pass_1 and diagram,
-        # written by checkpoint at the close. The spec's prose Closing report
-        # stays a human artifact this arm no longer parses; running the page
-        # checks here too would be two readers per fact, the A9 violation the
-        # record exists to end.
-        LIN_FACTS="$(printf '%s' "$LIN_REC_C" | jq -r --arg num "$LIN_NUM" "$SLH_RECORD_FACTS_JQ" 2>/dev/null || printf 'jq-failed')"
-        if [[ "$LIN_FACTS" != "ok" ]]; then
-          printf 'VIOLATION %s  [SLH-RECORD-NO-CLOSE] spec %s is newly closed in .claude/status.json without its close facts (status closed, qa_pass_1 ok, diagram updated or no-impact; the reader said: %s). /setlist:checkpoint writes these at the close; run the close through checkpoint rather than editing the record by hand.\n' "$SHORT" "$LIN_NUM" "${LIN_FACTS:-nothing at all}"
-          printf '          %s\n' "$SUBJ"
-          VIOLATIONS=$((VIOLATIONS + 1))
-          continue
-        fi
-        # A COMPLIANT CLOSE, ON A COMMIT WITH FEWER THAN TWO PARENTS (F4),
-        # established by the record. WHAT IT EXEMPTS is the ownership
-        # question (design section 8.2): a spec that DECLARES its files gets
-        # per-file coverage instead of the whole-commit exemption; a spec
-        # declaring NOTHING keeps today's behaviour exactly (the Spec-hash
-        # absence precedent, and the only answer that does not re-refuse the
-        # compliant legacy squash close F4's fix exists to permit). A
-        # declaration outside the grammar refuses at this arm, because a
-        # declared set you cannot enumerate is an exemption wearing a
-        # declaration.
-        LIN_OWNS_OUT="$(git -C "$INSTANCE" show "$C:$LIN_FILE" 2>/dev/null | awk "$SLH_OWNS_AWK" || true)" # fail-open-ok: an unreadable spec declares nothing, and nothing is the narrow direction here: it forfeits per-file coverage rather than widening it
-        if printf '%s\n' "$LIN_OWNS_OUT" | grep -q '^!'; then
-          printf 'VIOLATION %s  [SLH-OWNS-MALFORMED] spec %s declares ownership outside the grammar (a glob, a directory, a quoted or empty path, or an Owns: line below the Closing report heading). One verbatim repo-relative file per "Owns: " line, at column 0, inside the hashed range. The range ends at the FIRST line reading "## Closing report", fences included, because that byte-same cut is what attestation signs: a fenced or quoted copy of the Closing-report template ABOVE your declaration ends the range early, and the fix is one edit (move the declaration above the quote, or drop the quoted heading line). A declared set that cannot be enumerated is an exemption wearing a declaration, so this close exempts nothing until the declaration is fixed through /setlist:checkpoint.\n' "$SHORT" "$LIN_NUM"
-          printf '          %s\n' "$SUBJ"
-          VIOLATIONS=$((VIOLATIONS + 1))
-          LIN_OWNS_SHAPE_BAD=1
-        elif [[ -z "$LIN_OWNS_OUT" ]]; then
-          LIN_BLOCKLESS=1
-          LIN_CLOSED_OK=1
-        else
-          LIN_DECLARING=1
-          LIN_OWNS_LIST="$LIN_OWNS_LIST
-$LIN_OWNS_OUT"
-        fi
-      done
-      # The chore half of the declared set: files come from the record, and a
-      # chore that declares no files covers nothing, which is the false-deny
-      # direction with the exits named below.
-      for LIN_CN in $LIN_CHORE_NEW; do
-        LIN_CHORE_FLIP=1
-        LIN_CF="$(printf '%s' "$LIN_REC_C" | jq -r --arg id "$LIN_CN" "$SLH_RECORD_CHORE_FILES_JQ" 2>/dev/null || true)" # fail-open-ok: no files declared covers nothing, it cannot widen
-        [[ -n "$LIN_CF" ]] && LIN_OWNS_LIST="$LIN_OWNS_LIST
-$LIN_CF"
-      done
-    elif [[ -n "$P1" ]]; then
+    if [[ -n "$P1" ]]; then
       # LIVE TEXT AT THE SOURCE (2026-08 consolidation): the row readers judge
       # STATUS.md by what the rendered file shows, so a fenced example row or a
       # commented-out row is not an inventory row here either. Stripped once at
       # extraction, in lockstep with the library's guard_close.
-      # THIS IS THE ABSENCE PATH (RP1): no record at this commit, so the page
-      # and the frozen readers decide, byte-identical to what shipped before.
       LIN_NEW="$(git -C "$INSTANCE" show "$C:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK" || true)"   # fail-open-ok: no STATUS.md at this commit yields empty, so no row can be read as newly closed, which is correct for a repository that has none
       LIN_OLD="$(git -C "$INSTANCE" show "$P1:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK" || true)"  # fail-open-ok: as above, an absent parent copy means every present row reads as new, which accuses rather than excuses
       for LIN_NUM in $(printf '%s\n' "$LIN_NEW" | sed 's/\\|/ /g' | awk -F'|' 'NF >= 5 { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); if ($2 ~ /^[0-9]+[a-z]*$/) print $2 }'); do  # sed: GFM escaped pipe (round 11)
@@ -790,41 +615,6 @@ $LIN_CF"
     # flips a row and fails a condition is still a violation, reported by that
     # loop with the condition named; a commit that carries code and closes
     # nothing is still "feature code committed directly".
-    # THE PER-FILE ARM (design 8.2), replacing the whole-commit exemption for
-    # a close that DECLARES and for a chore flip: for each role-path file in
-    # this commit, is it in the declared set read from the bytes IN THIS
-    # COMMIT? Every file covered: clean. Any file not covered: refused, the
-    # false-deny direction, with the two honest exits named. The attack now
-    # fails on SHAPE: still-active spec 0004's src/wip.txt is not in closing
-    # spec 0005's declared set, so the byte-identical commit that used to
-    # audit "1 clean, 0 violations" refuses. The honest squash close passes
-    # on shape, its files declared at checkpoint commits during the build.
-    # A blockless close never reaches this arm (LIN_BLOCKLESS above), and a
-    # malformed declaration already refused and exempts nothing.
-    if [[ "$LIN_STRUCTURED" == "1" && "$LIN_BLOCKLESS" == "0" && "$LIN_OWNS_SHAPE_BAD" == "0" && ( "$LIN_DECLARING" == "1" || "$LIN_CHORE_FLIP" == "1" ) ]]; then
-      LIN_OWNS_VIOL=0
-      while IFS= read -r -d '' LIN_RF; do
-        [[ -n "$LIN_RF" ]] || continue
-        touches_role_file "$LIN_RF" || continue
-        # Declared paths match by EXACT bytes, never by fold or glob: a
-        # case-variant of a declared path is a different string, reads as
-        # undeclared, and refuses, which is the safe direction (PD9's class).
-        if ! printf '%s\n' "$LIN_OWNS_LIST" | grep -qxF -- "$LIN_RF"; then
-          printf 'VIOLATION %s  [SLH-OWNS-UNDECLARED] %s is a role-path file this close does not declare. A declaring close is audited file by file against its declared set, so a whole commit can no longer be exempted by one row flip. Two honest exits: declare the file through /setlist:checkpoint (under attestation custody that means re-approval, correctly), or take the --no-ff merge route, whose arm asks the provenance question instead.\n' "$SHORT" "$LIN_RF"
-          printf '          %s\n' "$SUBJ"
-          VIOLATIONS=$((VIOLATIONS + 1))
-          LIN_OWNS_VIOL=1
-        fi
-      done < <(git -C "$INSTANCE" diff -z --name-only --diff-filter=d "$P1" "$C" 2>/dev/null)
-      # --diff-filter=d (2.4.0 leg F7): the arm asks what ARRIVES on the trunk,
-      # and a deleted path arrives nowhere; before the filter the same
-      # retirement passed spelled `git mv` and refused spelled `git rm`. The
-      # merge arm's provenance sibling already filters (--diff-filter=A below).
-      if [[ "$LIN_OWNS_VIOL" == "0" ]]; then
-        CLEAN=$((CLEAN + 1))
-      fi
-      continue
-    fi
     if [[ "$LIN_CLOSED_OK" -eq 1 ]]; then
       CLEAN=$((CLEAN + 1))
     elif touches_role "$P1" "$C"; then
@@ -876,48 +666,6 @@ $LIN_CF"
     SPECS_TOUCHED="$(git -C "$INSTANCE" diff -z --name-only "$BASE" "$P2" 2>/dev/null | tr '\0' '\n' \
       | grep -E '^specs/[0-9]+[a-z]*-[^/]*\.md$' || true)"   # fail-open-ok: no match means no spec on the branch, handled as a chore below
 
-    # THE RECORD, OR THE PAGE (RP1): the branch side carrying .claude/status.json
-    # answers the chore and close questions from the record; a branch without
-    # one takes the page path below, byte-identical to what shipped before.
-    # Malformed is a violation for THIS parent, never a fallback.
-    MRG_STRUCTURED=0
-    MRG_REC_P2=""
-    MRG_REC_P1=""
-    if record_present_at "$P2"; then
-      MRG_STRUCTURED=1
-      MRG_REC_P2="$(record_at "$P2")"
-      if [[ "$(record_verdict "$MRG_REC_P2")" != "ok" ]]; then
-        printf 'VIOLATION %s  [SLH-RECORD-MALFORMED] .claude/status.json on the merged branch is not a well-formed status record, so what this merge closes or records cannot be read from it. Nothing falls back to the page readers; only /setlist:checkpoint writes this file.\n' "$SHORT"
-        printf '          %s\n' "$SUBJ"
-        VIOLATIONS=$((VIOLATIONS + 1)); SEEN_BAD=1
-        continue
-      fi
-      if record_present_at "$P1"; then
-        MRG_REC_P1="$(record_at "$P1")"
-        if [[ "$(record_verdict "$MRG_REC_P1")" != "ok" ]]; then
-          printf 'VIOLATION %s  [SLH-RECORD-MALFORMED] .claude/status.json on the trunk side of this merge is not a well-formed status record, so what was ALREADY closed or done cannot be established.\n' "$SHORT"
-          printf '          %s\n' "$SUBJ"
-          VIOLATIONS=$((VIOLATIONS + 1)); SEEN_BAD=1
-          continue
-        fi
-      fi
-      # The chore route from the record: a chore whose entry reads done on the
-      # branch and did not on the trunk side. The trunk side having no record
-      # yet reads as nothing-done-before, the same permissive direction the
-      # page path takes with an unreadable prior STATUS, and for the same
-      # reason: this is a report, and a fabricated violation trains the reader
-      # to ignore real ones.
-      RECORDED_CHORE=""
-      MRG_DONE_P2="$(printf '%s' "$MRG_REC_P2" | jq -r "$SLH_RECORD_DONE_JQ" 2>/dev/null || true)" # fail-open-ok: an empty done set cannot excuse a merge, only fail to excuse it
-      MRG_DONE_P1=""
-      [[ -n "$MRG_REC_P1" ]] && MRG_DONE_P1="$(printf '%s' "$MRG_REC_P1" | jq -r "$SLH_RECORD_DONE_JQ" 2>/dev/null || true)" # fail-open-ok: as above, the empty direction suppresses the excuse
-      while IFS= read -r CN; do
-        [[ -n "$CN" ]] || continue
-        if ! printf '%s\n' "$MRG_DONE_P1" | grep -qxF -- "$CN"; then
-          RECORDED_CHORE="$CN"; break
-        fi
-      done <<< "$MRG_DONE_P2"
-    else
     # fail-open-ok: same, an unreadable STATUS.md fails the row test below.
     # LIVE TEXT AT THE SOURCE (2026-08 consolidation): stripped ONCE at
     # extraction, so every consumer below, the chore greps AND the row readers,
@@ -960,7 +708,6 @@ $LIN_CF"
         RECORDED_CHORE="$CN"; break
       fi
     done <<< "$CHORES_NOW"
-    fi
 
     if [[ -z "$SPECS_TOUCHED" ]]; then
       if [[ -n "$RECORDED_CHORE" ]]; then
@@ -1024,43 +771,6 @@ $LIN_CF"
     while IFS= read -r SPEC_FILE; do
       [[ -n "$SPEC_FILE" ]] || continue
       SPEC_NUM="$(printf '%s' "$SPEC_FILE" | sed -e 's#^specs/##' -e 's#-.*##')"
-
-      # THE RECORD DECIDES (RP1). A spec file this branch touched must have an
-      # entry in the branch's record: no entry is the pre-upgrade spec whose
-      # close was attempted without checkpoint, and the way out is the one-line
-      # fix the message names. The close facts are the record's tokens; the
-      # prose Closing report is a human artifact this arm no longer parses on
-      # the structured path.
-      if [[ "$MRG_STRUCTURED" == "1" ]]; then
-        MRG_ST="$(printf '%s' "$MRG_REC_P2" | jq -r --arg num "$SPEC_NUM" "$SLH_RECORD_STATUS_JQ" 2>/dev/null || printf 'jq-failed')"
-        if [[ "$MRG_ST" == "absent" || "$MRG_ST" == "jq-failed" || -z "$MRG_ST" ]]; then
-          printf 'VIOLATION %s  [SLH-RECORD-NO-SPEC] spec %s reached %s with no entry in .claude/status.json. Run /setlist:checkpoint to record the spec, then close it through checkpoint; a spec cut before the record existed gets its entry backfilled at its next checkpoint touch.\n' "$SHORT" "$SPEC_NUM" "$TRUNK"
-          printf '          %s\n' "$SUBJ"
-          VIOLATIONS=$((VIOLATIONS + 1))
-          SEEN_BAD=1
-          continue
-        fi
-        MRG_FACTS="$(printf '%s' "$MRG_REC_P2" | jq -r --arg num "$SPEC_NUM" "$SLH_RECORD_FACTS_JQ" 2>/dev/null || printf 'jq-failed')"
-        if [[ "$MRG_FACTS" != "ok" ]]; then
-          printf 'VIOLATION %s  [SLH-RECORD-NO-CLOSE] spec %s reached %s without its close facts in .claude/status.json (status closed, qa_pass_1 ok, diagram updated or no-impact; the reader said: %s). /setlist:checkpoint writes these at the close.\n' "$SHORT" "$SPEC_NUM" "$TRUNK" "${MRG_FACTS:-nothing at all}"
-          printf '          %s\n' "$SUBJ"
-          VIOLATIONS=$((VIOLATIONS + 1))
-          SEEN_BAD=1
-          continue
-        fi
-        # Compliant. Was it ALREADY closed on the trunk side? Then this merge
-        # is not what closed it and it cannot authorise the code riding along
-        # (the B6 laundering rule, read from the record).
-        MRG_PRIOR_ST="absent"
-        if [[ -n "$MRG_REC_P1" ]]; then
-          MRG_PRIOR_ST="$(printf '%s' "$MRG_REC_P1" | jq -r --arg num "$SPEC_NUM" "$SLH_RECORD_STATUS_JQ" 2>/dev/null || printf 'absent')" # fail-open-ok: an unreadable prior record suppresses the already-closed excuse's suppression, i.e. it lets this merge count as the closer, the same permissive direction the page path takes
-        fi
-        if [[ "$MRG_PRIOR_ST" != "closed" ]]; then
-          CLOSED_SOMETHING=1
-        fi
-        continue
-      fi
-
       # fail-open-ok: an unreadable spec yields empty text, and every check
       # below is a grep that FAILS on empty, so the merge is reported as a
       # violation. Unreadable evidence counts against the merge, never for it.

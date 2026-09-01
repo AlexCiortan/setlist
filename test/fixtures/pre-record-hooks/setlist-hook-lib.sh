@@ -678,14 +678,6 @@ SLH_LIVE_TEXT_AWK='{ __l=$0; sub(/\r$/,"",__l); __para=PARA; PARA=0; if (incmt) 
 
 SLH_REFUSED=0
 
-# Set to 1 by a CALLER (pre-commit's squash-landing branch) before
-# slh_verify_close when the commit being verified will have a SINGLE parent:
-# a squash creates no merge commit, so the ownership question (design 8.2)
-# applies at this landing exactly as it does at the audit's NPAR<2 arm. A
-# true merge landing leaves it 0 and keeps the merge arm's provenance
-# question instead.
-SLH_CLOSE_SINGLE_PARENT=0
-
 slh_refuse() { # slh_refuse <code> <message...>
   local code="$1"; shift
   printf 'setlist [%s]: %s\n' "$code" "$*" >&2
@@ -695,126 +687,6 @@ slh_refuse() { # slh_refuse <code> <message...>
 # Is this repository a framework instance at all? A repo with no sdd.json is
 # somebody else's repo and none of our business.
 slh_is_instance() { [ -f "$1/.claude/sdd.json" ]; }
-
-# ===========================================================================
-# THE STRUCTURED STATUS RECORD (RP1, edition v1.12).
-#
-# The machine reads only records whose grammar it owns. Prose is for people; a
-# gate that reads prose is a gate whose grammar is someone else's renderer, and
-# it will lose to that renderer one finding at a time, forever. Every reader
-# below reads `.claude/status.json`, a grammar THIS PROJECT defines, so "what
-# does this mean" has one answer and anything outside the grammar is a REFUSAL
-# rather than an interpretation.
-#
-# THE SWITCH IS THE PRESENCE OF THE FILE, per tree. Absent: the instance is a
-# legacy instance and every reader takes the page path below, byte-identical,
-# frozen awk readers and all (proven by the pre-record differential in the
-# suite, not asserted). Present: these readers are authoritative for inventory,
-# chore and close facts, and the page readers do not run; there is no mixed
-# mode, because mixed mode is two readers per fact, which is the A9 violation
-# that makes drift invisible.
-#
-# PRESENT AND MALFORMED REFUSES, never a pass and NEVER A FALLBACK to the page
-# readers: a fallback would let one deliberate syntax error buy back the frozen
-# readers' documented residual class, which is a widened pass wearing an error
-# message. The doctrine line is F2-2026's: a gate that cannot evaluate its
-# predicate denies.
-#
-# ONE TOKEN OUT (the attestation's calling convention, applied a third time):
-# slh_record_verdict prints one token and every caller refuses anything that is
-# not exactly "ok", so an empty result, a crashed jq, or a truncated read is a
-# refusal BY CONSTRUCTION rather than by a branch somebody remembered to write.
-# A record holding two JSON documents prints two tokens, which is not "ok".
-#
-# jq is not a new dependency: it is already a probed, fail-closed, hard
-# requirement of this layer (SLH-NO-JQ at slh_trunk; slh_attest_load refuses
-# without it). The grammar (Part 3 of the edition): setlist_status exactly 1;
-# specs.<num> with status one of the lowercase lifecycle tokens, optional
-# qa_pass_1 exactly "ok", optional diagram exactly "updated" or "no-impact";
-# chores.<id> with status "open" or "done", optional files as an array of
-# strings. Unknown keys, unknown tokens, wrong types: malformed, all of them.
-#
-# LOCKSTEP: the seven SLH_RECORD_*_JQ assignments below are byte-identical in
-# this file, scripts/trunk-audit.sh and templates/hooks/close-gate.sh, asserted
-# by the suite exactly as the three frozen awk readers are. The frozen readers
-# themselves are RETAINED byte-identical as the permanent absence path, never
-# repaired and never removed (both freeze documents name that role).
-SLH_RECORD_CHECK_JQ='if (type != "object") or (.setlist_status != 1) or (((keys - ["setlist_status","specs","chores"]) | length) > 0) or (((.specs // {}) | type) != "object") or (((.chores // {}) | type) != "object") then "malformed" elif (((.specs // {}) | to_entries | all((.key | test("^[0-9]+[a-z]*$")) and (.value | if type != "object" then false else (((keys - ["status","qa_pass_1","diagram"]) | length) == 0) and (.status as $s | (["draft","queued","active","revised","built","parked","closed"] | index($s)) != null) and ((.qa_pass_1 == null) or (.qa_pass_1 == "ok")) and ((.diagram == null) or (.diagram == "updated") or (.diagram == "no-impact")) end))) | not) then "malformed" elif (((.chores // {}) | to_entries | all((.key | test("^CHORE-[0-9]+$")) and (.value | if type != "object" then false else (((keys - ["status","files"]) | length) == 0) and ((.status == "open") or (.status == "done")) and ((.files == null) or (((.files | type) == "array") and (.files | all(type == "string")))) end))) | not) then "malformed" else "ok" end'
-SLH_RECORD_CLOSED_JQ='((.specs // {}) | to_entries[] | select(.value.status == "closed") | .key)'
-SLH_RECORD_ACTIVE_JQ='((.specs // {}) | to_entries[] | select(.value.status == "active") | .key)'
-SLH_RECORD_DONE_JQ='((.chores // {}) | to_entries[] | select(.value.status == "done") | .key)'
-# shellcheck disable=SC2034  # defined in every carrier so the suite pins the FULL reader set byte-identical; this carrier consumes a subset and the siblings consume the rest
-SLH_RECORD_STATUS_JQ='((.specs // {})[$num]) | if . == null then "absent" else .status end'
-SLH_RECORD_FACTS_JQ='((.specs // {})[$num]) | if . == null then "absent" elif ((.status == "closed") and (.qa_pass_1 == "ok") and ((.diagram == "updated") or (.diagram == "no-impact"))) then "ok" else "missing" end'
-SLH_RECORD_CHORE_FILES_JQ='(((.chores // {})[$id].files) // []) | .[]'
-
-# THE OWNERSHIP FACT (RP1, design section 8): `Owns:` header lines inside the
-# spec's HASHED RANGE (first line to the line before "## Closing report", the
-# same boundary scripts/spec-hash.sh cuts, so declared attestation custody
-# signs the declaration). Grammar: `Owns: ` at column 0, ONE verbatim
-# repo-relative path, no globs, no quoting, no directories, because a declared
-# set you cannot enumerate is an exemption wearing a declaration. The reader
-# prints paths, or lines starting with "!" for anything outside the grammar
-# (out of range, wrong shape), and the consumer REFUSES on any "!" token.
-# LOCKSTEP: byte-identical to scripts/trunk-audit.sh, whose single-parent arm
-# asks the same question of the pushed history.
-SLH_OWNS_AWK='{ l=$0; sub(/\r$/,"",l) } l ~ /^##[[:space:]]*Closing report/{r=1} l ~ /^Owns:/{ if(r==1){print "!range";next} if(substr(l,1,6) != "Owns: "){print "!shape";next} p=substr(l,7); if(p=="" || p ~ /^[ \t]/ || p ~ /[ \t]$/ || index(p,"*") || index(p,"?") || index(p,"[") || index(p,"]") || index(p,"\\") || index(p,"\"") || index(p,"\047") || substr(p,1,1)=="/" || substr(p,1,2)=="./" || substr(p,length(p),1)=="/" || p ~ /(^|\/)\.\.(\/|$)/){print "!shape";next} print p }'
-
-slh_record_present() { # slh_record_present <proj> <rev>  ("" means the index)
-  if [ -z "$2" ]; then
-    [ -n "$(git -C "$1" ls-files --cached -- .claude/status.json 2>/dev/null)" ]
-  else
-    git -C "$1" cat-file -e "$2:.claude/status.json" 2>/dev/null
-  fi
-}
-
-slh_record_show() { # slh_record_show <proj> <rev>  ("" means the index)
-  # fail-open-ok: an unreadable-but-present record yields empty text, and empty
-  # text is not "ok" to slh_record_verdict, so every consumer refuses it.
-  if [ -z "$2" ]; then
-    git -C "$1" show ":.claude/status.json" 2>/dev/null || true # fail-open-ok: empty is not "ok" to the verdict reader, so every consumer refuses it
-  else
-    git -C "$1" show "$2:.claude/status.json" 2>/dev/null || true # fail-open-ok: same as above, an unreadable record refuses at the caller
-  fi
-}
-
-slh_record_verdict() { # slh_record_verdict <record-text> -> ONE TOKEN: ok | malformed
-  # The jq exit status is carried, not discarded: a jq that exists and fails
-  # while reading the record is a refusal (SLH-RECORD-MALFORMED at the caller),
-  # never a silent pass and never a fallback.
-  printf '%s' "$1" | jq -r "$SLH_RECORD_CHECK_JQ" 2>/dev/null || printf 'malformed'
-}
-
-# The query readers below run ONLY on a record slh_record_verdict already
-# passed; each still carries jq's exit status so a mid-query failure reaches
-# the caller as a refusal rather than as an empty (and therefore quieter) set.
-slh_record_closed() { printf '%s' "$1" | jq -r "$SLH_RECORD_CLOSED_JQ" 2>/dev/null; }
-slh_record_done()   { printf '%s' "$1" | jq -r "$SLH_RECORD_DONE_JQ" 2>/dev/null; }
-slh_record_facts()  { printf '%s' "$1" | jq -r --arg num "$2" "$SLH_RECORD_FACTS_JQ" 2>/dev/null; }
-
-# The one place the "which specs are ACTIVE" question switches between the
-# record and the page, used by pre-commit's attestation arm. The page half is
-# the same reading slh_attest_walk's legacy path performs.
-slh_active_specs() { # slh_active_specs <proj> <rev-or-""-for-index> -> active spec numbers; refuses and returns 1 on a malformed record
-  local proj="$1" rev="$2" rec
-  if slh_record_present "$proj" "$rev"; then
-    rec="$(slh_record_show "$proj" "$rev")"
-    if [ "$(slh_record_verdict "$rec")" != "ok" ]; then
-      slh_refuse "SLH-RECORD-MALFORMED" ".claude/status.json is present and is not a well-formed status record, so which spec is active cannot be read from it. Nothing falls back to the STATUS.md page, because a fallback would let one syntax error buy back the frozen page readers' residual class. Fix the record (jq . .claude/status.json shows the syntax; Part 3 of the edition shows the grammar), or restore it from HEAD."
-      return 1
-    fi
-    printf '%s' "$rec" | jq -r "$SLH_RECORD_ACTIVE_JQ" 2>/dev/null || {
-      slh_refuse "SLH-RECORD-MALFORMED" "jq failed while reading .claude/status.json, so which spec is active cannot be established. A reader that could not run has not read; refusing rather than treating the failure as an empty set."
-      return 1
-    }
-  else
-    if [ -z "$rev" ]; then
-      slh_attest_active_specs "$(slh_index_show "$proj" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"
-    else
-      slh_attest_active_specs "$(git -C "$proj" show "$rev:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK")"
-    fi
-  fi
-}
 
 # THE TOOLS THIS FILE RUNS ON MUST ACTUALLY WORK (v1.7 gate, adversarial review F2).
 #
@@ -1036,20 +908,13 @@ slh_on_trunk() { # slh_on_trunk <proj> <trunk>
 }
 
 # Files staged for this commit, relative to HEAD. On an unborn branch there is
-# no HEAD, so fall back to the whole index. The optional second argument is a
-# git --diff-filter value, added for the per-file ownership arm (2.4.0 leg F7):
-# a DELETED path cannot carry unspecced content to the trunk, which is the only
-# question that arm asks, so it reads with filter "d" while every other
-# consumer keeps the unfiltered list (a staged deletion still marks a close as
-# carrying code, exactly as it did before the arm existed). One reader, one
-# extra question it can answer; a sibling copy is how the last three blockers
-# happened.
-slh_staged_files() { # slh_staged_files <proj> [diff-filter]
-  local proj="$1" filt="${2:-}"
+# no HEAD, so fall back to the whole index.
+slh_staged_files() { # slh_staged_files <proj>
+  local proj="$1"
   if git -C "$proj" rev-parse -q --verify HEAD >/dev/null 2>&1; then
-    git -C "$proj" diff --cached --name-only ${filt:+--diff-filter="$filt"} HEAD 2>/dev/null
+    git -C "$proj" diff --cached --name-only HEAD 2>/dev/null
   else
-    git -C "$proj" diff --cached --name-only ${filt:+--diff-filter="$filt"} 2>/dev/null
+    git -C "$proj" diff --cached --name-only 2>/dev/null
   fi
 }
 
@@ -1596,28 +1461,12 @@ EOF
   # STATUS.md at the tip is a refusal and not an empty ACTIVE set: "no evidence
   # of an active spec" and "no active spec" are the two facts this file spends
   # its length refusing to conflate.
-  #
-  # THE RECORD, OR THE PAGE (RP1): a tip carrying .claude/status.json answers
-  # the ACTIVE question from the record; malformed refuses through the same
-  # helper, and the page path below is byte-identical to what shipped before.
-  local active_specs
-  if slh_record_present "$proj" "$tip"; then
-    # THE STATUS IS CARRIED ACROSS THE SUBSHELL: the helper's slh_refuse ran in
-    # a command-substitution child, so its record of the refusal died there and
-    # only the return code survives; re-record it where the caller can see it.
-    if ! active_specs="$(slh_active_specs "$proj" "$tip")"; then
-      SLH_REFUSED=1
-      return 1
-    fi
-  else
-    if ! git -C "$proj" cat-file -e "$tip:specs/STATUS.md" 2>/dev/null; then
-      slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$what brings feature code, and specs/STATUS.md could not be read from the tree this push would publish, so which spec is being built cannot be established and no approval can be checked against it. Refusing rather than treating an unreadable inventory as a push with nothing active."
-      return 1
-    fi
-    status_text="$(git -C "$proj" show "$tip:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK")"
-    active_specs="$(slh_attest_active_specs "$status_text")"
+  if ! git -C "$proj" cat-file -e "$tip:specs/STATUS.md" 2>/dev/null; then
+    slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$what brings feature code, and specs/STATUS.md could not be read from the tree this push would publish, so which spec is being built cannot be established and no approval can be checked against it. Refusing rather than treating an unreadable inventory as a push with nothing active."
+    return 1
   fi
-  for num in $active_specs; do
+  status_text="$(git -C "$proj" show "$tip:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK")"
+  for num in $(slh_attest_active_specs "$status_text"); do
     # The spec file AS THE TIP HOLDS IT, by the same exact-number-then-hyphen
     # rule slh_spec_path_for uses, and refusing a multiple match rather than
     # taking the first: sort order is not a choice of spec (leg F6).
@@ -1678,71 +1527,22 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
     return 1
   fi
 
-  # THE RECORD, OR THE PAGE (RP1, edition v1.12). A structured instance is one
-  # whose index carries .claude/status.json: its close and chore facts are read
-  # from the record and the page readers below DO NOT RUN. A legacy instance
-  # takes the page path, byte-identical to what shipped before the record
-  # existed. A record present at either end and malformed is a refusal here and
-  # now, because every set computed below would be a guess.
-  #
-  # THE ADOPTION COMMIT CLOSES NOTHING, by construction: when the record is in
-  # the index and absent from HEAD, this commit is the instance opting in (the
-  # human-confirmed transcription), and entries arriving already-closed are
-  # transcription, not closes. Demanding close facts of them would refuse every
-  # opt-in whose history predates the record; granting them the close exemption
-  # would let an adoption commit buy what a close must earn. So the newly-closed
-  # set is EMPTY: nothing demanded, nothing granted, both directions safe.
-  local structured=0 record_new="" record_old="" newly_closed=""
-  if slh_record_present "$proj" ""; then
-    structured=1
-    record_new="$(slh_record_show "$proj" "")"
-    if [ "$(slh_record_verdict "$record_new")" != "ok" ]; then
-      slh_refuse "SLH-RECORD-MALFORMED" ".claude/status.json in this commit is not a well-formed status record, so no close or chore fact can be read from it and this merge cannot be verified. Nothing falls back to the STATUS.md page: a fallback would let one syntax error buy back the frozen page readers' residual class. Fix the record (jq . .claude/status.json shows the syntax; Part 3 of the edition shows the grammar). Only /setlist:checkpoint writes this file."
-      return 1
-    fi
-    if slh_record_present "$proj" HEAD; then
-      record_old="$(slh_head_show "$proj" .claude/status.json)"
-      if [ "$(slh_record_verdict "$record_old")" != "ok" ]; then
-        slh_refuse "SLH-RECORD-MALFORMED" ".claude/status.json at HEAD is not a well-formed status record, so which specs this change NEWLY closes cannot be computed. Fix the record at HEAD before closing anything over it."
-        return 1
-      fi
-    fi
-    local __rec_new_closed __rec_old_closed __rn
-    if ! __rec_new_closed="$(slh_record_closed "$record_new")"; then
-      slh_refuse "SLH-RECORD-MALFORMED" "jq failed while reading .claude/status.json, so the closing set cannot be established. A reader that could not run has not read."
-      return 1
-    fi
-    __rec_old_closed=""
-    if [ -n "$record_old" ]; then
-      if ! __rec_old_closed="$(slh_record_closed "$record_old")"; then
-        slh_refuse "SLH-RECORD-MALFORMED" "jq failed while reading HEAD's .claude/status.json, so which specs were already closed cannot be established. A reader that could not run has not read."
-        return 1
-      fi
-      for __rn in $__rec_new_closed; do
-        printf '%s\n' "$__rec_old_closed" | grep -qxF -- "$__rn" && continue
-        newly_closed="$newly_closed $__rn"
-      done
-    fi
-  else
-    # LIVE TEXT AT THE SOURCE (2026-08 consolidation, the F2 class made a rule).
-    # Every reader below this point, the row readers included, judges STATUS.md
-    # by what a human sees in the rendered file: a fenced example row, a
-    # commented-out row or an indented illustration is not an inventory row. The
-    # strip happens ONCE, here, so a reader added later cannot be blind by
-    # default the way slh_chores_completed was. Both directions matter: a hidden
-    # row in the NEW text could excuse a close the visible file never recorded,
-    # and a fenced example in the OLD text made an honest close read as not new
-    # (measured: SLH-CLOSES-NO-SPEC refused a fully compliant close because a
-    # how-to illustration mentioned its row).
-    status_new="$(slh_index_show "$proj" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"
-    status_old="$(slh_head_show "$proj" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"
-    newly_closed="$(slh_rows_newly_closed "$status_new" "$status_old")"
-  fi
+  # LIVE TEXT AT THE SOURCE (2026-08 consolidation, the F2 class made a rule).
+  # Every reader below this point, the row readers included, judges STATUS.md
+  # by what a human sees in the rendered file: a fenced example row, a
+  # commented-out row or an indented illustration is not an inventory row. The
+  # strip happens ONCE, here, so a reader added later cannot be blind by
+  # default the way slh_chores_completed was. Both directions matter: a hidden
+  # row in the NEW text could excuse a close the visible file never recorded,
+  # and a fenced example in the OLD text made an honest close read as not new
+  # (measured: SLH-CLOSES-NO-SPEC refused a fully compliant close because a
+  # how-to illustration mentioned its row).
+  status_new="$(slh_index_show "$proj" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"
+  status_old="$(slh_head_show "$proj" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"
 
-  # Which specs does this change CLOSE? A spec whose record entry (or, on the
-  # page path, whose row) reads closed now and did not before. A spec that was
-  # already closed closes nothing, which is the laundering route B6 closed in
-  # the audit and which this mirrors.
+  # Which specs does this change CLOSE? A spec whose row reads CLOSED now and
+  # did not before. A spec that was already CLOSED closes nothing, which is the
+  # laundering route B6 closed in the audit and which this mirrors.
   # THE UNION, NOT THE INTERSECTION (v1.7 claims audit, R3-2).
   #
   # This loop used to iterate over $spec_files, the STAGED spec files, so the
@@ -1760,7 +1560,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
   # The rule is the row flip. Where the spec FILE lives is a separate question,
   # answered per spec below.
   closing_specs=""
-  for num in $newly_closed; do
+  for num in $(slh_rows_newly_closed "$status_new" "$status_old"); do
     # SORT ORDER IS NOT A CHOICE OF SPEC (leg F6). This read
     # `grep -E "^specs/${num}[a-z]*-" | head -n1`, and both git commands that
     # feed it emit SORTED paths, so specs/0002-other-design.md beat
@@ -1829,43 +1629,15 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
   # a branch that records nothing is refused exactly like an unspecced feature: it
   # is indistinguishable from one, and the edition now says so.
   local closing_chores
-  if [ "$structured" = "1" ]; then
-    # The record's chore map, same before-and-after rule: a chore whose entry
-    # reads done now and did not before. The adoption commit records nothing
-    # here either, for the same both-directions-safe reason as the specs.
-    local __rec_new_done __rec_old_done __rc
-    if ! __rec_new_done="$(slh_record_done "$record_new")"; then
-      slh_refuse "SLH-RECORD-MALFORMED" "jq failed while reading .claude/status.json's chore map. A reader that could not run has not read."
-      return 1
-    fi
-    __rec_old_done=""
-    closing_chores=""
-    if [ -n "$record_old" ]; then
-      if ! __rec_old_done="$(slh_record_done "$record_old")"; then
-        slh_refuse "SLH-RECORD-MALFORMED" "jq failed while reading HEAD's .claude/status.json chore map. A reader that could not run has not read."
-        return 1
-      fi
-      for __rc in $__rec_new_done; do
-        printf '%s\n' "$__rec_old_done" | grep -qxF -- "$__rc" && continue
-        closing_chores="$closing_chores $__rc"
-      done
-      closing_chores="${closing_chores# }"
-    fi
-  else
-    closing_chores="$(slh_chores_completed "$status_new" "$status_old")"
-  fi
+  closing_chores="$(slh_chores_completed "$status_new" "$status_old")"
 
   if [ "$carries_code" = "1" ] && [ -z "$closing_specs" ] && [ -z "$closing_chores" ]; then
-    if [ "$structured" = "1" ]; then
-      slh_refuse "SLH-CLOSES-NO-SPEC" "$what brings feature code to $trunk without closing any spec that was not already closed in .claude/status.json, and without a chore newly recorded done there. Work reaches the trunk through a closed spec or a completed chore, and /setlist:checkpoint is what records both. If this closes a spec cut before the record existed, run checkpoint first to record the spec, then close; if this is deliberate maintenance, have checkpoint record the chore in this same commit."
-    else
-      slh_refuse "SLH-CLOSES-NO-SPEC" "$what brings feature code to $trunk without closing any spec that was not already CLOSED, and without recording a completed chore. Work reaches the trunk through a closed spec or a recorded chore. If this is deliberate maintenance, add its archive line to specs/STATUS.md in this same commit, in the form: - CHORE-007: DONE $(date +%F). <what changed>"
-    fi
+    slh_refuse "SLH-CLOSES-NO-SPEC" "$what brings feature code to $trunk without closing any spec that was not already CLOSED, and without recording a completed chore. Work reaches the trunk through a closed spec or a recorded chore. If this is deliberate maintenance, add its archive line to specs/STATUS.md in this same commit, in the form: - CHORE-007: DONE $(date +%F). <what changed>"
   fi
 
   # Every spec this change closes must satisfy the close conditions, read from
   # the index rather than from a branch tip.
-  local entry __owns_list="" __owns_declaring=0 __owns_blockless=0 __owns_shape_bad=0
+  local entry
   for entry in $closing_specs; do
     num="${entry%%:*}"; f="${entry#*:}"
     text="$(slh_index_show "$proj" "$f")"
@@ -1880,41 +1652,6 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
     # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided by the
     # caller, so a non-zero return must not skip the four checks below.
     slh_attest_require "$proj" "$f" "$what" || true
-
-    # THE CLOSE FACTS COME FROM THE RECORD on the structured path (RP1): the
-    # qa_pass_1 and diagram tokens checkpoint wrote at the close ARE the record
-    # of a completed close, and the prose Closing report stays a human artifact
-    # this layer no longer parses. The four page checks below are the LEGACY
-    # path only; running both would be two readers per fact, the A9 violation
-    # the record exists to end.
-    if [ "$structured" = "1" ]; then
-      local __facts __owns_out
-      if ! __facts="$(slh_record_facts "$record_new" "$num")"; then
-        slh_refuse "SLH-RECORD-MALFORMED" "jq failed while reading spec $num's close facts from .claude/status.json. A reader that could not run has not read."
-        continue
-      fi
-      if [ "$__facts" != "ok" ]; then
-        slh_refuse "SLH-RECORD-NO-CLOSE" "spec $num is newly closed in .claude/status.json without its close facts: the entry must carry status closed, qa_pass_1 ok, and diagram updated or no-impact, written by /setlist:checkpoint at the close. Run the close through checkpoint rather than editing the record by hand."
-      fi
-      # The ownership declaration, gathered here and consumed after the loop
-      # when this landing is single-parent (design 8.2). A malformed
-      # declaration refuses at the arm that would consume it; a spec
-      # declaring nothing keeps the whole-commit exemption exactly.
-      __owns_out="$(slh_index_show "$proj" "$f" | awk "$SLH_OWNS_AWK")" || __owns_out="!read-failed"
-      if printf '%s\n' "$__owns_out" | grep -q '^!'; then
-        if [ "$SLH_CLOSE_SINGLE_PARENT" = "1" ]; then
-          slh_refuse "SLH-OWNS-MALFORMED" "spec $num declares ownership outside the grammar (a glob, a directory, a quoted or empty path, or an Owns: line below the Closing report heading). One verbatim repo-relative file per 'Owns: ' line, at column 0, inside the hashed range. The range ends at the FIRST line reading '## Closing report', fences included, because that byte-same cut is what attestation signs: a fenced or quoted copy of the Closing-report template ABOVE your declaration ends the range early, and the fix is one edit (move the declaration above the quote, or drop the quoted heading line). A declared set that cannot be enumerated is an exemption wearing a declaration. Fix the declaration through /setlist:checkpoint."
-        fi
-        __owns_shape_bad=1
-      elif [ -z "$__owns_out" ]; then
-        __owns_blockless=1
-      else
-        __owns_declaring=1
-        __owns_list="$__owns_list
-$__owns_out"
-      fi
-      continue
-    fi
 
     # A FENCED EXAMPLE IS NOT A CLOSING REPORT. Ported from close-gate.sh, which
     # learned it as leg 5's F7; this layer never got it, so a spec whose entire
@@ -1979,49 +1716,6 @@ $__owns_out"
       fi
     fi
   done
-
-  # THE PER-FILE OWNERSHIP QUESTION AT THE SINGLE-PARENT LANDING (design 8.2),
-  # the refusing layer's early copy of the audit's NPAR<2 arm: a squash close
-  # of a DECLARING spec (or a chore flip) is checked file by file against the
-  # declared set, so the whole commit can no longer be exempted by one record
-  # flip. A blockless close keeps today's whole-commit exemption exactly; a
-  # true merge landing never enters (the merge arm asks provenance instead).
-  if [ "$structured" = "1" ] && [ "$SLH_CLOSE_SINGLE_PARENT" = "1" ] && \
-     [ "$__owns_blockless" = "0" ] && [ "$__owns_shape_bad" = "0" ] && \
-     { [ "$__owns_declaring" = "1" ] || [ -n "$closing_chores" ]; }; then
-    local __ch __cf __sf __owns_staged
-    # The arm asks what ARRIVES on the trunk, so deletions are out of scope
-    # (2.4.0 leg F7): `git rm src/old.txt` is not smuggling src/old.txt, and
-    # before this filter the same retirement passed as `git mv` and refused as
-    # `git rm`. The unfiltered $staged above is untouched: a staged deletion
-    # still marks the close as carrying code, exactly as before this arm existed.
-    __owns_staged="$(slh_staged_files "$proj" d)"
-    for __ch in $closing_chores; do
-      __cf="$(printf '%s' "$record_new" | jq -r --arg id "$__ch" "$SLH_RECORD_CHORE_FILES_JQ" 2>/dev/null || true)" # fail-open-ok: no files declared covers nothing, it cannot widen
-      [ -n "$__cf" ] && __owns_list="$__owns_list
-$__cf"
-    done
-    while IFS= read -r __sf; do
-      [ -n "$__sf" ] || continue
-      # The same role test carries_code used, one file at a time; declared
-      # paths match by EXACT bytes, never by fold or glob (PD9's class reads
-      # as undeclared and refuses, the safe direction).
-      local __is_role=0 __rp2
-      for __rp2 in $role_paths; do
-        while [ "${__rp2#./}" != "$__rp2" ]; do __rp2="${__rp2#./}"; done
-        __rp2="$(printf '%s' "$__rp2" | tr -s '/')"
-        __rp2="${__rp2#/}"; __rp2="${__rp2%/}"
-        [ -n "$__rp2" ] && [ "$__rp2" != "." ] || continue
-        if printf '%s\n' "$__sf" | grep -qE "^${__rp2}(/|$)"; then __is_role=1; break; fi
-      done
-      [ "$__is_role" = "1" ] || continue
-      if ! printf '%s\n' "$__owns_list" | grep -qxF -- "$__sf"; then
-        slh_refuse "SLH-OWNS-UNDECLARED" "$__sf is a role-path file this close does not declare. A declaring close is audited file by file against its declared set, so a whole commit can no longer be exempted by one record flip. Two honest exits: declare the file through /setlist:checkpoint (under attestation custody that means re-approval, correctly), or take the --no-ff merge route, whose arm asks the provenance question instead."
-      fi
-    done <<EOF
-$__owns_staged
-EOF
-  fi
 
   [ "$SLH_REFUSED" = "0" ]
 }
