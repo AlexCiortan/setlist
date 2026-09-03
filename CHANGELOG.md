@@ -9,6 +9,102 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.4.1
+
+**Edition v1.12 (the record edition), unchanged.** A maintenance release, the first
+since the limitations campaign closed at 2.4.0: documentation and hook hygiene, no
+protocol change, no new command, and no new gate question.
+
+- **A repository's own diff configuration could blind every content scan, and it is
+  fixed.** The scans read the output of `git diff` and `git show`, which is a
+  rendering the repository controls. With `color.ui=always` (or `color.diff=always`)
+  git colours its output even into a pipe, the added-line filter matched nothing, and
+  a live-shaped secret committed and pushed clean at exit 0 with nothing printed,
+  at every layer. Found by the project's own records sweep at the 2.4.0 close (an
+  unverified claim from that release's review, confirmed by control), fixed here at
+  every site that renders a diff for a scan or a detector:
+  `templates/git-hooks/pre-commit`, `templates/git-hooks/pre-merge-commit`,
+  `templates/git-hooks/pre-push`, `templates/git-hooks/setlist-hook-lib.sh` (the
+  lifecycle detector, which read the same rendering) and the advisory
+  `templates/hooks/commit-gate.sh` at both of its sites. The fix is flags that ignore
+  configuration (`--no-color`, `--no-ext-diff`, `--no-textconv`), each member measured
+  before it was pinned: colour blinds every site; an external diff driver blinds the
+  three sites that lacked `--no-ext-diff`; a textconv driver hides the content it
+  converts; prefix settings blind nothing, so no prefix flag is pinned. Two more
+  members came out of the same measurement. `log.showRoot=false` renders a ROOT commit
+  as nothing, so a first push's first commit was scanned as empty, while the trunk
+  audit in `scripts/trunk-audit.sh` could not find the commit that adopted the rules
+  under the same setting and refused every push by accident, a false denial that hid
+  the scan's blindness; both readers take `--root` now. And every site took its diff
+  through a command substitution that lost git's own exit status, so a git that ran
+  and died rendered nothing and nothing read as clean; every site now reads the
+  status and refuses under the codes that already exist for a scan that could not
+  run. The shipped suite pins all of it, each case watched red on the previous
+  release's bytes first. No new refusal code: the scan asks the same question it
+  always asked, of the bytes rather than of a rendering.
+- **Two bullets move from Open limitations to Design boundaries.** The
+  identity-by-commit alias bullet and the wiring-check bullet had carried Status
+  lines reading "documented boundary" and "documented restriction" since 2.4.0's own
+  review, while sitting under a heading that says "defects and gaps rather than
+  decisions". Each now sits with the decisions, with the move and its date stated in
+  the bullet's own text and nothing else in it changed.
+- **Five more bullets are RULED design boundaries rather than open defects, and one
+  duplicate is merged.** Each ruling is dated 2026-09-02 in the bullet's own text and
+  argued against the standing policy (the list shrinks by fixing, never by editing; a
+  bullet crosses only when its residue is a dated decision). The fast-forward and
+  `--squash` bullets: their fixes shipped in 2.2.0 and 2.4.0 for a one-commit close,
+  and what remains is that git fires no hook for a fast-forward and git's own error
+  message names neither Setlist nor the setting. The tested-platforms bullet: a list
+  is never a proof, however long it gets. The path-scoping bullet: its advisory half
+  was ruled closed by honesty on 2026-08-28. The scanning bullet: its four scheduled
+  holes were fixed in 2.2.0 and the rest is structural. And "The secret scan is a
+  first cut" said, word for word, what the scanning bullet already says, so it is
+  merged into that bullet's pattern-set sentence with its field-report line intact:
+  the list goes from 35 to 34 by de-duplication, stated here so the count change is
+  never read as a fix. **The counts as they leave: 29 design boundaries, 4 open
+  limitations, 2 upstream conditions, 35 in all**, the fourth open limitation being
+  the one this release's own review found, below.
+- **This release's own adversarial review, and what it found.** Twenty-two candidates,
+  fourteen refuted (two filed as blockers among them: the `.gitattributes` half of the
+  scanning class, which the bullet deliberately leaves open, and a first-block QA reader
+  the replay showed refusing). Eight survived. One is a false denial disclosed in the list
+  rather than fixed: a merge completed on the trunk side as the hook's message prescribes
+  lands at commit and is refused at push, present unchanged in 2.4.0 and scheduled. Three
+  are recorded in the bullets whose class they are: a symlinked leaf the scope gate does
+  not follow, a `&&`-then-`;` checkout spelling under the parser freeze, and a
+  comma-joined matcher the wiring check reports in the safe direction. Four are defects in
+  this project's own checking tools and its suite, which never block a release and are
+  fixed after it.
+- **The Known-limitations list is now checked by an instrument, not by a habit.**
+  Before this release can be attested, and on every push to the source repository, a
+  comparator reads the list as one structure (each group heading's count against the
+  bullets under it, every Status paragraph against the bullet it belongs to, the three
+  surfaces that count the same things against each other, this changelog's counts line
+  against the headings) and reads every "landed", "shipped" or "fixed" sentence in the
+  newest entry of this changelog against the diff behind it, refusing a claim with no
+  diff and counting a claim that names no file rather than passing it. It found two
+  defects on its first runs, the orphaned Status paragraph above and, inside itself, a
+  counts-line reader that took the first line mentioning the phrase rather than the
+  first line counting; both are fixed here. Its threshold is deliberately low: it
+  catches a claim with nothing behind it, and does not pretend to judge whether a diff
+  implements a sentence.
+- **The suite runs sharded, and the Linux leg runs it a second time under GNU awk.**
+  `test/run-tests.sh` gained `--shard K/N` over marked regions, `test/run-shards.sh` runs
+  the shards and refuses a run that covered less than a serial one (a missing shard, a
+  region claimed by nobody or by two), and `.github/workflows/test.yml` runs both, plus
+  the alternate-awk leg that is the extension the tested-platforms bullet now names.
+  These landed in the source repository after 2.4.0 shipped and reach the public tree
+  with this release.
+- **Four Status lines that had gone stale are put right in place.** The `--squash`
+  bullet said its fix was scheduled for one release after the fix shipped in 2.4.0.
+  The tested-platforms bullet said the matrix widening was queued after the first
+  extension (the suite run a second time under GNU awk on the Linux leg) had
+  landed. The path-scoping bullet called its advisory half "the remaining piece" for
+  two releases after the 2026-08-28 ruling that closed it by honesty. And one Status
+  paragraph had drifted two bullets away from the `@{u}` bullet it describes, so a
+  reader attributed it to the wrong limitation. The frozen-parsers bullet also said
+  two of its sentences twice.
+
 ## 2.4.0
 
 **Edition v1.12 (the record edition).** Close and chore state become a record the

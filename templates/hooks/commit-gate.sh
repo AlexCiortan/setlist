@@ -734,9 +734,33 @@ fi
 # siblings: a git that exits 0 and prints nothing disables these reads just as
 # thoroughly. The gate is advisory since v1.7, so this warns and permits; the
 # git hooks are what refuse.
+#
+# THE PROBE PROVES GIT CAN RUN, NOT THAT IT CAN RENDER (RC2-2026, fixed
+# 2026-09-02, spec 0129). The two staged diffs this gate reads are RENDERINGS
+# the repository's own configuration controls: measured on the shipped bytes,
+# `color.ui=always` coloured every `+` line and a staged secret read as clean,
+# a `diff.external` driver did the same (this was one of the three sites with
+# no --no-ext-diff), and a diff driver whose hunk-header regex does not compile
+# makes the render DIE at rc 128 with empty output while `git commit` itself
+# succeeds. So both diffs are taken here, with flags that ignore configuration
+# (--no-color, --no-ext-diff, --no-textconv) and with git's status READ rather
+# than lost in a command substitution, and all three failures route to the ONE
+# deny below: the suite pins every code to one site, so a second CM-NO-GIT
+# literal is a suite failure, and the three are one question anyway (can this
+# gate read the staged content at all).
 _cm_gitprobe="$(git -C "$PROJ" rev-parse --git-dir 2>/dev/null)" || _cm_gitprobe=""
+CM_GIT_FAIL=""
+CM_DIFF=""
+CM_SPEC_DIFF=""
 if [[ -z "$_cm_gitprobe" ]]; then
-  deny "commit gate [CM-NO-GIT]: git is not usable here (it is missing, broken, or this is not a git repository), so this gate cannot read the staged diff and would otherwise report every staged line clean having read nothing at all. Run 'git rev-parse --git-dir' in this directory to see the failure; a missing binary, a broken dynamic library, a wrong-architecture build and a directory that is not a repository all look like this. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse)."
+  CM_GIT_FAIL="git is not usable here (it is missing, broken, or this is not a git repository), so this gate cannot read the staged diff and would otherwise report every staged line clean having read nothing at all. Run 'git rev-parse --git-dir' in this directory to see the failure; a missing binary, a broken dynamic library, a wrong-architecture build and a directory that is not a repository all look like this."
+elif ! CM_DIFF="$(git -C "$PROJ" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv 2>/dev/null)"; then
+  CM_GIT_FAIL="git ran here but could not render the staged diff (a configuration value git cannot parse, or a diff driver that fails, looks like this), so this gate cannot read the staged content and would otherwise report every staged line clean having read nothing at all. Run 'git diff --cached' in this directory to see the failure."
+elif ! CM_SPEC_DIFF="$(git -C "$PROJ" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv -- 'specs/*.md' ':(exclude)specs/STATUS.md' ':(exclude)specs/TEMPLATE.md' 2>/dev/null)"; then
+  CM_GIT_FAIL="git ran here but could not render the staged diff of specs/, so this gate cannot tell whether this commit changes a spec's lifecycle state. Run 'git diff --cached -- specs' in this directory to see the failure."
+fi
+if [[ -n "$CM_GIT_FAIL" ]]; then
+  deny "commit gate [CM-NO-GIT]: $CM_GIT_FAIL Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse)."
 fi
 
 # THE ADVISORY SCANS ARE NOT PATH-SCOPED, AND THEY SAY SO (KL4-A1, owner ruling
@@ -781,7 +805,9 @@ CG_ADDED_AWK='
   if (!inhunk) next
   if ($0 ~ /^\+/) print
 }'
-ADDED="$(git -C "$PROJ" diff --cached --unified=0 2>/dev/null | awk "$CG_ADDED_AWK" || true)"
+# The staged diff was rendered and status-checked at the git probe above
+# (RC2-2026): this is the read of what it produced, nothing more.
+ADDED="$(printf '%s\n' "$CM_DIFF" | awk "$CG_ADDED_AWK" || true)"
 
 # Check 1: em-dash scan on staged new content. The character is built from an
 # escape so this script never contains it literally (repo rule 1 applies to the
@@ -854,7 +880,9 @@ if [ -n "$(git -C "$PROJ" ls-files --cached -- .claude/status.json 2>/dev/null)"
     fi
   fi
 else
-  SPEC_ADDED="$(git -C "$PROJ" diff --cached --unified=0 -- 'specs/*.md' ':(exclude)specs/STATUS.md' ':(exclude)specs/TEMPLATE.md' 2>/dev/null | awk "$CG_ADDED_AWK" || true)"
+  # Rendered and status-checked at the git probe above (RC2-2026): a rendering
+  # this reader could not read is not "no lifecycle line was added".
+  SPEC_ADDED="$(printf '%s\n' "$CM_SPEC_DIFF" | awk "$CG_ADDED_AWK" || true)"
   if printf '%s\n' "$SPEC_ADDED" | grep -qE "^\+Status:[[:space:]]*(${CM_STATES_RE})|^\+#+[[:space:]]*Closing report"; then
     if ! git -C "$PROJ" diff --cached --name-only | grep -qx 'specs/STATUS.md'; then
       CM_SM_MSG="this commit changes a spec lifecycle state but does not stage specs/STATUS.md; update the STATUS.md inventory line in the same commit."

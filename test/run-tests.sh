@@ -18,6 +18,134 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOKS="$ROOT/templates/hooks"
 
+# --- sharding (backlog CI1, spec 0127) ---------------------------------------
+#
+# WHY. This suite is the multiplier behind the whole CI bill. It is the macOS
+# leg's critical path (11m00s of a 13m58s job, measured 2026-09-01 on run
+# 33529658494), and dogfood/mutation-check.sh runs it once per mutation plus a
+# control, which is nine serial runs and 20m18s of a 25m43s Linux job. So the
+# suite is not the longest single step on Linux and is still the reason that
+# leg is long.
+#
+# THE SHARD VERSION, NOT INTERNAL PARALLELISM, pre-decided by the owner and not
+# reopened here: a shared-state audit across 14k lines of fixture-building bash
+# is not a trade this repo takes. Shards are separate processes with separate
+# TMPDIRs, so they share nothing by construction rather than by audit.
+#
+# THE PARTITION UNIT IS AN OPT-IN MARKED REGION, and the alternative is worth
+# recording because it is the obvious one. Cutting automatically at this file's
+# 74 banner sections was tried on paper and refused: helper functions and
+# fixture variables are defined throughout the file and used across section
+# boundaries, so an automatic cut would drop a definition or a variable and the
+# failure would surface as a puzzling assertion rather than as a refusal.
+# Marked regions invert that. Everything NOT inside a region runs in EVERY
+# shard, so the default is always correct, and a region is only marked once it
+# has been MEASURED independent in both directions (run alone, and run
+# excluded). Regions are placed by the measured profile rather than by the
+# banner structure, because the work is not evenly spread: the 1.0.5 attack
+# corpus alone was 228 seconds of a 605-second run.
+#
+# A REGION THAT DID NOT RUN MUST NOT READ AS A REGION WITH NOTHING TO REPORT.
+# That is CI1's named risk and it is answered by the __REGION__ lines below
+# plus the aggregator in test/run-shards.sh: every shard announces the regions
+# it ran, and the wrapper refuses unless the union is exactly the manifest,
+# with nothing claimed twice and nothing claimed by nobody.
+SHARD_K=0            # 0 means unsharded: every region runs, in file order
+SHARD_N=0
+SHARD_IDX=0          # how many regions have been REACHED, sharded or not
+SHARD_OPEN=""
+SHARD_OPEN_PASS=0
+SHARD_OPEN_FAIL=0
+SHARD_SKIP=" "       # space-delimited ids to skip, for the independence measurement
+SHARD_OWNED=" "
+
+shard_usage() {
+  printf 'usage: %s [--shard K/N] [--skip-region ID] [--list-regions]\n' "$0" >&2
+  printf '  no flag      run everything, in file order (the default, unchanged)\n' >&2
+  printf '  --shard K/N  run only the regions this shard owns, 1 <= K <= N\n' >&2
+  printf '  --skip-region ID  run everything EXCEPT this region (the independence measurement)\n' >&2
+  printf '  --list-regions  print the region manifest and exit\n' >&2
+  exit 2
+}
+
+# The manifest is read from the SHARD-BEGIN markers in this file rather than
+# from a list maintained beside them. A list is a second place to be wrong, and
+# the markers are what the guards below actually key on.
+shard_manifest() {
+  grep -o '^# >>> SHARD-BEGIN .*' "${BASH_SOURCE[0]}" \
+    | sed 's/^# >>> SHARD-BEGIN //; s/ cost=[0-9]*$//'
+}
+
+# THE COST HINT IS ADVISORY AND CAN ONLY AFFECT BALANCE, NEVER CORRECTNESS.
+#
+# Assignment was round-robin in the first cut, and round-robin is the wrong
+# instrument when one region is 179 of 445 marked seconds: whichever shard drew
+# the attack corpus finished long after the others and the run was as slow as
+# that shard. The markers therefore carry a MEASURED cost in seconds (profiled
+# 2026-09-02 on an arm64 macOS host, spec 0127) and regions are packed
+# longest-first into the least-loaded shard.
+#
+# If a hint goes stale the packing gets worse and NOTHING ELSE: the coverage
+# invariant in test/run-shards.sh is computed from the regions actually claimed,
+# not from the hints, so a wrong number costs wall-clock and cannot cost a
+# missed assertion. The wrapper prints the wall clock, which is where a stale
+# hint shows up. Two hints (trunk-audit, advisory-flip) are approximations
+# rather than direct readings, because those regions begin part-way through a
+# profiled block; they are marked here rather than presented as measurements.
+#
+# Both the suite and the wrapper derive the assignment from these same marker
+# lines, so they agree by construction rather than by being kept in step.
+shard_assignment() { # shard_assignment <k> <n> -> the ids shard k owns
+  grep -o '^# >>> SHARD-BEGIN .*' "${BASH_SOURCE[0]}" \
+    | sed 's/^# >>> SHARD-BEGIN //' \
+    | awk -v k="$1" -v n="$2" '
+      { id[NR]=$1; c=$2; sub(/^cost=/,"",c); cost[NR]=(c==""?1:c+0); m=NR }
+      END {
+        for (b=1; b<=n; b++) load[b]=0
+        # longest-processing-time-first: repeatedly place the largest unplaced
+        # region into the least-loaded shard. Deterministic, so every process
+        # computes the same assignment without talking to any other.
+        for (t=1; t<=m; t++) {
+          best=0; bestc=-1
+          for (i=1; i<=m; i++) if (!done[i] && cost[i]>bestc) { bestc=cost[i]; best=i }
+          done[best]=1
+          lb=1; for (b=2; b<=n; b++) if (load[b]<load[lb]) lb=b
+          load[lb]+=cost[best]
+          if (lb==k) print id[best]
+        }
+      }'
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --shard)
+      [[ $# -ge 2 ]] || shard_usage
+      case "$2" in
+        [0-9]*/[0-9]*) SHARD_K="${2%%/*}"; SHARD_N="${2##*/}" ;;
+        *) shard_usage ;;
+      esac
+      [[ "$SHARD_N" -ge 1 ]] || shard_usage
+      [[ "$SHARD_K" -ge 1 && "$SHARD_K" -le "$SHARD_N" ]] || shard_usage
+      shift 2 ;;
+    --list-regions) shard_manifest; exit 0 ;;
+    # --skip-region is the INDEPENDENCE MEASUREMENT's instrument, not a way to
+    # run less of the suite. A region is only allowed a SHARD-BEGIN marker once
+    # the suite has been run with that region excluded and everything outside it
+    # was still green: that is what proves nothing outside the region depends on
+    # a fixture, a variable or a function the region builds. Guessing this from
+    # reading is how the first cut of the partition went red on three shards.
+    --skip-region)
+      [[ $# -ge 2 ]] || shard_usage
+      SHARD_SKIP="$SHARD_SKIP$2 "; shift 2 ;;
+    -h|--help) shard_usage ;;
+    *) shard_usage ;;
+  esac
+done
+
+if [[ "$SHARD_N" -ne 0 ]]; then
+  SHARD_OWNED=" $(shard_assignment "$SHARD_K" "$SHARD_N" | tr '\n' ' ')"
+fi
+
 # A CALL TO AN UNDEFINED FUNCTION IS FATAL (1.0.8).
 #
 # The verdict helpers are defined partway down this file, and a block placed
@@ -76,6 +204,38 @@ EMDASH="$(printf '\342\200\224')"
 
 ok()   { PASS=$((PASS + 1)); printf 'PASS  %s\n' "$1"; }
 bad()  { FAIL=$((FAIL + 1)); printf 'FAIL  %s\n       %s\n' "$1" "$2"; }
+
+# --- the shard guards --------------------------------------------------------
+#
+# shard_region <id>  opens region <id>; true when this shard owns it.
+# shard_region_end   closes the open region and reports its own denominator.
+#
+# Assignment is round-robin over the order regions are REACHED, which needs no
+# weights file to keep true. The balance it produces is measured and recorded in
+# spec 0127 rather than assumed: a partition whose balance nobody measured is
+# how a four-way split turns into a three-way one.
+shard_region() { # shard_region <id>
+  shard_region_end
+  SHARD_IDX=$((SHARD_IDX + 1))
+  case "$SHARD_SKIP" in *" $1 "*) return 1 ;; esac
+  if [[ "$SHARD_N" -eq 0 ]] || [[ "$SHARD_OWNED" == *" $1 "* ]]; then
+    SHARD_OPEN="$1"; SHARD_OPEN_PASS="$PASS"; SHARD_OPEN_FAIL="$FAIL"
+    return 0
+  fi
+  return 1
+}
+
+# The per-region denominator is printed whether or not the region asserted
+# anything, and a region that ran and asserted NOTHING is a finding rather than
+# a blank: it is the vacuous-comparison shape this file exists to hunt, one
+# level up. The aggregator refuses on it.
+shard_region_end() {
+  [[ -n "$SHARD_OPEN" ]] || return 0
+  printf '__REGION__ %s %d %d\n' "$SHARD_OPEN" \
+    "$((PASS - SHARD_OPEN_PASS))" "$((FAIL - SHARD_OPEN_FAIL))"
+  SHARD_OPEN=""
+  return 0
+}
 
 # --- fixtures ----------------------------------------------------------------
 
@@ -1759,6 +1919,8 @@ run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "wiring g: current wiring refreshes completely and exits 0" 0 "refreshed the four stamped hooks"
 
 # =============================================================================
+# >>> SHARD-BEGIN refresh-wiring cost=16
+if shard_region refresh-wiring; then
 # 1.0.4: the wiring check reads STRUCTURE, not text. Both directions, from two
 # field reviews of the shipped 1.0.3: it must not fire on hooks the project
 # owns, and it must not be defeated by JSON formatting.
@@ -2027,6 +2189,8 @@ printf '{ "hooks": \n' > "$INST/.claude/settings.json"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "wiring k: settings.json that does not parse is reported, not guessed at" 3 "does not parse"
 
+fi; shard_region_end
+# <<< SHARD-END refresh-wiring
 # =============================================================================
 # 1.0.4: a trunk merge that NAMES a resolvable non-spec ref is not a close.
 # 1.0.3 denied these, which broke syncing your own trunk while `git pull`
@@ -2473,6 +2637,8 @@ else
 fi
 
 # --- the MUST-DENY corpus ----------------------------------------------------
+# >>> SHARD-BEGIN corpus-deny cost=179
+if shard_region corpus-deny; then
 CORPUS_DENY_N=0
 CORPUS_DENY_FAIL=""
 for pfx in '' 'git checkout main && '; do
@@ -2499,6 +2665,8 @@ else
       "these reached the trunk with the close conditions unevaluated:$CORPUS_DENY_FAIL"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END corpus-deny
 corpus_verdict_reason() { # corpus_verdict_reason <command> -> the deny reason text
   local out
   out="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$CORP" bash "$HOOKS/close-gate.sh" 2>/dev/null)"
@@ -3200,6 +3368,8 @@ else
 fi
 
 # --- the FLAG-VALUED WRAPPER axis (1.0.7) -----------------------------------
+# >>> SHARD-BEGIN wrapper-flag-valued cost=5
+if shard_region wrapper-flag-valued; then
 # The 1.0.6 wrapper axis above covers wrappers that take no argument, and the
 # flag stripper it shipped with consumed dash flags one word at a time. A flag
 # that takes a SEPARATE value strands that value at the head of the segment:
@@ -3249,7 +3419,11 @@ else
       "these were denied:$CORPUS_FLAGWRAP_ALLOW_FAIL"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END wrapper-flag-valued
 # --- the DASH-VALUED FLAG and OPTION TERMINATOR axes (1.0.7) ----------------
+# >>> SHARD-BEGIN dash-valued-flags cost=10
+if shard_region dash-valued-flags; then
 # The axis above generates flag values two ways, non-dash (`nice -n 5`) and
 # glued (`stdbuf -o0`), and both are values that LOOK like values. Neither
 # spelling below appears anywhere in it:
@@ -3316,6 +3490,8 @@ else
       "these were denied:$CORPUS_DASHVAL_ALLOW_FAIL"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END dash-valued-flags
 # --- the NEWLINE-SEPARATOR axis (1.0.7) -------------------------------------
 # `tr -s '[:space:]' ' '` squeezes newlines into spaces before the segment
 # splitter runs, so a multi-line command collapses into ONE segment and only its
@@ -3478,6 +3654,8 @@ else
 fi
 
 # --- the PATHSPEC-CHECKOUT axis (1.0.7) -------------------------------------
+# >>> SHARD-BEGIN pathspec-checkout cost=6
+if shard_region pathspec-checkout; then
 # `git checkout -- .` and `git checkout .` do not switch branches at all: they
 # discard working-tree changes, which is something agents do constantly right
 # before merging. The tracker read the argument as a branch name, concluded the
@@ -3602,6 +3780,8 @@ else
       "these were denied:$CORP_PATH_ALLOW_FAIL"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END pathspec-checkout
 # --- the RAW-OBJECT-NAME axis (1.0.7) ---------------------------------------
 # A raw commit name is an indirect form: it identifies the commit without
 # naming the branch, so the close conditions (which live in a branch's spec
@@ -3728,8 +3908,8 @@ expect_script "interpreter: the trunk audit CATCHES the outcome the gate let pas
 # hole: `git reset --hard <spec-branch>` moves the trunk onto unclosed work outright. | asserted
 # hole: `git checkout <spec-branch> -- <path>` copies role-path files onto the trunk without any merge to read. | asserted
 # hole: The pathspec hole. | asserted
-# hole: The secret scan is a first cut. | asserted
 # hole: A broken or missing `jq` is handled by the GIT hooks, not by the session gates. | asserted
+# hole: Completing a refused merge on the trunk side, as the hook's own message prescribes, is accepted at commit and refused at push. | asserted
 # hole: A timed-out hook is a skipped gate. | unassertable | harness behaviour, not hook behaviour; verified live 2026-07-25 with a sleeping hook under timeout 1 and 10, recorded in close-gate.sh's header
 # hole: The staged-content scans read every staged line unless you scope them. | asserted
 # hole: The scans read this project's own index. | asserted
@@ -3749,7 +3929,7 @@ expect_script "interpreter: the trunk audit CATCHES the outcome the gate let pas
 # hole: The hashed range ends at the FIRST line reading `## Closing report`, fences included, and the ownership reader agrees with that cut. | asserted
 # hole: Identity-by-commit governs an alias only while a spec or chore ref still points at that exact commit. | asserted
 # hole: The wiring check recognises only the command spellings `settings.json.tmpl` ships. | asserted
-# hole: The set of tested platforms is a list, not a proof. | unassertable | a statement ABOUT the CI matrix rather than about hook behaviour; the matrix in .github/workflows/test.yml is the evidence, and the honest check is reading which platforms it actually runs
+# hole: The set of tested platforms is a list, not a proof. | unassertable | a statement ABOUT the CI matrix rather than about hook behaviour; the matrix in .github/workflows/test.yml is the evidence, and the honest check is reading which platforms it actually runs. Extended 2026-09-02 (spec 0127, backlog KL8, ratified decision 5): the Linux leg now runs this suite a second time under GNU awk, so the list is Linux/mawk, Linux/gawk and macOS/BWK awk, and the public bullet moved with it. Still unassertable here for the same reason, and Windows is still unrun
 # hole: Secret and style scanning is best-effort early warning, not a guarantee. | asserted
 # hole: git allows one `core.hooksPath`, so Setlist cannot coexist with husky, lefthook or pre-commit, and `refresh-instance.sh --apply` now REFUSES rather than displace one silently. | asserted
 # hole: A checkout is an enforcement switch: every git hook is inert on a branch without `.claude/sdd.json`. | asserted
@@ -3964,6 +4144,8 @@ insert_before() { # insert_before <file> <marker-line> <text>
 }
 
 # ===========================================================================
+# >>> SHARD-BEGIN qa-verdict-structure cost=10
+if shard_region qa-verdict-structure; then
 # THE QA VERDICT IS A STRUCTURE (2026-08-05 leg, F5).
 #
 # The rule these corpora used to pin was a regex over English, and F5 closed it
@@ -4115,6 +4297,8 @@ else
       "ref-empty=[${TF_LOCK_REF:0:1}] disagreements:$TF_LOCK_BAD"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END qa-verdict-structure
 # =============================================================================
 # A FUNCTION DEFINITION AND A TWO-OPERAND CHECKOUT (F6/F7, third 1.0.8 leg).
 # Both put something other than the governed verb where the gate looks, and the
@@ -4210,6 +4394,8 @@ run_hook "$HOOKS/close-gate.sh" "$OPTV" "$(bash_payload 'git merge --continue')"
 expect_allow "option value: a REAL --continue is still exempt, so a conflicted close can finish"
 
 # =============================================================================
+# >>> SHARD-BEGIN octopus-merge cost=8
+if shard_region octopus-merge; then
 # AN OCTOPUS MERGE IS SEVERAL MERGES (F2/F6 of the second 1.0.8 leg). The word
 # loop broke on the FIRST operand that resolved to a spec or chore ref, so
 # `git merge --no-ff spec/0003-good spec/0004-bad` contributed exactly one ref:
@@ -4291,6 +4477,8 @@ for allowed_cmd in \
   expect_allow "octopus indirect control: [$allowed_cmd] still merges, so options were not mistaken for operands"
 done
 
+fi; shard_region_end
+# <<< SHARD-END octopus-merge
 # =============================================================================
 # A CHECKOUT IS CONDITIONAL (F7 of the 1.0.8 leg). The tracker modelled every
 # checkout as unconditionally taken, which is false for the commonest failure
@@ -4438,8 +4626,10 @@ fi
 
 # The two remaining asserted holes are exercised elsewhere in this file and are
 # named here so the ledger's "asserted" claims are all traceable:
-#   - "The secret scan is a first cut."      -> commit-gate d (a shape it CATCHES)
-#     and the miss below (a shape it does not).
+#   - "Secret and style scanning is best-effort early warning, not a guarantee."
+#     -> its pattern-set clause ("a first cut", a bullet of its own until the
+#     2026-09-02 merge): commit-gate d (a shape it CATCHES) and the miss below
+#     (a shape it does not).
 #   - "The staged-content scans read every staged line." -> the vendored-content
 #     case below: foreign content in a staged diff is denied on style alone.
 SCAN="$WORK/scan-scope"
@@ -4502,6 +4692,8 @@ else
 fi
 
 # --- MUST DENY: every spelling of stage-and-commit ---------------------------
+# >>> SHARD-BEGIN commit-stage-spellings cost=10
+if shard_region commit-stage-spellings; then
 CGD_N=0; CGD_FAIL=""
 for stage in 'git add -A' 'git add .' 'git add src/x' 'git rm f.txt' 'git mv a.txt b.txt'; do
  for conn in ' && ' ' ; ' ' || '; do
@@ -4526,6 +4718,8 @@ else
       "these would have scanned an index that does not hold the content yet:$CGD_FAIL"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END commit-stage-spellings
 # --- the WRAPPER axis, commit gate (1.0.6) ----------------------------------
 CGW_N=0; CGW_FAIL=""
 for wrap in 'command ' 'exec ' 'nice ' 'env ' 'GIT_PAGER=cat '; do
@@ -4575,6 +4769,8 @@ fi
 
 
 # --- the INDEX-VERB axis, commit gate (1.0.7) -------------------------------
+# >>> SHARD-BEGIN index-verb-axis cost=10
+if shard_region index-verb-axis; then
 # Check 0 enumerated add, rm and mv. Every OTHER verb that writes the index
 # could therefore be compounded with a commit, and the three staged-content
 # checks would scan an index nobody had judged:
@@ -4731,6 +4927,8 @@ else
       "these scanned a stale index unchecked:$CGGRAM_FAIL"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END index-verb-axis
 # --- the commit gate's QUOTED-WORD axis (1.0.8, B3b and F5) -----------------
 # Quoting the binary or the subcommand deleted the word this gate matches on, so
 # the line stopped being a commit as far as Check 0 could see. An odd number of
@@ -5460,6 +5658,8 @@ AUDITFENCED
     git -C "$d" merge -q --no-ff -m "Merge spec 0005b again" spec/0005b-again
   fi
 }
+# >>> SHARD-BEGIN trunk-audit cost=6
+if shard_region trunk-audit; then
 
 # A PARENTLESS commit offered as the new trunk (F2 of the 2026-08-11 leg).
 #
@@ -5655,7 +5855,11 @@ AUD="$WORK/audit-tablecell"; audit_fixture "$AUD" tablecell
 run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
 expect_script "trunk audit item 35: a table-cell QA verdict is accepted, not reported as no-qa-verdict" 0 "0 violations"
 
+fi; shard_region_end
+# <<< SHARD-END trunk-audit
 # --- F1 of the 2.2.0 leg: git QUOTES paths, and the role test read the quotes ---
+# >>> SHARD-BEGIN role-path-quoting cost=10
+if shard_region role-path-quoting; then
 #
 # THE BLOCKER. `git diff --name-only` and `git ls-tree --name-only` emit a path
 # containing a non-ASCII byte, a double quote, a backslash or a control
@@ -5705,6 +5909,8 @@ AUD="$WORK/audit-launder"; audit_fixture "$AUD" launder
 run_script bash "$SCRIPTS/trunk-audit.sh" "$AUD"
 expect_script "trunk audit B6c: code merged under an already-CLOSED spec closes nothing and is a violation" 1 "closes-no-spec"
 
+fi; shard_region_end
+# <<< SHARD-END role-path-quoting
 # =============================================================================
 # GENERATOR 6: DEGRADED ENVIRONMENT (1.0.5)
 #
@@ -6603,6 +6809,8 @@ fi
 
 
 # --- the refusal direction ---
+# >>> SHARD-BEGIN scan-ref-refusal cost=27
+if shard_region scan-ref-refusal; then
 GH="$WORK/gh-open"; gh_fixture "$GH" no
 ( cd "$GH" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m "Merge spec/0001-thing" spec/0001-thing ) >/dev/null 2>&1
 if gh_landed "$GH"; then
@@ -7012,6 +7220,8 @@ fi
 # The third case is the one that matters most: merging the trunk INTO a spec
 # branch is ordinary work, and a fix that refused it would be the false denial
 # this repository treats as worse than the bypass.
+fi; shard_region_end
+# <<< SHARD-END scan-ref-refusal
 chain_fixture() { # chain_fixture <dir>
   local d="$1"; rm -rf "$d"
   mkdir -p "$d/src" "$d/specs" "$d/.claude"
@@ -7356,6 +7566,8 @@ else
 fi
 
 # --- THE SIX REFUSALS, EACH ASSERTED ON ITS CODE --------------------------
+# >>> SHARD-BEGIN attest-six-refusals cost=6
+if shard_region attest-six-refusals; then
 # On the CODE and not on the verdict, for the reason the toolchain probes give:
 # these fixtures could be refused for a dozen unrelated reasons and a bare "did
 # it refuse" would pass with or without the mechanism.
@@ -7483,6 +7695,8 @@ else
   bad "attest forge (PINNED, open with the owner): declared custody C refuses rather than passing on an unrun query" "$(att_out | tr '\n' ' ')"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END attest-six-refusals
 # --- THE CALLING CONVENTION, ASSERTED STRUCTURALLY ------------------------
 # F3-2026's class, closed by construction rather than by vigilance. A verifier
 # that prints NOTHING must refuse, and the only honest way to assert that is to
@@ -7578,6 +7792,8 @@ else
 fi
 
 # --- THE PUSH LAYER'S ARM ---------------------------------------------------
+# >>> SHARD-BEGIN attest-push-arm cost=13
+if shard_region attest-push-arm; then
 # The guarantee, per the enforcement boundary: a commit that never met
 # pre-commit (--no-verify, an unset core.hooksPath, the per-clone gap) is
 # caught before the work is SHARED. Every fixture below builds its history
@@ -8163,6 +8379,8 @@ else
       "definitions=$ATTW_DEFS callers-in-pre-push=$ATTW_CALL"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END attest-push-arm
 # =============================================================================
 # OWNERSHIP IS WHAT EXECUTES, ASKED WHEREVER HOOKS LIVE (2.0.0 leg, F2+F6).
 #
@@ -9071,6 +9289,8 @@ else
 fi
 
 # =============================================================================
+# >>> SHARD-BEGIN hooks-round11 cost=45
+if shard_region hooks-round11; then
 # ROUND 11 (CONFIRMING) PINS: the boundary PATH itself, not just its files.
 # The reader and ownership surfaces SURVIVED this round; delivery yielded a
 # finite new class (the .githooks path being a symlink or a directory).
@@ -10297,7 +10517,11 @@ else
   ok "git hooks q: pre-push CATCHES what --ff-only let onto the local trunk"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END hooks-round11
 # ===========================================================================
+# >>> SHARD-BEGIN class-c-commit-shape cost=10
+if shard_region class-c-commit-shape; then
 # ===========================================================================
 # THE FROZEN PARSER SPELLINGS THIS FILE EXERCISES (documented 2026-08-04, and
 # pinned here so
@@ -10548,6 +10772,8 @@ else
       "a reader compared the trunk raw:$TRUNK_CLASS_BAD"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END class-c-commit-shape
 # ===========================================================================
 # THE ADVISORY FLIP (the advisory-gate decision, RATIFIED 2026-08-04).
 #
@@ -10945,6 +11171,8 @@ ghu_verdict() { # ghu_verdict <command> -> deny|allow
   [[ -z "$out" ]] && { printf 'allow'; return 0; }
   printf '%s' "$out" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // "allow"'
 }
+# >>> SHARD-BEGIN advisory-flip cost=8
+if shard_region advisory-flip; then
 # CONTROL, THE DENY DIRECTION FIRST, and the ordering is the whole point.
 #
 # This block used to open with the ALLOW control alone, and the 1.1.0 leg caught
@@ -11299,6 +11527,8 @@ else
   ok "chore route d: the stamped STATUS.md template ships no line the chore rule accepts"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END advisory-flip
 # =============================================================================
 # THE LIVE-TEXT RULE (2026-08 consolidation, blocker F2 and the row readers).
 # STATUS.md is judged by what a human sees in the rendered file: fenced blocks,
@@ -11846,6 +12076,8 @@ else
 fi
 
 # =============================================================================
+# >>> SHARD-BEGIN heading-markdown cost=12
+if shard_region heading-markdown; then
 # THE QA READER IS SCOPED, AND THE LAYERS AGREE BY OUTCOME (2.0.0 leg, F8/F3).
 #
 # The third fence-vs-QA-block collision. The reader matched the FIRST
@@ -12036,6 +12268,8 @@ else
       "a compliant close is refused because the reader merged every fenced block in the file; this is the 2.0.0 leg's false-deny, replayed"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END heading-markdown
 # =============================================================================
 # A HEADING IS WHAT MARKDOWN SAYS A HEADING IS (second 2.0.0 leg, F1).
 #
@@ -12549,6 +12783,8 @@ run_hook "$HOOKS/close-gate.sh" "$NSC" "$(bash_payload "$MERGE_CMD")"
 expect_deny "qa heading e2e: a no-space ##Closing report is not a section, refused with the section code" "CG-NO-CLOSING-REPORT"
 
 # =============================================================================
+# >>> SHARD-BEGIN push-scan-kl2 cost=9
+if shard_region push-scan-kl2; then
 # THE PUSH-TIME SCAN: KL2 AND THE FOUR SCAN SUB-HOLES (spec 0121, 2026-08-26).
 #
 # Every case pushes to a real local bare remote through the armed hook layer,
@@ -12680,6 +12916,8 @@ else
   ok "SC sub-hole 6: a secret behind a +++ prefix is refused"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END push-scan-kl2
 # ===========================================================================
 # KL4: PATH-SCOPED SCANS, THE DECLARED EXCLUSION SET NAMED OUT LOUD (spec 0122).
 #
@@ -12898,6 +13136,8 @@ else
 fi
 
 # --- malformed config fails CLOSED, at both layers, asserted both ways ------
+# >>> SHARD-BEGIN kl4-malformed-config cost=15
+if shard_region kl4-malformed-config; then
 #
 # Never a silent full-scan and never a silent no-scan. Both directions are
 # needed because each alone is satisfiable by the wrong fix: a config error that
@@ -13001,7 +13241,11 @@ else
       "refused: $KL4_ERR"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END kl4-malformed-config
 # --- the boundary cases the traps live in -----------------------------------
+# >>> SHARD-BEGIN kl4-boundary-traps cost=14
+if shard_region kl4-boundary-traps; then
 
 # A glob that matches NOTHING must not read as coverage. The scan still refuses,
 # and nothing is announced as skipped: an exclusion that did not fire has no
@@ -13160,6 +13404,8 @@ else
   ok "KL4 negative/trunk-audit: a glob covering the role paths changes NOTHING about the trunk audit"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END kl4-boundary-traps
 # --- A9: ONE reader, in the shared lib, called by both layers ---------------
 #
 # The same shape the lexer lockstep assertions carry. Three copies of a rule is
@@ -13676,6 +13922,8 @@ else
 fi
 
 # --- THE ABSENCE DIFFERENTIAL: blob-pinned, both directions -------------------
+# >>> SHARD-BEGIN rp1-absence-differential cost=7
+if shard_region rp1-absence-differential; then
 # A8: the case count is asserted before the agreement is believed, and a
 # DISCRIMINATION control proves the harness can see a difference at all, so a
 # green here is never green because nothing ran.
@@ -13808,6 +14056,8 @@ else
   fi
 fi
 
+fi; shard_region_end
+# <<< SHARD-END rp1-absence-differential
 # --- the scaffold template and the upgrade's restraint -------------------------
 if [[ -f "$ROOT/templates/claude/status.json" ]]; then
   RP1_TPL_VERDICT="$(jq -r "$(grep -m1 -E '^[[:space:]]*SLH_RECORD_CHECK_JQ=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed -e "s/^[[:space:]]*SLH_RECORD_CHECK_JQ='//" -e "s/'$//")" "$ROOT/templates/claude/status.json" 2>/dev/null || printf 'malformed')"
@@ -13823,6 +14073,8 @@ else
 fi
 
 # --- OWNERSHIP (design section 8): the declared set and the per-file arm ----
+# >>> SHARD-BEGIN rp1-ownership cost=9
+if shard_region rp1-ownership; then
 # The lockstep for the Owns reader: TWO homes (the library asks the question
 # at the squash landing, the audit at the pushed history), byte-identical.
 RP1_OWNS_LIB="$(grep -m1 -E '^[[:space:]]*SLH_OWNS_AWK=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed 's/^[[:space:]]*//')"
@@ -14122,8 +14374,386 @@ else
   ok "record delivery b: refresh-instance.sh never delivers or creates the record (BL-005: mention the field, migrate NOTHING)"
 fi
 
+fi; shard_region_end
+# <<< SHARD-END rp1-ownership
+# >>> SHARD-BEGIN rc2-config-blind cost=16
+if shard_region rc2-config-blind; then
+# =============================================================================
+# RC2-2026: CONFIGURATION-DRIVEN DIFF RENDERING BLINDS THE CONTENT SCANS (spec
+# 0129, 2026-09-02; the 2.4.0 leg's F2 as filed, confirmed by control in spec
+# 0128 and fixed here).
+#
+# Every content scan and every lifecycle detector reads the OUTPUT of `git diff`
+# or `git show`, which is a RENDERING the repository's own configuration
+# controls. With `color.ui=always` (or `color.diff=always`) git colours its
+# output into a pipe, every `+` line arrives as `ESC[32m+...`, the added-line
+# filter matches nothing, and a live-shaped secret commits and pushes clean at
+# exit 0 with nothing printed. SLH-SCAN-FILTER-FAILED did not fire, because awk
+# exits 0 over lines it merely fails to match. Watched RED before the fix at
+# every subject case below, with every clean twin green in the same run.
+#
+# THE FIX IS FLAGS THAT IGNORE CONFIGURATION at every site that renders a diff
+# for a scan or a detector: --no-color, --no-ext-diff and --no-textconv, plus
+# --root at the push-time walk. Each member was MEASURED rather than assumed
+# (spec 0129's record): colour blinds every site; an external diff driver blinds
+# the three sites that lacked --no-ext-diff; a textconv driver hides the content
+# it converts; `log.showRoot=false` empties `git show` on a root commit; and the
+# prefix settings (diff.noprefix, diff.mnemonicPrefix, diff.srcPrefix,
+# diff.dstPrefix) blind NOTHING, because the added-line filter is positional
+# since 2.3.0, so no prefix flag is pinned and the last case here pins that
+# measurement instead of a flag.
+#
+# AND ONE MORE THING THE MEASUREMENT FOUND, ruled 2026-09-02: every site took
+# its diff through $(git ... 2>/dev/null), so git's own exit status was lost,
+# and a git that ran and died rendered nothing, which read as clean. Every site
+# now captures git's status and refuses under the codes that already exist for
+# a scan that could not run: SLH-SCAN-FILTER-FAILED at the guarantee layer,
+# CM-NO-GIT at the advisory layer. No new identifier; the leg trigger verified
+# quiet. Case g says how the death is reproduced, and why neither an
+# unparseable config value nor a PATH shim can reproduce it.
+#
+# THE SECRET IS OUTSIDE THE ROLE PATHS (docs/) at every case, on the push-scan
+# block's lesson: the trunk audit and the close checks then have nothing to say
+# and only the scan or the detector can refuse, so a refusal here is evidence
+# about the subject and not about a neighbour.
+# =============================================================================
+RC2_SECRET='api_key = "AKIAQQQQZZZZ1234567890abcd"'
+rc2_mk() { # rc2_mk <name> [root-secret] -> an armed instance with a bare remote, prints its path
+  local d="$WORK/rc2-$1"
+  rm -rf "$d" "$WORK/rc2-$1.git"
+  mkdir -p "$d/.claude/hooks" "$d/.githooks" "$d/src" "$d/specs" "$d/docs"
+  git_init "$d"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$d/.claude/sdd.json"
+  printf '# inv\n\n| Spec | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | thing | ACTIVE | |\n' > "$d/specs/STATUS.md"
+  printf '# Spec 0001 - thing\n\nStatus: ACTIVE\n\n## Goal\n\nx\n' > "$d/specs/0001-thing.md"
+  [ -n "${2:-}" ] && printf '%s\n' "$2" > "$d/docs/root.txt"
+  cp "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" \
+     "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$d/.githooks/"
+  cp "$SCRIPTS/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  chmod +x "$d/.githooks/pre-push" "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+  git -C "$d" config core.hooksPath .githooks
+  git -C "$d" add -A >/dev/null 2>&1
+  SETLIST_SKIP_HOOKS=1 git -C "$d" commit -qm base >/dev/null 2>&1
+  git init -q --bare "$WORK/rc2-$1.git"
+  git -C "$d" remote add origin "$WORK/rc2-$1.git"
+  printf '%s' "$d"
+}
+rc2_commit() { # rc2_commit <dir> <path> <content> <outfile> -> git's status with the hooks ON
+  printf '%s\n' "$3" > "$1/$2"
+  git -C "$1" add -A >/dev/null 2>&1
+  git -C "$1" commit -qm "add $2" >"$4" 2>&1
+}
+rc2_clean() { # rc2_clean <dir> -> drop whatever a refused commit left staged
+  git -C "$1" reset -q --hard HEAD >/dev/null 2>&1
+  git -C "$1" clean -qfd >/dev/null 2>&1
+  mkdir -p "$1/docs"   # clean -d takes an emptied directory with it
+}
+rc2_refused() { # rc2_refused <name> <outfile> <code> <how-it-passed> after a commit/merge/push that returned NONZERO
+  if grep -q "$3" "$2"; then ok "$1"; else bad "$1" "refused, but not by $3: $(tr '\n' ' ' < "$2" | cut -c1-240)"; fi
+}
+
+# --- a. pre-commit under color.ui=always ------------------------------------
+A="$(rc2_mk a)"; git -C "$A" config color.ui always
+if rc2_commit "$A" docs/conf.txt "$RC2_SECRET" "$WORK/rc2a.out"; then
+  bad "RC2 a: pre-commit refuses a secret under color.ui=always" \
+      "it committed clean: git coloured the diff into the pipe and the added-line filter read nothing"
+else rc2_refused "RC2 a: pre-commit refuses a secret under color.ui=always" "$WORK/rc2a.out" SLH-SECRET; fi
+rc2_clean "$A"
+if rc2_commit "$A" docs/notes.txt "ordinary prose, nothing to find" "$WORK/rc2a2.out"; then
+  ok "RC2 a twin: clean content still commits under color.ui=always"
+else bad "RC2 a twin: clean content still commits under color.ui=always" "$(tr '\n' ' ' < "$WORK/rc2a2.out" | cut -c1-200)"; fi
+
+# --- b. the other spelling, color.diff=always --------------------------------
+B="$(rc2_mk b)"; git -C "$B" config color.diff always
+if rc2_commit "$B" docs/conf.txt "$RC2_SECRET" "$WORK/rc2b.out"; then
+  bad "RC2 b: pre-commit refuses a secret under color.diff=always" "it committed clean"
+else rc2_refused "RC2 b: pre-commit refuses a secret under color.diff=always" "$WORK/rc2b.out" SLH-SECRET; fi
+
+# --- c. pre-merge-commit under color.ui=always -------------------------------
+C="$(rc2_mk c)"; git -C "$C" config color.ui always
+git -C "$C" checkout -q -b sync
+printf '%s\n' "$RC2_SECRET" > "$C/docs/conf.txt"; git -C "$C" add -A >/dev/null 2>&1
+SETLIST_SKIP_HOOKS=1 git -C "$C" commit -qm "sync brings a secret" >/dev/null 2>&1
+git -C "$C" checkout -q main
+if git -C "$C" merge -q --no-ff -m "merge sync" sync >"$WORK/rc2c.out" 2>&1; then
+  bad "RC2 c: pre-merge-commit refuses a secret under color.ui=always" "the merge landed: the merge's content scan read a coloured diff as empty"
+else rc2_refused "RC2 c: pre-merge-commit refuses a secret under color.ui=always" "$WORK/rc2c.out" SLH-SECRET; fi
+git -C "$C" merge --abort >/dev/null 2>&1 || true; rc2_clean "$C"
+git -C "$C" checkout -q -b sync2 main
+printf 'clean\n' > "$C/docs/clean.txt"; git -C "$C" add -A >/dev/null 2>&1
+SETLIST_SKIP_HOOKS=1 git -C "$C" commit -qm "sync brings prose" >/dev/null 2>&1
+git -C "$C" checkout -q main
+if git -C "$C" merge -q --no-ff -m "merge sync2" sync2 >"$WORK/rc2c2.out" 2>&1; then
+  ok "RC2 c twin: a clean merge still lands under color.ui=always"
+else bad "RC2 c twin: a clean merge still lands under color.ui=always" "$(tr '\n' ' ' < "$WORK/rc2c2.out" | cut -c1-200)"; fi
+
+# --- d. pre-push under color.ui=always ----------------------------------------
+D="$(rc2_mk d)"; git -C "$D" config color.ui always
+printf '%s\n' "$RC2_SECRET" > "$D/docs/conf.txt"; git -C "$D" add -A >/dev/null 2>&1
+SETLIST_SKIP_HOOKS=1 git -C "$D" commit -qm "secret" >/dev/null 2>&1
+if git -C "$D" push -q origin main >"$WORK/rc2d.out" 2>&1; then
+  bad "RC2 d: pre-push refuses a secret under color.ui=always" "it pushed: the per-commit walk read a coloured diff as empty"
+else rc2_refused "RC2 d: pre-push refuses a secret under color.ui=always" "$WORK/rc2d.out" SLH-SECRET; fi
+D2="$(rc2_mk d2)"; git -C "$D2" config color.ui always
+printf 'prose\n' > "$D2/docs/notes.txt"; git -C "$D2" add -A >/dev/null 2>&1
+SETLIST_SKIP_HOOKS=1 git -C "$D2" commit -qm "prose" >/dev/null 2>&1
+if git -C "$D2" push -q origin main >"$WORK/rc2d2.out" 2>&1; then
+  ok "RC2 d twin: a clean push still lands under color.ui=always"
+else bad "RC2 d twin: a clean push still lands under color.ui=always" "$(tr '\n' ' ' < "$WORK/rc2d2.out" | cut -c1-200)"; fi
+
+# --- e. the advisory commit gate under color.ui=always -----------------------
+E="$WORK/rc2-e"; rm -rf "$E"; git_init "$E"; sdd_json "$E"; git -C "$E" config color.ui always
+printf '%s\n' "$RC2_SECRET" > "$E/config.txt"; git -C "$E" add config.txt
+run_hook "$HOOKS/commit-gate.sh" "$E" "$(bash_payload 'git commit -m "config"')"
+expect_deny "RC2 e: the advisory commit gate denies a secret under color.ui=always" "secret-shaped"
+git -C "$E" reset -q; rm -f "$E/config.txt"
+printf 'clean\n' > "$E/clean.md"; git -C "$E" add clean.md
+run_hook "$HOOKS/commit-gate.sh" "$E" "$(bash_payload 'git commit -m "clean"')"
+expect_allow "RC2 e twin: the advisory commit gate allows clean content under color.ui=always"
+
+# --- f. the lifecycle detector under color.ui=always --------------------------
+F="$(rc2_mk f)"; git -C "$F" config color.ui always
+printf '# Spec 0001 - thing\n\nStatus: BUILT\n\n## Goal\n\nx\n' > "$F/specs/0001-thing.md"
+git -C "$F" add specs/0001-thing.md >/dev/null 2>&1
+if git -C "$F" commit -qm "flip" >"$WORK/rc2f.out" 2>&1; then
+  bad "RC2 f: the lifecycle detector sees a Status flip under color.ui=always and demands STATUS.md" \
+      "it committed: the detector read a coloured diff as adding no lifecycle line"
+else rc2_refused "RC2 f: the lifecycle detector sees a Status flip under color.ui=always and demands STATUS.md" "$WORK/rc2f.out" SLH-STATUS-MISSING; fi
+printf '# inv\n\n| Spec | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | thing | BUILT | |\n' > "$F/specs/STATUS.md"
+git -C "$F" add specs/STATUS.md >/dev/null 2>&1
+if git -C "$F" commit -qm "flip with the row" >"$WORK/rc2f2.out" 2>&1; then
+  ok "RC2 f twin: the same flip with STATUS.md staged commits under color.ui=always"
+else bad "RC2 f twin: the same flip with STATUS.md staged commits under color.ui=always" "$(tr '\n' ' ' < "$WORK/rc2f2.out" | cut -c1-200)"; fi
+
+# --- g. git DIES at the render, and only at the render ------------------------
+# Under an UNPARSEABLE repository config value (diff.colorMoved=always,
+# diff.context=abc) git refuses the commit ITSELF at rc 128 before the object is
+# written (measured: HEAD unmoved), and at push the trunk audit dies first, so
+# such a value cannot produce a silent landing on its own. A PATH shim cannot
+# reach a hook either: git prepends its own exec path when it runs hooks. What
+# kills the render and nothing else is a diff driver whose hunk-header regex
+# does not compile: `git diff --cached --unified=0` dies at rc 128 with empty
+# output while `--name-only`, `rev-parse` and `git commit` all succeed, so
+# before the fix the scan read empty as clean and the commit LANDED. Measured
+# by the fixture check below before anything rests on it.
+rc2_break_render() { # rc2_break_render <dir> -> every path's diff driver has an uncompilable funcname regex
+  printf '* diff=broken\n' > "$1/.gitattributes"
+  git -C "$1" config diff.broken.xfuncname '('
+}
+G="$(rc2_mk g)"; rc2_break_render "$G"
+printf 'probe\n' > "$G/docs/probe.txt"; git -C "$G" add -A >/dev/null 2>&1
+if ! git -C "$G" diff --cached --unified=0 >/dev/null 2>&1 && git -C "$G" diff --cached --name-only >/dev/null 2>&1; then
+  ok "RC2 g0: the broken driver kills the patch render and leaves name-only reads alone"
+else
+  bad "RC2 g0: the broken driver kills the patch render and leaves name-only reads alone" "the fixture is broken, so g through j prove nothing"
+fi
+git -C "$G" reset -q -- docs/probe.txt >/dev/null 2>&1; rm -f "$G/docs/probe.txt"
+RC2_G_BASE="$(git -C "$G" rev-parse HEAD)"
+if rc2_commit "$G" docs/notes.txt "clean prose" "$WORK/rc2g.out"; then
+  bad "RC2 g: pre-commit refuses when git cannot render the staged diff" \
+      "it committed clean: git died rendering the diff, the scan read empty as clean, and HEAD moved"
+elif [[ "$(git -C "$G" rev-parse HEAD)" != "$RC2_G_BASE" ]]; then
+  bad "RC2 g: pre-commit refuses when git cannot render the staged diff" "refused, but HEAD moved anyway"
+else rc2_refused "RC2 g: pre-commit refuses when git cannot render the staged diff" "$WORK/rc2g.out" SLH-SCAN-FILTER-FAILED; fi
+rc2_clean "$G"; rm -f "$G/.gitattributes"; git -C "$G" config --unset diff.broken.xfuncname
+if rc2_commit "$G" docs/notes.txt "clean prose" "$WORK/rc2g2.out"; then
+  ok "RC2 g twin: with the driver removed, the same content commits"
+else bad "RC2 g twin: with the driver removed, the same content commits" "$(tr '\n' ' ' < "$WORK/rc2g2.out" | cut -c1-200)"; fi
+
+# --- h. git DIES at the render under the advisory gate ---------------------------
+H="$WORK/rc2-h"; rm -rf "$H"; git_init "$H"; sdd_json "$H"; rc2_break_render "$H"
+printf 'clean\n' > "$H/clean.md"; git -C "$H" add clean.md
+run_hook "$HOOKS/commit-gate.sh" "$H" "$(bash_payload 'git commit -m "clean"')"
+RC2H_CODE="$(printf '%s' "$HOOK_OUT" | jq -r '.setlistAdvisory.code // "<absent>"' 2>/dev/null)"
+if [[ "$RC2H_CODE" == "CM-NO-GIT" ]]; then
+  ok "RC2 h: the advisory commit gate reports CM-NO-GIT when git cannot render the staged diff"
+else
+  bad "RC2 h: the advisory commit gate reports CM-NO-GIT when git cannot render the staged diff" \
+      "code=[$RC2H_CODE]: the probe saw git run, the render died, and the gate read empty as clean"
+fi
+
+# --- i. git DIES at the render under the push-time walk --------------------------
+I="$(rc2_mk i)"
+printf 'prose\n' > "$I/docs/notes.txt"; git -C "$I" add -A >/dev/null 2>&1
+SETLIST_SKIP_HOOKS=1 git -C "$I" commit -qm "prose" >/dev/null 2>&1
+rc2_break_render "$I"
+if git -C "$I" push -q origin main >"$WORK/rc2i.out" 2>&1; then
+  bad "RC2 i: pre-push refuses when git cannot render a commit in the pushed range" \
+      "it pushed: the walk's git show died, the scan read empty as clean, and the remote moved"
+elif [[ -n "$(git -C "$I" ls-remote origin main 2>/dev/null)" ]]; then
+  bad "RC2 i: pre-push refuses when git cannot render a commit in the pushed range" "refused, but the remote moved anyway"
+else rc2_refused "RC2 i: pre-push refuses when git cannot render a commit in the pushed range" "$WORK/rc2i.out" SLH-SCAN-FILTER-FAILED; fi
+
+# --- j. git DIES at the render under the lifecycle detector, which names itself ---
+J="$(rc2_mk j)"; rc2_break_render "$J"; RC2_J_BASE="$(git -C "$J" rev-parse HEAD)"
+printf '# Spec 0001 - thing\n\nStatus: BUILT\n\n## Goal\n\nx\n' > "$J/specs/0001-thing.md"
+git -C "$J" add specs/0001-thing.md >/dev/null 2>&1
+if git -C "$J" commit -qm "flip" >"$WORK/rc2j.out" 2>&1; then
+  bad "RC2 j: the lifecycle detector refuses by name when git cannot render the spec's diff" \
+      "it committed: a Status flip went through without STATUS.md because the detector read empty as no flip"
+elif [[ "$(git -C "$J" rev-parse HEAD)" != "$RC2_J_BASE" ]]; then
+  bad "RC2 j: the lifecycle detector refuses by name when git cannot render the spec's diff" "refused, but HEAD moved anyway"
+elif grep -q 'SLH-SCAN-FILTER-FAILED' "$WORK/rc2j.out" && grep -q 'lifecycle detector' "$WORK/rc2j.out"; then
+  ok "RC2 j: the lifecycle detector refuses by name when git cannot render the spec's diff"
+else
+  bad "RC2 j: the lifecycle detector refuses by name when git cannot render the spec's diff" \
+      "refused, but the detector did not name itself: $(tr '\n' ' ' < "$WORK/rc2j.out" | cut -c1-240)"
+fi
+
+# --- k. log.showRoot=false: two readers on the ROOT commit --------------------
+# git_init makes a seed commit, so rc2_mk's base is never the root; this fixture
+# adopts the rules IN its root commit, which is exactly what /setlist:new does.
+# Two readers go blind on that shape under log.showRoot=false, and they mask
+# each other: the walk's `git show` renders the root as nothing (the scan
+# reads empty), and the trunk audit's `git log --diff-filter=A` cannot find
+# the commit that adopted the rules, so it refused every push BY ACCIDENT, a
+# false denial that hid the scan's blindness. Both take --root now.
+rc2_mk_root() { # rc2_mk_root <name> <root-content> -> the rules adopted in the ROOT commit
+  local d="$WORK/rc2-$1"
+  rm -rf "$d" "$WORK/rc2-$1.git"
+  mkdir -p "$d/.claude/hooks" "$d/.githooks" "$d/src" "$d/specs" "$d/docs"
+  git -C "$d" init -q; git -C "$d" symbolic-ref HEAD refs/heads/main
+  git -C "$d" config user.email "tests@example.invalid"; git -C "$d" config user.name "Setlist Tests"
+  git -C "$d" config commit.gpgsign false
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$d/.claude/sdd.json"
+  printf '# inv\n\n| Spec | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$d/specs/STATUS.md"
+  printf '%s\n' "$2" > "$d/docs/root.txt"
+  cp "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" \
+     "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$d/.githooks/"
+  cp "$SCRIPTS/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  chmod +x "$d/.githooks/pre-push" "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+  git -C "$d" config core.hooksPath .githooks
+  git -C "$d" add -A >/dev/null 2>&1
+  SETLIST_SKIP_HOOKS=1 git -C "$d" commit -qm "root: adopt the rules" >/dev/null 2>&1
+  git init -q --bare "$WORK/rc2-$1.git"
+  git -C "$d" remote add origin "$WORK/rc2-$1.git"
+  git -C "$d" config log.showRoot false
+  printf '%s' "$d"
+}
+K="$(rc2_mk_root k "$RC2_SECRET")"
+if git -C "$K" push -q origin main >"$WORK/rc2k.out" 2>&1; then
+  bad "RC2 k: pre-push scans a ROOT commit under log.showRoot=false" "it pushed: git show rendered the root as nothing and the walk read nothing"
+else rc2_refused "RC2 k: pre-push scans a ROOT commit under log.showRoot=false" "$WORK/rc2k.out" SLH-SECRET; fi
+K2="$(rc2_mk_root k2 "ordinary prose at the root")"
+if git -C "$K2" push -q origin main >"$WORK/rc2k2.out" 2>&1; then
+  ok "RC2 k twin: a clean root commit pushes under log.showRoot=false (the audit finds its baseline with --root)"
+else bad "RC2 k twin: a clean root commit pushes under log.showRoot=false (the audit finds its baseline with --root)" \
+         "refused: $(tr '\n' ' ' < "$WORK/rc2k2.out" | cut -c1-200)"; fi
+
+# --- l. a textconv driver hides the content it converts ------------------------
+L="$(rc2_mk l)"
+printf 'docs/* diff=hide\n' > "$L/.gitattributes"
+git -C "$L" config diff.hide.textconv 'echo hidden #'
+git -C "$L" add .gitattributes >/dev/null 2>&1
+SETLIST_SKIP_HOOKS=1 git -C "$L" commit -qm "attributes" >/dev/null 2>&1
+if rc2_commit "$L" docs/conf.txt "$RC2_SECRET" "$WORK/rc2l.out"; then
+  bad "RC2 l: pre-commit reads the raw bytes, not a textconv rendering" "it committed clean: the scan read the converted text"
+else rc2_refused "RC2 l: pre-commit reads the raw bytes, not a textconv rendering" "$WORK/rc2l.out" SLH-SECRET; fi
+rc2_clean "$L"
+if rc2_commit "$L" docs/notes.txt "clean prose" "$WORK/rc2l2.out"; then
+  ok "RC2 l twin: clean content under a textconv driver still commits"
+else bad "RC2 l twin: clean content under a textconv driver still commits" "$(tr '\n' ' ' < "$WORK/rc2l2.out" | cut -c1-200)"; fi
+
+# --- m. an external diff driver at the one guarantee-layer site that lacked --no-ext-diff
+M="$(rc2_mk m)"; git -C "$M" config diff.external false
+printf '# Spec 0001 - thing\n\nStatus: BUILT\n\n## Goal\n\nx\n' > "$M/specs/0001-thing.md"
+git -C "$M" add specs/0001-thing.md >/dev/null 2>&1
+if git -C "$M" commit -qm "flip" >"$WORK/rc2m.out" 2>&1; then
+  bad "RC2 m: the lifecycle detector ignores diff.external and still sees the Status flip" \
+      "it committed: the external driver died, the detector read nothing, and the flip went through without STATUS.md"
+else rc2_refused "RC2 m: the lifecycle detector ignores diff.external and still sees the Status flip" "$WORK/rc2m.out" SLH-STATUS-MISSING; fi
+
+# --- n. the same driver at the advisory gate's two sites -------------------------
+N="$WORK/rc2-n"; rm -rf "$N"; git_init "$N"; sdd_json "$N"; mkdir -p "$N/specs"
+printf '# Spec 0001 - thing\n\nStatus: ACTIVE\n' > "$N/specs/0001-thing.md"
+printf '# inv\n\n| Spec | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | thing | ACTIVE | |\n' > "$N/specs/STATUS.md"
+git -C "$N" add -A >/dev/null 2>&1; git -C "$N" commit -qm "spec" >/dev/null 2>&1
+git -C "$N" config diff.external false
+printf '# Spec 0001 - thing\n\nStatus: BUILT\n' > "$N/specs/0001-thing.md"; git -C "$N" add specs/0001-thing.md
+run_hook "$HOOKS/commit-gate.sh" "$N" "$(bash_payload 'git commit -m "flip"')"
+expect_deny "RC2 n: the advisory gate ignores diff.external and still demands STATUS.md for a Status flip" "STATUS.md"
+git -C "$N" reset -q; git -C "$N" checkout -q -- specs/0001-thing.md
+printf '%s\n' "$RC2_SECRET" > "$N/config.txt"; git -C "$N" add config.txt
+run_hook "$HOOKS/commit-gate.sh" "$N" "$(bash_payload 'git commit -m "config"')"
+expect_deny "RC2 n2: the advisory gate ignores diff.external and still sees a secret" "secret-shaped"
+
+# --- o. prefix settings, measured harmless and pinned as such ---------------------
+O="$(rc2_mk o)"; git -C "$O" config diff.noprefix true; git -C "$O" config diff.mnemonicPrefix true
+if rc2_commit "$O" docs/conf.txt "$RC2_SECRET" "$WORK/rc2o.out"; then
+  bad "RC2 o: prefix settings do not blind the positional filter (measured; no prefix flag is pinned)" "it committed clean under diff.noprefix and diff.mnemonicPrefix"
+else rc2_refused "RC2 o: prefix settings do not blind the positional filter (measured; no prefix flag is pinned)" "$WORK/rc2o.out" SLH-SECRET; fi
+
+fi; shard_region_end
+# <<< SHARD-END rc2-config-blind
+# >>> SHARD-BEGIN merge-completion-f10 cost=4
+if shard_region merge-completion-f10; then
+# =============================================================================
+# F10-2026, THE DOCUMENTED HOLE PINNED IN ITS DOCUMENTED DIRECTION (2.4.1 leg F2,
+# deferred under the 2026-09-03 A7b bound). pre-merge-commit refuses a chore
+# merge with no archive line and its message says to add the line "in this
+# same commit"; git says to complete the merge with `git commit`. Doing exactly
+# that puts the line on the TRUNK side of the merge: pre-commit's
+# merge-completion verification reads the merge INDEX and accepts, the trunk
+# audit reads the merged PARENTS and refuses. Pinned so the day the two layers
+# ask the same question of the merge commit, this goes red and the bullet
+# leaves the list in the same commit. Measured identical on the shipped 2.4.0
+# hooks, which is the deferral's not-a-regression proof.
+# =============================================================================
+F10="$WORK/f10-completion"; rm -rf "$F10"
+mkdir -p "$F10/.claude/hooks" "$F10/.githooks" "$F10/src" "$F10/specs"
+git_init "$F10"
+git -C "$F10" config merge.ff false
+printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$F10/.claude/sdd.json"
+printf '# Inventory\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n\n## Archive\n\n' > "$F10/specs/STATUS.md"
+printf 'x\n' > "$F10/src/a.txt"
+cp "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" \
+   "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$F10/.githooks/"
+cp "$SCRIPTS/trunk-audit.sh" "$F10/.claude/hooks/trunk-audit.sh"
+chmod +x "$F10/.githooks/pre-push" "$F10/.githooks/pre-commit" "$F10/.githooks/pre-merge-commit"
+git -C "$F10" config core.hooksPath .githooks
+git -C "$F10" add -A >/dev/null 2>&1; SETLIST_SKIP_HOOKS=1 git -C "$F10" commit -qm "adopt" >/dev/null 2>&1
+git -C "$F10" checkout -q -b chore/bump main
+printf 'bump\n' >> "$F10/src/a.txt"; git -C "$F10" add -A >/dev/null 2>&1
+SETLIST_SKIP_HOOKS=1 git -C "$F10" commit -qm "chore work" >/dev/null 2>&1
+git -C "$F10" checkout -q main
+if git -C "$F10" merge --no-ff chore/bump -m "chore: merge" >"$WORK/f10-merge.out" 2>&1; then
+  bad "F10-2026 a: the chore merge with no archive line is refused at merge time" "it merged clean, so the case below tests nothing"
+elif grep -q 'SLH-CLOSES-NO-SPEC' "$WORK/f10-merge.out"; then
+  ok "F10-2026 a: the chore merge with no archive line is refused at merge time"
+else
+  bad "F10-2026 a: the chore merge with no archive line is refused at merge time" "refused for another reason: $(tr '\n' ' ' < "$WORK/f10-merge.out" | cut -c1-200)"
+fi
+printf -- '- CHORE-007: DONE 2026-09-03. dependency bump\n' >> "$F10/specs/STATUS.md"
+git -C "$F10" add specs/STATUS.md >/dev/null 2>&1
+if git -C "$F10" commit -q --no-edit >"$WORK/f10-complete.out" 2>&1; then
+  ok "F10-2026 b: KNOWN-HOLE, completing the merge with the archive line on the trunk side is ACCEPTED by pre-commit"
+else
+  bad "F10-2026 b: KNOWN-HOLE, completing the merge with the archive line on the trunk side is ACCEPTED by pre-commit" \
+      "refused: $(tr '\n' ' ' < "$WORK/f10-complete.out" | cut -c1-200). If this is the fix landing, delete the public bullet, its ledger row and this region in the same commit"
+fi
+if bash "$SCRIPTS/trunk-audit.sh" "$F10" >"$WORK/f10-audit.out" 2>&1; then
+  bad "F10-2026 c: KNOWN-HOLE, the trunk audit then REFUSES the same commit at push" \
+      "the audit passed it: the two layers now agree, so the bullet, its ledger row and this region leave together"
+elif grep -q 'no recorded completion' "$WORK/f10-audit.out"; then
+  ok "F10-2026 c: KNOWN-HOLE, the trunk audit then REFUSES the same commit at push"
+else
+  bad "F10-2026 c: KNOWN-HOLE, the trunk audit then REFUSES the same commit at push" "refused for another reason: $(tr '\n' ' ' < "$WORK/f10-audit.out" | cut -c1-200)"
+fi
+
+fi; shard_region_end
+# <<< SHARD-END merge-completion-f10
 # --- summary -----------------------------------------------------------------
 
+shard_region_end
+
 printf '\n%s\n' "-----------------------------------------------"
+# The shard line is printed BEFORE the totals line and in its own format, so
+# every existing reader that greps `passed %d, failed %d, total %d` keeps
+# working unchanged (A9: the surfaces that read this line were checked in spec
+# 0127 and the format is deliberately untouched).
+if [[ "$SHARD_N" -ne 0 ]]; then
+  printf 'shard %d/%d, regions reached %d of %d\n' \
+    "$SHARD_K" "$SHARD_N" "$SHARD_IDX" "$(shard_manifest | grep -c .)"
+fi
 printf 'passed %d, failed %d, total %d\n' "$PASS" "$FAIL" "$((PASS + FAIL))"
 [[ "$FAIL" -eq 0 ]] || exit 1

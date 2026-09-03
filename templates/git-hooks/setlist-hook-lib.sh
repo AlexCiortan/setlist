@@ -126,7 +126,7 @@ SLH_CLOSING_REPORT_RE=$'^ {0,3}#{1,6}[ \t]+Closing report'
 # get asked of the surface that can answer them.
 slh_lifecycle_added() { # slh_lifecycle_added <proj> <states-re> <spec-path...> -> 0 when this change ADDS a live lifecycle line
   local proj="$1" states_re="$2"; shift 2
-  local f live added
+  local f live added __ldiff
   for f in "$@"; do
     [ -n "$f" ] || continue
     # A path with no index version (a deletion) has no live text, and a removed
@@ -135,9 +135,20 @@ slh_lifecycle_added() { # slh_lifecycle_added <proj> <states-re> <spec-path...> 
     # fail-open-ok: no live lifecycle line in this spec is nothing to pair with an inventory row.
     live="$(slh_index_show "$proj" "$f" | awk "$SLH_TEMPLATE_FENCE_AWK" | grep -E "^Status:[[:space:]]*(${states_re})|${SLH_CLOSING_REPORT_RE}" || true)"
     [ -n "$live" ] || continue
+    # THIS READER TAKES THE SAME RENDERING THE SCANS TAKE, so it takes the same
+    # flags (RC2-2026, fixed 2026-09-02, spec 0129; the reasons are written out
+    # at pre-commit's scan site). Measured before the fix: under
+    # `color.ui=always` a Status flip staged without STATUS.md committed clean,
+    # because this reader saw a coloured diff as adding no lifecycle line; a
+    # `diff.external` driver did the same, since this was one of the three
+    # sites that lacked --no-ext-diff. And git's status is read: a detector
+    # that could not run cannot say "no lifecycle line was added".
+    if ! __ldiff="$(git -C "$proj" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv -- "$f" 2>/dev/null)"; then
+      slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render the staged diff of $f, so the lifecycle detector read nothing and cannot tell whether this commit changes a spec's lifecycle state. A reader that could not run has not passed. Run 'git diff --cached -- $f' here to see the failure, or commit with SETLIST_SKIP_HOOKS=1 if this is an exception you are willing to own."
+      return 1
+    fi
     # fail-open-ok: a file whose staged diff adds nothing adds no lifecycle line.
-    added="$(git -C "$proj" diff --cached --unified=0 -- "$f" 2>/dev/null \
-             | grep -E '^\+' | grep -vE '^\+\+\+' | sed 's/^+//' || true)"
+    added="$(printf '%s\n' "$__ldiff" | grep -E '^\+' | grep -vE '^\+\+\+' | sed 's/^+//' || true)"
     [ -n "$added" ] || continue
     # A multi-line `live` cannot be passed to grep -F as one pattern argument
     # without matching the JOINED text, so the set test is done line by line.
@@ -1575,7 +1586,9 @@ slh_attest_walk() { # slh_attest_walk <proj> <what> <tip> <rev-list-arg...>
     # merge, which is the same reading slh_scan_walk uses for the same reason:
     # a merge's conflict resolution exists in no parent.
     local files
-    files="$(git -C "$proj" show --name-only --format= --no-ext-diff --cc "$c" 2>/dev/null)"
+    # --root: `log.showRoot=false` renders a ROOT commit as nothing, files
+    # included (RC2-2026, spec 0129; measured 0 names without it, 9 with).
+    files="$(git -C "$proj" show --root --name-only --format= --no-ext-diff --cc "$c" 2>/dev/null)"
     while IFS= read -r rp; do
       [ -n "$rp" ] || continue
       rp="$(printf '%s' "$rp" | tr -s '/')"; rp="${rp#/}"

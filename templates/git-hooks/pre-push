@@ -315,8 +315,17 @@ slh_scan_walk() { # slh_scan_walk <what-it-is> <rev-list-arg...>
   fi
   while IFS= read -r c; do
     [ -n "$c" ] || continue
-    slh_scan_added "$REPO" "$(git -C "$REPO" show --unified=0 --cc --format=%n --no-ext-diff \
-                        --src-prefix=a/ --dst-prefix=b/ "$c" 2>/dev/null)" "$what ($c)"
+    # The flags ignore the repository's own diff configuration (RC2-2026, fixed
+    # 2026-09-02, spec 0129; the reasons are at pre-commit's scan site), plus
+    # --root, which is this site's own member: `log.showRoot=false` makes `git
+    # show` render a ROOT commit as nothing at all, so a first push's first
+    # commit was read as empty. Git's status is read rather than lost.
+    if ! __DIFF="$(git -C "$REPO" show --root --unified=0 --cc --format=%n --no-color --no-ext-diff --no-textconv \
+                        --src-prefix=a/ --dst-prefix=b/ "$c" 2>/dev/null)"; then
+      slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render commit $c for $what, so the push-time scan read nothing and has judged nothing. A scan that could not run has not passed. Run 'git show $c' here to see the failure (a configuration value git cannot parse, or a diff driver that fails, looks like this), or push with SETLIST_SKIP_HOOKS=1 if this is an exception you are willing to own."
+      return 1
+    fi
+    slh_scan_added "$REPO" "$__DIFF" "$what ($c)"
   done <<EOF
 $revs
 EOF

@@ -249,7 +249,11 @@ fi
 # not this audit's business; auditing it would produce noise that trains the
 # reader to ignore the report.
 if [[ -z "$SINCE" ]]; then
-  SINCE="$(git -C "$INSTANCE" log --format=%H --diff-filter=A -- .claude/sdd.json | tail -n1)"
+  # --root at every `log --diff-filter=A` here (RC2-2026, spec 0129): under
+  # `log.showRoot=false` git renders a ROOT commit as adding nothing, so an
+  # instance whose first commit adopted the rules had no findable baseline and
+  # every push was refused by accident. Measured: 0 commits without it, 1 with.
+  SINCE="$(git -C "$INSTANCE" log --root --format=%H --diff-filter=A -- .claude/sdd.json | tail -n1)"
   [[ -n "$SINCE" ]] || die "cannot find the commit that introduced .claude/sdd.json; pass --since <ref>"
 fi
 
@@ -394,9 +398,9 @@ touches_role_tree() { # touches_role_tree <commit>
 # granted. The exemption is a claim about being older than the rules; an audit
 # that cannot say when the rules started cannot grant it. This is the fail-CLOSED
 # direction, chosen deliberately: the fail-open one is the finding.
-RULE_BASELINE="$(git -C "$INSTANCE" log --diff-filter=A --format=%H -- .claude/sdd.json 2>/dev/null | tail -n1)" # fail-open-ok: an empty baseline is handled explicitly below and refuses the exemption rather than granting it
+RULE_BASELINE="$(git -C "$INSTANCE" log --root --diff-filter=A --format=%H -- .claude/sdd.json 2>/dev/null | tail -n1)" # fail-open-ok: an empty baseline is handled explicitly below and refuses the exemption rather than granting it
 if [[ -z "$RULE_BASELINE" ]]; then
-  RULE_BASELINE="$(git -C "$INSTANCE" log --diff-filter=A --format=%H -- .githooks/setlist-hook-lib.sh 2>/dev/null | tail -n1)" # fail-open-ok: as above; both absent means no exemption is available at all
+  RULE_BASELINE="$(git -C "$INSTANCE" log --root --diff-filter=A --format=%H -- .githooks/setlist-hook-lib.sh 2>/dev/null | tail -n1)" # fail-open-ok: as above; both absent means no exemption is available at all
 fi
 
 # post_baseline <commit> -> 0 when the commit is at or after the instance

@@ -24,11 +24,36 @@ on:
 # full Linux leg behind the first, and on a working branch with many pushes that
 # is an hour of queue for work nobody will read.
 #
-# cancel-in-progress is deliberately NOT unconditional. On the default branch
-# every commit's run is the record for that commit, and discarding it silently
-# is this project's signature failure: a green that means less than it appears.
-# Tags are excluded for the same reason, since a release tag's run is the
-# evidence a publish cites.
+# cancel-in-progress is deliberately NOT unconditional, and on the default
+# branch and on tags it evaluates false so that a RUNNING job is never
+# discarded. A release tag's run is the evidence a publish cites, and a
+# commit's run is the closest thing that commit has to a record of itself.
+#
+# WHAT THIS DOES NOT BUY, STATED PLAINLY BECAUSE THE COMMENT USED TO CLAIM IT
+# (backlog CO2, corrected 2026-09-02 in spec 0127). This expression does NOT
+# guarantee that every commit on `main` gets a run of its own, and it never
+# did. A concurrency group keeps only the NEWEST PENDING run: when a run is
+# already in progress and two more pushes arrive, the first of those two is
+# cancelled while still queued, whatever cancel-in-progress says, because that
+# setting governs the RUNNING run and not the queue behind it. With one runner
+# per label, queueing is the normal state here rather than the exception, so
+# this is the ordinary path and not a corner.
+#
+# MEASURED ON `main`, 2026-09-02, over every run the API still holds: TEN runs
+# were cancelled without being the 30-minute timeout, and in the clean chains
+# each cancellation lands within seconds of the next run's creation, which is
+# the supersession happening (2026-08-21 d2e4338 and 6f660b6; 2026-08-24
+# 48e7ca5 and 8be2264; 2026-08-25 1a916f0, 212effc, e8cc5de and a697f89;
+# 2026-08-26 1acdd1f and 6831148). So ten commits on `main` carry no CI
+# evidence of their own. The eleventh cancelled run, b8efb06 on 2026-08-30, is
+# the timeout rather than the queue and is counted apart.
+#
+# The consequence for a reader deciding what a green run means: a green run
+# proves its own head sha, and the ABSENCE of a run on a commit proves nothing
+# about that commit either way. Spacing pushes on `main` is the only thing that
+# makes every commit get its own run under this expression, and grouping by
+# `github.sha` on the default branch is the mechanical alternative; neither is
+# taken here, and CO2 carries both so the choice stays the owner's.
 #
 # The condition is written so that every way it can go wrong leaves the run
 # ALIVE. Both the literal `main` test and the payload-derived default-branch test
@@ -47,13 +72,32 @@ jobs:
   hooks:
     name: hook suite (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # 30 minutes until 2026-08-30, when the RP1 cycle grew the suite past 1060
-    # cases and the Linux leg (which runs shellcheck, the seam and the
-    # macOS-equivalent toolchain on top of the shared steps) was CANCELLED at
-    # the cap mid mutation-check with every completed step green. The cap
-    # exists to fail a HANG loudly, not to race the honest wall clock, so it
-    # moves to 50: a hang still dies, and a green run no longer can.
-    timeout-minutes: 50
+    # THE CAP EXISTS TO FAIL A HANG LOUDLY, NOT TO RACE THE HONEST WALL CLOCK.
+    # That sentence has governed every move of this number and governs this one.
+    #
+    # History, so the number is a record rather than a preference. It was 30
+    # minutes until 2026-08-30, when the RP1 cycle grew the suite past 1060
+    # cases and the Linux leg was CANCELLED at the cap mid mutation-check with
+    # every completed step green; it moved to 50 because the honest wall clock
+    # had outgrown it. Sharding was the actual fix the cap was standing in for
+    # (backlog CI1), and it landed 2026-09-02 in spec 0127, so the cap now comes
+    # back down to what the shards MEASURED.
+    #
+    # MEASURED at 7990353, run 33579202297, both legs green, sharded:
+    #   fw-linux  24m33s total  (was 25m43s), of which the mutation check is
+    #             16m02s (was 20m18s) and the suite 2m18s (was 2m33s); it also
+    #             carries the NEW 2m32s alternate-awk leg, so like for like it
+    #             is nearer 22m.
+    #   fw-macos  12m34s total  (was 13m58s), of which the suite is 7m10s
+    #             (was 11m00s), the leg where sharding pays most directly.
+    #
+    # 40, not 25. The worst honest observation is 24m33s and the cap is set at
+    # roughly 1.6x of it, deliberately: the two runners share one host, so a
+    # slow macOS leg lengthens the Linux one by contention, and the point of
+    # this number is to catch the ninety-minute silent hang rather than to be
+    # the tightest value that happened to pass once. A cap that fails an honest
+    # run is a green nobody can trust, twice over.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -112,8 +156,45 @@ jobs:
           fi
           jq --version
 
-      - name: Report the bash version under test
-        run: bash --version | head -n 1
+      - name: Report the bash and awk versions under test
+        run: |
+          bash --version | head -n 1
+          # The awk is reported for the same reason the bash version is: the
+          # tested-platform list is a LIST, and a list a reader cannot check from
+          # a run is a claim. BWK awk reports a bare date ("awk version 20200816"),
+          # gawk says "GNU Awk", mawk says "mawk", so the three are distinguishable
+          # from this one line.
+          printf 'awk: %s\n' "$(awk --version 2>&1 | head -n 1 || awk -W version 2>&1 | head -n 1)"
+
+      # RUNNER HYGIENE (backlog WD1, the half that is tooling rather than the
+      # owner's manual act). WD1 was the fw-linux job failing at the suite step
+      # with exit 2, ZERO output, in about a second, and its diagnosis named a
+      # full or unwritable TMPDIR without ever confirming it. The discharge rests
+      # on the symptom not recurring rather than on a fixed mechanism, so the
+      # next recurrence should arrive WITH the measurement that was missing.
+      #
+      # These runners are persistent, so prior suite and leg runs leave fixture
+      # trees behind; hosted runners are ephemeral and this costs them a second.
+      # It never fails the job: a hygiene step that can red a build is a new way
+      # to lose a run, and the log line is the whole value here.
+      - name: Runner hygiene (TMPDIR space, and last run's debris)
+        continue-on-error: true
+        run: |
+          T="${TMPDIR:-/tmp}"
+          printf 'TMPDIR=%s\n' "$T"
+          df -h "$T" 2>&1 | head -n 2 || true
+          df -i "$T" 2>&1 | head -n 2 || true
+          # -mmin +240: only debris from runs that are certainly over, never a
+          # sibling job's live fixture tree. Both runners are on one host.
+          n="$(find "$T" -maxdepth 1 -name 'setlist-*' -mmin +240 2>/dev/null | wc -l | tr -d ' ')"
+          printf 'stale setlist-* entries older than 4h: %s\n' "$n"
+          find "$T" -maxdepth 1 -name 'setlist-*' -mmin +240 -exec rm -rf {} + 2>/dev/null || true
+          printf 'writable check: '
+          if : > "$T/setlist-ci-writable.$$" 2>/dev/null; then
+            rm -f "$T/setlist-ci-writable.$$"; printf 'TMPDIR is writable\n'
+          else
+            printf '::warning::TMPDIR is NOT writable, which is the condition WD1 named. The suite step below will fail.\n'
+          fi
 
       # THE LEG SELF-TEST'S ONE PREREQUISITE, PINNED (spec 0108, 2026-08-21).
       #
@@ -271,12 +352,91 @@ jobs:
       # There is deliberately no --max: a wall-clock cap cannot tell a slow step
       # from a stopped one, so it would have to be set so high it never fires, or
       # low enough to fail honest work.
-      - name: Run the hook suite (watchdogged; a hang fails loudly)
+      # SHARDED SINCE 2026-09-02 (backlog CI1, spec 0127), and the fallback is the
+      # unsharded suite for the same reason the watchdog's fallback is the bare
+      # invocation: this step is the platform canary and may never become a step
+      # that silently does nothing. test/ IS exported, so run-shards.sh exists in
+      # both repos and the file test is a belt rather than a branch anyone
+      # expects to take.
+      #
+      # The wrapper refuses on a missing shard, a region claimed by nobody, a
+      # region claimed twice, and a region that ran and asserted nothing, so a
+      # parallel run that quietly covered less than a serial one cannot report
+      # green here. That property, not the wall clock, is why it is a wrapper
+      # rather than a for-loop.
+      - name: Run the hook suite (sharded, watchdogged; a hang fails loudly)
         run: |
+          if [ -f test/run-shards.sh ]; then
+            SUITE_CMD="bash test/run-shards.sh"
+          else
+            echo "shard wrapper absent: running the suite unsharded."
+            SUITE_CMD="bash test/run-tests.sh"
+          fi
           if [ -f dogfood/watchdog.sh ]; then
-            bash dogfood/watchdog.sh --idle 900 --label "hook suite" -- bash test/run-tests.sh
+            # shellcheck disable=SC2086
+            bash dogfood/watchdog.sh --idle 900 --label "hook suite" -- $SUITE_CMD
           else
             echo "watchdog absent (expected in the public repo, dogfood/ is not exported): running the suite bare."
+            # shellcheck disable=SC2086
+            $SUITE_CMD
+          fi
+
+      # KL8, THE FIRST PLATFORM EXTENSION (ratified decision 5: alternate-awk on
+      # Linux before any Windows work, Windows filed on a field-report trigger).
+      #
+      # WHY gawk AND NOT SOMETHING ELSE. The tested-platform list is a LIST, and
+      # extending it is the only thing that changes it, so the extension is
+      # chosen by what is actually untested rather than by what is easiest. Three
+      # awks matter here: the macOS leg runs the BWK awk; dogfood/macos-equiv.sh
+      # builds the BWK awk on Linux; and this Linux runner's own default is the
+      # Debian family's mawk. gawk has never run this suite, and it is the
+      # default awk on the Fedora, RHEL and Arch families, which is most
+      # GNU/Linux outside Debian. It is also a real axis rather than a
+      # theoretical one: this repository's own history records a measurement
+      # written with GNU awk's systime() dying on the BWK awk, which is this
+      # class in the other direction.
+      #
+      # EXPORTED-SAFE ON PURPOSE. It depends on nothing in dogfood/, so the
+      # public repo's Linux leg runs it too. That is what lets the public
+      # README's platform sentence be backed by the public repo's own CI rather
+      # than by a claim about a private one.
+      #
+      # A SHIM RATHER THAN AN ALIAS, the same shape macos-equiv.sh uses: the
+      # suite and the hooks call `awk`, so the only honest way to test them
+      # under a different awk is to make `awk` BE it on PATH.
+      #
+      # Absence is a FAILURE, not a skip, like the shellcheck gate: a platform
+      # leg that quietly does not run is a platform claim nobody earned.
+      - name: Alternate awk (KL8; the suite under GNU awk on Linux)
+        run: |
+          if [ "$(uname -s)" = "Darwin" ]; then
+            echo "SKIPPED on the macOS leg by design: this leg extends the LINUX awk coverage, and the macOS leg is already the BWK awk."
+            exit 0
+          fi
+          if ! command -v gawk >/dev/null 2>&1; then
+            if command -v apt-get >/dev/null 2>&1; then
+              sudo apt-get update && sudo apt-get install -y gawk
+            elif command -v brew >/dev/null 2>&1; then
+              brew install gawk
+            fi
+          fi
+          if ! command -v gawk >/dev/null 2>&1; then
+            echo "::error::gawk could not be installed, so the alternate-awk leg cannot run."
+            echo "Failing rather than skipping: the tested-platform list is a list, and a leg that"
+            echo "silently does not run would add a platform to that list without running on it."
+            exit 1
+          fi
+          SHIM="$(mktemp -d)"
+          ln -sf "$(command -v gawk)" "$SHIM/awk"
+          export PATH="$SHIM:$PATH"
+          printf 'awk under test: %s\n' "$(awk --version 2>&1 | head -n 1)"
+          case "$(awk --version 2>&1 | head -n 1)" in
+            *"GNU Awk"*) ;;
+            *) echo "::error::the shim did not take: awk on PATH is not gawk, so this leg would re-run the default awk and report a platform it did not test."; exit 1 ;;
+          esac
+          if [ -f test/run-shards.sh ]; then
+            bash test/run-shards.sh
+          else
             bash test/run-tests.sh
           fi
 
@@ -312,6 +472,18 @@ jobs:
       # leg is invoked is a change to the leg. Only the glob, not all of `dogfood/`:
       # that directory is mostly hostile-leg reports, which are prose.
       #
+      # `publish/*.sh` joined 2026-09-02 (backlog CO3, spec 0127), on the same
+      # reasoning and with the same narrowing: the contents-table gate's own
+      # `--prove` runs below, and skipping it on the commit that edits the gate
+      # would be the absurdity `dogfood/*.sh` is in this list to avoid. Only the
+      # glob, because `publish/` is otherwise release records and prose.
+      #
+      # NOTHING ELSE HAD TO CHANGE FOR THE WIDENING, and that is worth stating.
+      # dogfood/ci-scope-check.sh EXTRACTS this list out of the block below
+      # rather than carrying a copy of it, so the scenarios re-derive what a
+      # tested path is from the bytes that decide it. A copy would have been a
+      # second edit here and a silent disagreement later.
+      #
       # The body between the SCOPE-LOGIC markers is extracted verbatim and exercised
       # by dogfood/ci-scope-check.sh, which drives it through seven scenarios
       # including all four fail-toward-RUNNING paths. Keep the markers.
@@ -335,7 +507,7 @@ jobs:
           # Both failures above moved to the RUN side, which is the direction item
           # 36's first constraint requires. Nothing else in this block globs.
           set -uf
-          PATHS='templates/ scripts/ test/ .github/workflows/ dogfood/*.sh'
+          PATHS='templates/ scripts/ test/ .github/workflows/ dogfood/*.sh publish/*.sh'
           base=''
           case "${{ github.event_name }}" in
             push)         base='${{ github.event.before }}' ;;
@@ -379,6 +551,70 @@ jobs:
             bash dogfood/ci-scope-check.sh
           else
             echo "SKIPPED: dogfood/ci-scope-check.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
+          fi
+
+      # THE CONTENTS-TABLE GATE, PER PUSH (backlog CO3, spec 0127). It ran at
+      # export (gate 2d) and standalone between batches, never per push, so a
+      # push could land contents-table drift and nothing went red until the next
+      # export, which is the gap RP8 filed the gate to close reopened one layer
+      # up.
+      #
+      # NOT GATED ON THE PRIVATE-LEGS FLAG, and this is deliberately stronger
+      # than CO3's own remedy. The entry warns that wiring the gate needs the
+      # scoping path list widened too, or the step reports green having run
+      # nothing. That is true, and the list IS widened above. But the deeper
+      # point is that contents-table drift is most often caused by ADDING A
+      # MARKDOWN FILE, which is exactly the push whose diff touches no scoped
+      # path: a gate consulted through that flag would skip on the commits it
+      # most needs to read. It is cheap, like the suite and the scope check
+      # beside it, so it joins them as a step that always runs.
+      #
+      # File-existence guarded like every other private step, since publish/ is
+      # not exported.
+      - name: Contents-table gate (private; does the README's status surface match the tree?)
+        run: |
+          if [ -f publish/contents-table-check.sh ]; then
+            bash publish/contents-table-check.sh
+          else
+            echo "SKIPPED: publish/contents-table-check.sh is absent, which is expected in the public repo (publish/ is not exported)."
+          fi
+
+      # CLAIMS VERSUS BYTES, PER PUSH (backlog CL4 and CL5, spec 0129, the A1b
+      # ruling of 2026-09-02). The structure half reads the public README's
+      # Known-limitations section as ONE object (group headings and their
+      # counts, bullets, Status paragraphs) against the suite's LEDGER, the
+      # backlog's mapping and the changelog's counts line; the claims half reads
+      # every "landed", "shipped" or "fixed" sentence of the newest changelog
+      # entry against the diff since the previous release's close commit. Per
+      # push because the defects it catches (an orphaned Status paragraph, a
+      # heading that miscounts, a claim with no diff behind it) arrive in
+      # documentation commits, which is exactly the push whose diff touches no
+      # scoped path, so this step is NOT gated on the private-legs flag, like
+      # the contents-table gate beside it. It costs about a second. Exit 2 is
+      # an INVALID run (an input set came out empty) and fails the step like
+      # exit 1: a check that read nothing has not passed. File-existence guarded
+      # like every other private step, since publish/ is not exported.
+      - name: Claims versus bytes (private; does the public list agree with itself, and do the changelog's claims have diffs?)
+        run: |
+          if [ -f publish/claims-vs-bytes.sh ]; then
+            bash publish/claims-vs-bytes.sh --structure
+            bash publish/claims-vs-bytes.sh --claims --since-previous-publish
+          else
+            echo "SKIPPED: publish/claims-vs-bytes.sh is absent, which is expected in the public repo (publish/ is not exported)."
+          fi
+
+      # --prove IS scoped, unlike the gate above, and the asymmetry is the same
+      # one the fixture matrix carries: --prove copies the tree once per seed and
+      # belongs to the push that CHANGES the gate. `publish/*.sh` is in the
+      # scoped path list precisely so that push is the one that pays for it.
+      - name: Contents-table gate --prove (private; can each seeded drift still be caught?)
+        run: |
+          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
+            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
+          elif [ -f publish/contents-table-check.sh ]; then
+            bash publish/contents-table-check.sh --prove
+          else
+            echo "SKIPPED: publish/contents-table-check.sh is absent, which is expected in the public repo (publish/ is not exported)."
           fi
 
       # The happy path, and it runs on BOTH legs like the scope check above rather

@@ -97,7 +97,15 @@ slh_verify_close "$PROJ" "$TRUNK" "this merge" || true
 # returns early on empty input. That is the pre-2026-08-05 behaviour for this
 # path (no scan at all on a merge), so it cannot be a regression, and the
 # pre-push range scan reads the same content again before it is shared.
-slh_scan_added "$PROJ" "$(git -C "$PROJ" diff --cached --unified=0 --no-ext-diff --src-prefix=a/ --dst-prefix=b/ HEAD 2>/dev/null)" "this merge's content"
+# The flags ignore the repository's own diff configuration and git's status is
+# read rather than lost in the substitution (RC2-2026, fixed 2026-09-02, spec
+# 0129): the reasons are written out once, at pre-commit's scan site, and this
+# is the same rule at the second of the sites that render a diff for a scan.
+if __DIFF="$(git -C "$PROJ" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ HEAD 2>/dev/null)"; then
+  slh_scan_added "$PROJ" "$__DIFF" "this merge's content"
+else
+  slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render this merge's diff, so the scan of this merge's content read nothing and has judged nothing. A scan that could not run has not passed. Run 'git diff --cached HEAD' here to see the failure (a configuration value git cannot parse, or a diff driver that fails, looks like this), or merge with SETLIST_SKIP_HOOKS=1 if this is an exception you are willing to own."
+fi
 
 # The expensive half, and the reason this lives at merge time. It can be the
 # project's full suite.
