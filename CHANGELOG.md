@@ -9,6 +9,92 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.5.0
+
+**Edition v1.13 (the toolchain edition).** The second maintenance release: one
+hardening at the git-hook and session-gate layers, and an edition turn whose changes
+are corrections to what the document says about itself.
+
+- **A jq that exits 0 printing nothing, and a PATH that loses `cat`, no longer make a
+  gate go silent, and the git hooks name the toolchain instead of the file.** The
+  scheduled fix the jq bullet carried since 2.3.0, widened at 2.4.0 by that release's
+  own review. Three mechanisms. The git-hook library (`templates/git-hooks/setlist-hook-lib.sh`)
+  now RUNS jq on a known document and compares its output before it reads
+  `.claude/sdd.json`, refusing under a new `SLH-JQ-BROKEN` that names jq and the three
+  usual causes; until now a jq that failed refused under the config's own code with a
+  message guessing that the toolchain was the likelier cause, and a jq that printed
+  nothing refused as a file that "declares" an empty trunk. Both were fail-closed and
+  both pointed at a file that was fine. Once jq is known good, a read that then fails
+  points at the FILE, and `SLH-UNREADABLE-CONFIG` says so and puts
+  `jq . .claude/sdd.json` first. The push-time audit (`scripts/trunk-audit.sh`) runs the
+  same probe. The advisory gates (`templates/hooks/close-gate.sh`, `commit-gate.sh`,
+  `scope-hook.sh`, `regrounding-hook.sh`) probe jq by OUTPUT rather than by status, so
+  the silent shape routes to the existing `*-JQ-BROKEN` codes instead of producing zero
+  bytes (or, at session start, a malformed object). And every advisory gate reads its
+  payload with the shell rather than with `cat`, removing the one unprobed dependency;
+  an empty payload at the close and commit gates is reported (`CG-NO-INPUT`,
+  `CM-NO-INPUT`) rather than exiting 0 in silence. Every new code was pinned red on the
+  2.4.1 bytes first, with a healthy control beside each. **The jq bullet leaves Open
+  limitations in this release**, because its hole is closed: what remains true (the
+  session gates are advisory on their failure paths too, and the git hooks are the layer
+  that refuses) is the list's own preamble. **The counts as they leave: 29 design
+  boundaries, 3 open limitations, 2 upstream conditions, 34 in all.**
+- **The framework document corrects two claims it made about itself.** Its own
+  limitations list still said that a headless build has no integrity chain and that the
+  fix "is not built in v1.7", two editions after v1.11 built it and the same document's
+  changelog said that bullet was replaced. The bullet leaves as fixed in v1.11 and left
+  standing, found by the project's weekly external scan rather than by any gate here.
+  The Part 2 model ladder named the family above Opus as "Claude Fable 5"; the alias it
+  binds now resolves to Fable 5.1 (Claude Code 2.1.257), and the row says so. Both
+  edits in `setlist.md`; the model-ladder skill (`skills/model-ladder/SKILL.md`) moves
+  with the row.
+- **This release's own adversarial review, and what it found.** Nineteen candidates,
+  seven refuted, twelve surviving. **One was a blocker, and it was this release's own
+  hole**: the hardening above said jq is probed by output at every layer and had reached
+  the hooks and the audit but not the upgrade path. `scripts/refresh-instance.sh` located
+  jq and read with it, so under a jq that exits 0 printing nothing the recorded plugin
+  version read as empty, the downgrade guard stood down, the refresh ran, and the version
+  write truncated the instance's `.claude/sdd.json` to zero bytes while the summary
+  reported success. Fixed in this release at both halves, independently: the same
+  output-compared probe before anything is read, and the rewritten config validated as
+  one JSON object recording the version before it replaces the old file, which is
+  otherwise left untouched. Both pinned red on the candidate first. **One was a public
+  bullet that had been false for four releases**, corrected below. Six are spellings the
+  session gates misread, recorded in the frozen-parsers bullet and not fixed, each
+  measured at the advisory layer only with the git hooks judging the operation that ran.
+  One is a degraded-toolchain residue at the advisory layer (an empty `code` field under a
+  broken sed, the code still in the reason text), recorded in the list's introduction and
+  filed. Three are defects in this project's own checking tools and its suite, deferred
+  under the standing rule that a defect in a checker never blocks a release; they affect
+  nothing you install.
+- **The document's self-claims are now checked by the same instrument that checks the
+  list.** The comparator that reads the Known-limitations list as one structure
+  (`publish/claims-vs-bytes.sh`) gains two questions about the framework document:
+  whether a phrase its changelog says was replaced or removed still stands in its body
+  (the exact shape of the stale bullet above, watched failing on the pre-fix document),
+  and whether every bullet of its shorter limitations list points at a bullet the
+  public list carries, through a mapping kept beside the list's coverage table. Same
+  gate, same per-push step; nothing new to run.
+
+**A correction to the 2.3.0 notes, stated plainly rather than quietly fixed.** The
+2.3.0 entry introduced the approval attestation and named `signer` custody as built and
+`forge` custody as designed and not built. A third custody, `ci-secret` (a key the
+build CAN reach, permitted and self-describing: every verification it emits says it
+establishes that the run had the key, not that a person approved), also shipped in
+2.3.0 alongside `signer`, and no entry ever said so; the 2.4.0 entry named no custody
+at all. Found by the project's weekly external scan on 2026-09-02, which could not tell
+from the public record which release it arrived in. It arrived in 2.3.0. The 2.3.0
+entry is not edited, because a corrected historical entry is a rewritten record.
+
+**A second correction, to the Known-limitations list itself.** It carried a bullet that
+was true when written and false from the next release on, in the unsafe direction: "The
+`SETLIST_SKIP_HOOKS=1` escape is not read by `pre-push`". The hook has honoured the
+variable as its whole-hook escape since 2.2.0, skipping the trunk audit and the content
+scan both, and the suite case behind the bullet reported a pass either way. Found by
+this release's adversarial review; the bullet is replaced in place by the true boundary
+(the count does not move), and the case pins the escape in its real direction, with the
+narrow `SETLIST_SKIP_TRUNK_AUDIT=1` escape shown to leave the content scan running.
+
 ## 2.4.1
 
 **Edition v1.12 (the record edition), unchanged.** A maintenance release, the first

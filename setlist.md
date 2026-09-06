@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.12 (the record edition)**
+**Edition v1.13 (the toolchain edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -172,7 +172,7 @@ edition would be the same defect wearing a new number.
 |---|---|---|
 | Planning | Opus, via `opusplan` plan mode. On the Anthropic API `opus` resolves to Opus 5 | `opusplan` is documented as "uses `opus` during plan mode, then switches to `sonnet` for execution", and `claude -p --model opusplan` returned a clean reply here |
 | Execution | Sonnet, via `opusplan` execution mode. On the Anthropic API `sonnet` resolves to Sonnet 5 | same alias, same probe: one setting binds both tiers |
-| Escalation | **The model family above Opus now has a name: Claude Fable 5, alias `fable`.** The availability-aware alias is `best`, which uses Fable 5 where the organization has access and the latest Opus otherwise | `claude -p --model fable` and `claude -p --model best` each returned a clean reply here; the alias table defines `best` in exactly those terms |
+| Escalation | **The family above Opus is Claude Fable, alias `fable`, and the alias resolves to Claude Fable 5.1 since Claude Code 2.1.257** (v1.13; the row said "Claude Fable 5" from v1.8, and its own probe had started returning a model it did not name). The availability-aware alias is `best`, which uses Fable where the organization has access and the latest Opus otherwise | `claude -p --model fable` and `claude -p --model best` each returned a clean reply here, re-run 2026-09-04 at Claude Code 2.1.259; the alias table defines `best` in exactly those terms, and the model-deprecations page lists `claude-fable-5-1` active with a tentative retirement not sooner than 2027-09-01 |
 
 Three facts about this table that are easy to get wrong:
 
@@ -1557,8 +1557,7 @@ parser has failure modes its subject matter does not.
   headless build produces. It also carries the close verification in one specific case,
   described under "What each hook can and cannot see" below.
 - **`pre-merge-commit`** carries the close verification: every spec this change CLOSES has a
-  complete Closing report with a pasted QA Pass 1 verdict and an answered diagram field (with
-  the last-match caveat recorded under Known limitations in this document), its
+  complete Closing report with a pasted QA Pass 1 verdict and an answered diagram field, its
   CLOSED inventory row, and a green run of the project's gate command. It also refuses a
   merge that brings feature code to the trunk while closing no spec that was not already
   CLOSED **and recording no completed chore**. This is the expensive one, and it belongs at
@@ -1583,22 +1582,30 @@ Git invokes these itself, from its own internal state, after argument parsing an
 left to spell around: a merge is a merge whether it was written `git merge spec/0001-x`,
 `{ nice -n 5 git merge heads/spec/0001-x; }`, or `$MERGE_CMD`.
 
-**KNOWN LIMITATION, THE DIAGRAM FIELD'S LAST-MATCH READING.** Both the merge hook and the
-trunk audit take the LAST line matching `Architecture diagram:` anywhere in the spec, not the
-one inside the Closing report. A later bulleted mention of the label therefore decides the
-check in either direction: a spec whose real field is the unedited template placeholder
-MERGES and PUSHES if a follow-up note happens to contain an accepted answer, and a compliant
-spec is refused if a later note repeats the label unanswered. Measured on the shipped bytes,
-at both layers. Keep the `Architecture diagram:` label on exactly one line of a spec. This is
-recorded here because this document is stamped into every instance and read on its own; the
-public README carries the same entry, and a limitation that exists in only one of them is a
-limitation half its readers never see (v1.7 claims confirmation).
+**All three need `jq`, and they fail CLOSED without it.** An absent jq refuses (`SLH-NO-JQ`);
+since v1.13 a jq that is present is RUN on a known document before any hook reads
+`.claude/sdd.json`, and one that exits nonzero or exits 0 printing nothing refuses under
+`SLH-JQ-BROKEN`, naming the toolchain; only once jq is known good does a read that fails
+point at the file (`SLH-UNREADABLE-CONFIG`). The three session gates report their verdict
+and PERMIT under the same breakage, because they are advisory; a broken jq stops work at
+the git hooks rather than quietly ungating it, and that is deliberate.
+
+**THE DIAGRAM FIELD IS READ AS AN ANSWER, AND THE FIRST ONE DECIDES.** Until plugin 2.3.0
+both the merge hook and the trunk audit took the LAST line matching `Architecture diagram:`
+anywhere in the spec, so a later note repeating the label decided the check in either
+direction; this document carried that as a known limitation from v1.7 and, through v1.12,
+went on carrying it after the fix, with a sentence claiming the public README carried the
+same entry when that bullet had left at 2.4.0 (corrected in v1.13). On the page path the
+field is decided by the FIRST `Architecture diagram:` line at either layer, read as an
+answer rather than as a sentence containing one; on the record path (v1.12) the diagram
+answer is a one-token close fact in `.claude/status.json` and the question cannot arise.
+Keeping the label on one line of a spec is still good manners, not a workaround.
 
 **THE GUARANTEE IS A DISCIPLINE CONTROL FOR COOPERATING USE, NOT A SECURITY BOUNDARY, and six rounds of
 adversarial claims review are what narrowed it to that.** For a developer or agent following the process,
 the git hooks enforce closed-spec discipline: a merge bringing role-path code to the trunk is refused unless
 it closes a spec or records a chore, a spec whose row flips to CLOSED must carry a complete Closing report,
-a QA verdict and an answered diagram field (with the last-match caveat below), the gate command must pass, and the push-time audit reads history
+a QA verdict and an answered diagram field, the gate command must pass, and the push-time audit reads history
 for the ordinary routes no local hook saw. Against a committer deliberately crafting merges to evade it, the
 layer does not hold and is not claimed to. The routes found so far are named in Known limitations; that list
 is maintained rather than complete, one of its entries was introduced by the fix for the entry before it, and
@@ -1806,17 +1813,6 @@ where that layer ends. Everything below is a real hole, known and accepted, not 
   which repository each command line means, in every spelling, which is parser-chasing
   this project has priced and refused. A nested repository is a different project; if
   it should be governed it wants its own instance.
-- **`jq` is a hard dependency** of the stamped hooks, and the GIT hooks fail CLOSED without it
-  while the three session gates report their verdict and PERMIT (advisory since v1.7): an
-  absent jq, and a jq that exists and exits nonzero, both route to a refusal rather than a
-  silent pass. That is deliberate, and it means a broken jq stops work rather than quietly
-  ungating it.
-- **A headless BUILD has no integrity chain.** Nothing mechanically stops a `claude -p`
-  session from building against a spec that was edited after approval, or never approved.
-  BL-005's `Spec-hash` makes the drift VISIBLE at session start, which is a warning and not
-  a gate, and SessionStart has no deny mechanic. The designed fix, an attestation binding
-  the QA verdict to the spec's `Spec-hash` as signed data, is drafted in Part 7c; it is
-  not built in v1.7.
 - **The set of tested platforms is a list, not a proof.** The suite runs on Linux and on
   macOS under bash 3.2 with the BWK awk, which is where the 1.0.8 fault would have been
   caught. A platform absent from that list is untested, and the release notes say which list
@@ -3026,6 +3022,49 @@ judgment. Appendix A is the part worth keeping; everything else is implementatio
 ---
 
 ## Changelog
+
+- **v1.13 (the toolchain edition).** This delta list is authoritative for
+  `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases
+  (this edition ships as plugin 2.5.0), the edition counts revisions of this document.
+  v1.13 moves because the DOCUMENT was wrong about itself in three places and its
+  Part 2 binding named a model the alias no longer resolves to; no Part's protocol
+  changes, and an instance on v1.12 has nothing to migrate.
+
+  **TWO BULLETS LEAVE THE KNOWN-LIMITATIONS LIST (Part 6).** "A headless BUILD has no
+  integrity chain" was fixed by v1.11 and left standing: this changelog's v1.11 entry
+  says the DRAFT bullet is REPLACED, and the bullet stood two editions longer, found
+  2026-08-31 by the project's weekly external scan rather than by any check here. It
+  leaves as FIXED in v1.11; its residual (key custody; enrolment by whoever can commit;
+  the chain rides the git hooks) is the v1.11 custody bullet already on the list. "`jq`
+  is a hard dependency" leaves with its public twin, whose hole plugin 2.5.0 closes:
+  the git-hook layer now RUNS jq on a known document before it reads
+  `.claude/sdd.json` and refuses under `SLH-JQ-BROKEN` when it fails or prints nothing,
+  and the advisory gates probe jq by OUTPUT and read their payload with the shell, so
+  neither a silent jq nor a PATH that loses `cat` can make a gate go silent. The fact
+  the bullet carried stays in Part 6's description of the stamped hooks. The list holds
+  15 bullets as this edition leaves, each mapped to a bullet of the public list and
+  checked per push by `publish/claims-vs-bytes.sh` (I7), which is how the document's
+  self-claims stop depending on someone reading it from outside.
+
+  **A THIRD SELF-CLAIM, FOUND BY THIS TURN'S OWN MEASUREMENT (Part 6).** The enforcement
+  boundary still carried "KNOWN LIMITATION, THE DIAGRAM FIELD'S LAST-MATCH READING" and two
+  cross-references to it, stating that both hooks take the LAST `Architecture diagram:`
+  line and that "the public README carries the same entry". Neither has been true since
+  plugin 2.3.0 (the field is read as an answer and decided by the FIRST such field) and
+  the public bullet left at 2.4.0, when the record edition made the diagram answer a
+  one-token record field on the structured path; this changelog never recorded either.
+  The paragraph now states the current reading and the two cross-references drop the
+  caveat. Found while mapping the edition's list to the README's, which is what the
+  mapping is for.
+
+  **THE MODEL LADDER'S ESCALATION ROW NAMES FABLE 5.1 (Part 2).** The alias `fable`
+  resolves to Claude Fable 5.1 since Claude Code 2.1.257; the row named "Claude Fable 5"
+  and verified itself by probing the alias, so its own method returned a model it did
+  not name. The aliases (`fable`, `best`) and the escalation rule do not change.
+
+  **What v1.13 does not change:** Parts 3, 5, 5b, 5c, 7, 7b, 7c, 8, 8b, 8c and Appendix C
+  are byte-identical to v1.12; the status record, the close grammar and the audit's
+  questions are as v1.12 left them.
 
 - **v1.12 (the record edition).** This delta list is authoritative for
   `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases

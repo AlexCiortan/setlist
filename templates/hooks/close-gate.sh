@@ -92,7 +92,17 @@ advise_literal() {
 }
 deny_literal() { advise_literal "$1"; }
 
-INPUT=$(cat)
+# THE INPUT IS READ BY THE SHELL, NOT BY cat (spec 0130; the 2.4.0 leg's F12).
+# `INPUT=$(cat)` was the one load-bearing dependency none of the probes below
+# covered, and every degradation arm is scoped behind a `case "$INPUT" in`
+# pattern, so a PATH that lost cat emptied the input and suppressed every deny
+# at once, this gate exiting 0 in silence on the very degradation that disabled
+# it. A builtin read removes the dependency rather than probing it; the arm
+# after it reports the residual, an input that is empty for any reason.
+IFS= read -r -d '' INPUT || true
+if [[ -z "$INPUT" ]]; then
+  deny_literal "close gate [CG-NO-INPUT]: this hook was given no payload at all, so the command being run cannot be read and this gate cannot tell whether it merges into the trunk. If cat, bash or the harness pipe is broken this is what it looks like; run the merge again once the environment is repaired. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse)."
+fi
 
 # Decide WITHOUT jq when it is absent, and report. Advisory since v1.7, so the
 # verdict is emitted with "allow" and the git hooks refuse. The raw payload is scanned instead of the
@@ -118,7 +128,10 @@ INPUT=$(cat)
 JQ_STATE=ok
 if ! command -v jq >/dev/null 2>&1; then
   JQ_STATE=absent
-elif ! printf '{}' | jq -e . >/dev/null 2>&1; then
+elif [[ "$(printf '{"probe":"x"}' | jq -r '.probe' 2>/dev/null)" != "x" ]]; then
+  # The probe compares OUTPUT, not only status (spec 0130; the 2.4.0 leg's F6):
+  # `printf '{}' | jq -e .` discarded stdout, so a jq that exited 0 printing
+  # nothing was classified usable and this gate emitted ZERO BYTES.
   JQ_STATE=broken
 fi
 # AND THE REST OF THE TOOLCHAIN, for exactly the same reason (v1.7 gate, F2).
@@ -167,7 +180,7 @@ if [[ "$JQ_STATE" != "ok" ]]; then
       if [[ "$JQ_STATE" == "absent" ]]; then
         deny_literal "close gate [CG-NO-JQ]: jq is not installed, so this gate cannot verify the Closing report, the QA verdict, or the inventory row, and would otherwise allow every merge unchecked. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
       fi
-      deny_literal "close gate [CG-JQ-BROKEN]: jq is installed but does not run on this machine, so this gate cannot verify the Closing report, the QA verdict, or the inventory row, and would otherwise allow every merge unchecked. Run jq --version to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+      deny_literal "close gate [CG-JQ-BROKEN]: jq is installed but does not work on this machine (it exits nonzero, or exits 0 and prints nothing), so this gate cannot verify the Closing report, the QA verdict, or the inventory row, and would otherwise allow every merge unchecked. Run jq --version to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
       ;;
     # fail-open-ok: without a usable jq the raw payload does not mention
     # merging, so this is not a command the gate governs; gating every Bash call

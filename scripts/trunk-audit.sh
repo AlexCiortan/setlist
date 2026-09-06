@@ -95,6 +95,15 @@ die() { printf 'trunk-audit.sh: %s\n' "$1" >&2; exit 2; }
 
 [[ -d "$INSTANCE" ]] || die "not a directory: $INSTANCE"
 command -v jq >/dev/null 2>&1 || die "jq is required to read .claude/sdd.json"
+# jq is RUN and its OUTPUT compared before it reads anything (spec 0130, the
+# same probe the hook library runs in slh_require_toolchain): a jq that exits 0
+# printing nothing made `jq -e .` below pass and the trunk read as empty, so
+# the audit died with "no role paths recorded", a true refusal with a false
+# reason pointing at a file that was fine.
+if [[ "$(printf '{"probe":"x"}\n' | jq -r '.probe' 2>/dev/null)" != "x" ]]; then
+  printf 'trunk-audit.sh [SLH-JQ-BROKEN]: jq is installed but does not work here: run on a one-key document it did not print the value back (it exited nonzero, or exited 0 and printed nothing), so this audit cannot read .claude/sdd.json and would otherwise report a trunk it never read. Run '"'"'jq --version'"'"' to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Your .claude/sdd.json is not the problem.\n' >&2
+  exit 2
+fi
 
 # THE TOOLCHAIN PROBE (2026-08-07 leg, F2).
 #

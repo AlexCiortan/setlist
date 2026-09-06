@@ -90,7 +90,13 @@ advise_literal() {
 }
 deny_literal() { advise_literal "$1"; }
 
-INPUT=$(cat)
+# THE INPUT IS READ BY THE SHELL, NOT BY cat (spec 0130; the 2.4.0 leg's F12).
+# `INPUT=$(cat)` was the one load-bearing dependency none of the probes below
+# covered, and every degradation arm is scoped behind a `case "$INPUT" in`
+# pattern, so a PATH that lost cat emptied the input and suppressed every deny
+# at once, this hook refusing under SH-NO-PATH for a path it was given. A builtin read removes the dependency rather than probing it; the existing
+# SH-NO-PATH arm below reports the residual, an input that carries no path.
+IFS= read -r -d '' INPUT || true
 # Normalize to an absolute path so the prefix strip below works whether
 # file_path arrives absolute or relative (hooks run with cwd = project dir).
 # Both the given and the resolved forms are kept: they differ whenever the
@@ -120,8 +126,11 @@ SDD_JSON="$PROJ/.claude/sdd.json"
 if ! command -v jq >/dev/null 2>&1; then
   deny_literal "scope hook [SH-NO-JQ]: jq is not installed, so this gate cannot read .claude/sdd.json and cannot tell whether this write lands on the trunk; it would otherwise allow feature code straight onto the trunk unchallenged. Install jq (apt-get install jq, brew install jq, or the package manager for this system), then retry. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
 fi
-if ! printf '{}' | jq -e . >/dev/null 2>&1; then
-  deny_literal "scope hook [SH-JQ-BROKEN]: jq is installed but does not run on this machine, so this gate cannot read .claude/sdd.json and cannot tell whether this write lands on the trunk. Run jq --version to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Your .claude/sdd.json is not the problem. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
+if [[ "$(printf '{"probe":"x"}' | jq -r '.probe' 2>/dev/null)" != "x" ]]; then
+  # OUTPUT compared, not only status (spec 0130; the 2.4.0 leg's F6): a jq that
+  # exits 0 printing nothing walked past `jq -e .` and this hook refused under a
+  # config code for a file that was fine.
+  deny_literal "scope hook [SH-JQ-BROKEN]: jq is installed but does not work on this machine (it exits nonzero, or exits 0 and prints nothing), so this gate cannot read .claude/sdd.json and cannot tell whether this write lands on the trunk. Run jq --version to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Your .claude/sdd.json is not the problem. Gates report their verdict and PERMIT (they are advisory since v1.7, so this is a warning and not a block; the git hooks are what refuse); removing this hook entry from .claude/settings.json is the deliberate way to work without it."
 fi
 
 # AND THE REST OF THE TOOLCHAIN, which this hook never received (1.1.0 leg,

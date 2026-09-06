@@ -15,7 +15,11 @@
 
 set -u
 
-INPUT=$(cat)
+# The input is read by the shell, not by cat (spec 0130; the 2.4.0 leg's F12),
+# so a PATH that lost cat does not empty it. An empty input is the startup
+# default below, which is the right reading for a hook that points and never
+# refuses.
+IFS= read -r -d '' INPUT || true
 PROJ="$(cd "${CLAUDE_PROJECT_DIR:-.}" && pwd)"
 
 # Not an SDD instance, or pre-stamp: stay silent.
@@ -40,8 +44,12 @@ PROJ="$(cd "${CLAUDE_PROJECT_DIR:-.}" && pwd)"
 # is most needed in exactly the state that suppressed it.
 #
 # jq is RUN rather than located, and both failures take the literal path.
-if ! command -v jq >/dev/null 2>&1 || ! printf '{}' | jq -e . >/dev/null 2>&1; then
-  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"SDD re-grounding (the read budget, framework Part 2): before anything else, read specs/STATUS.md, then the active spec it names. WARNING: jq is not usable on this machine (it is missing, or it is installed but exits nonzero), so the three PreToolUse gates (scope, commit, close) are degraded and will report their verdict while PERMITTING the writes, commits and merges they govern, because they are advisory since v1.7; the git hooks are the layer that refuses, and they will refuse the commits and merges they govern until this is fixed. Run jq --version to see which it is, then install or repair jq (apt-get install jq, brew install jq, or the package manager for this system) before continuing."}}'
+# The probe compares OUTPUT, not only status (spec 0130; the 2.4.0 leg's F6):
+# a jq that exits 0 printing nothing walked past `jq -e .`, and the object
+# quoted above was emitted again, by a different route, one release after leg
+# 4's F1 closed the nonzero shape.
+if ! command -v jq >/dev/null 2>&1 || [[ "$(printf '{"probe":"x"}' | jq -r '.probe' 2>/dev/null)" != "x" ]]; then
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"SDD re-grounding (the read budget, framework Part 2): before anything else, read specs/STATUS.md, then the active spec it names. WARNING: jq is not usable on this machine (it is missing, or it is installed but exits nonzero or prints nothing), so the three PreToolUse gates (scope, commit, close) are degraded and will report their verdict while PERMITTING the writes, commits and merges they govern, because they are advisory since v1.7; the git hooks are the layer that refuses, and they will refuse the commits and merges they govern until this is fixed. Run jq --version to see which it is, then install or repair jq (apt-get install jq, brew install jq, or the package manager for this system) before continuing."}}'
   # fail-open-ok: not a pass; the pointer plus the jq warning was delivered.
   exit 0
 fi

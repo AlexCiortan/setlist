@@ -2147,30 +2147,50 @@ sm_settings() { # sm_settings <matcher-json>... -> a settings.json body
   done
   printf '{"hooks":{"PreToolUse":[%s],"SessionStart":[]}}' "$entries"
 }
-sm_case() { # sm_case <label> <want: GAP|CLEAN> <matcher-json>...
-  local label="$1" want="$2"; shift 2
+# TWO PREDICATES, READ SEPARATELY (RC3-2026 F7, the 2.4.1 leg; fixed 2026-09-04,
+# spec 0130). The classifier below was one line-oriented grep for 'scope hook'
+# followed by a gap word, and the UNWIRED block puts the hook NAMES on the line
+# AFTER 'NOT WIRED IN A WAY', so no line ever carried both and the comma case
+# passed having evaluated nothing: the coverage reader normalises a comma, the
+# UNWIRED reader does not (KL10, a documented boundary), and this assertion
+# could see only the first. Now each case states BOTH expectations: the
+# COVERAGE verdict from the coverage messages, and the WIRED verdict from the
+# hook list the UNWIRED block prints. Watched red first by asking the comma
+# spelling for WIRED on the shipped bytes, which the old classifier could not
+# have refused.
+sm_case() { # sm_case <label> <want-coverage: GAP|CLEAN> <want-wired: WIRED|UNWIRED> <matcher-json>...
+  local label="$1" want="$2" want_wired="$3"; shift 3
   local inst="$WORK/inst-sm"; rm -rf "$inst"
   instance_fixture "$inst" 1.0.0 current
   sm_settings "$@" > "$inst/.claude/settings.json"
   run_script bash "$SCRIPTS/refresh-instance.sh" "$inst"
-  local got
+  local got got_wired unwired_list
   if printf '%s' "$SCRIPT_OUT" | grep -qiE 'scope hook.*(does not cover|do not cover|not wired|could not be)'; then got=GAP; else got=CLEAN; fi
-  if [[ "$got" == "$want" ]]; then
-    ok "scope coverage [$label]"
+  # The UNWIRED list is the line after 'NOT WIRED IN A WAY'; scope-hook.sh in it
+  # is the fact the old grep could never see.
+  unwired_list="$(printf '%s' "$SCRIPT_OUT" | grep -A1 'NOT WIRED IN A WAY' | tail -n1)"
+  case "$unwired_list" in *scope-hook.sh*) got_wired=UNWIRED ;; *) got_wired=WIRED ;; esac
+  if [[ "$got" == "$want" && "$got_wired" == "$want_wired" ]]; then
+    ok "scope coverage [$label]: coverage $got, scope hook $got_wired"
   else
     bad "scope coverage [$label]" \
-        "wanted $want, measured $got. The matcher set is judged by COVERAGE over Write/Edit/MultiEdit/NotebookEdit, taking the UNION of every entry that runs the scope hook, with a catch-all treated as match-all and a comma spelling translated first. A substring search over the first entry is what this replaced."
+        "wanted coverage $want and scope hook $want_wired, measured coverage $got and scope hook $got_wired. Coverage is judged over Write/Edit/MultiEdit/NotebookEdit, taking the UNION of every entry that runs the scope hook, with a catch-all treated as match-all and a comma treated as a pipe; WIRED is read from the hook list the UNWIRED block prints."
   fi
 }
-sm_case "a matcher CONTAINING the token but covering nothing" GAP '"Write|Edit|MultiEdit|NotebookEditor"'
-sm_case "a matcher missing Edit and MultiEdit"                GAP '"Write|NotebookEdit"'
-sm_case "control: the correct matcher certifies clean"      CLEAN '"Write|Edit|MultiEdit|NotebookEdit"'
-sm_case "two entries whose UNION covers everything"         CLEAN '"Write|Edit"' '"MultiEdit|NotebookEdit"'
-sm_case "match-all *"                                       CLEAN '"*"'
-sm_case "match-all empty"                                   CLEAN '""'
-sm_case "match-all absent"                                  CLEAN 'null'
-sm_case "the comma spelling"                                CLEAN '"Write,Edit,MultiEdit,NotebookEdit"'
-sm_case "control: no scope-hook entry at all is a gap"        GAP
+sm_case "a matcher CONTAINING the token but covering nothing" GAP   WIRED   '"Write|Edit|MultiEdit|NotebookEditor"'
+sm_case "a matcher missing Edit and MultiEdit"                GAP   WIRED   '"Write|NotebookEdit"'
+sm_case "control: the correct matcher certifies clean"      CLEAN WIRED   '"Write|Edit|MultiEdit|NotebookEdit"'
+sm_case "two entries whose UNION covers everything"         CLEAN WIRED   '"Write|Edit"' '"MultiEdit|NotebookEdit"'
+sm_case "match-all *"                                       CLEAN WIRED   '"*"'
+sm_case "match-all empty"                                   CLEAN WIRED   '""'
+sm_case "match-all absent"                                  CLEAN WIRED   'null'
+# KL10, pinned in its documented direction: the coverage reader normalises the
+# comma and certifies coverage; the UNWIRED reader does not and reports the
+# scope hook unwired (a false negative in the safe direction, its bullet a
+# design boundary since 2.4.1). The day KL10's fix lands this reads WIRED, goes
+# red, and the expectation moves with the bullet.
+sm_case "the comma spelling"                                CLEAN UNWIRED '"Write,Edit,MultiEdit,NotebookEdit"'
+sm_case "control: no scope-hook entry at all is a gap"        GAP   UNWIRED
 
 # F10: the advisory backup notice ends its own line. It was printed without a
 # trailing newline at two call sites, so the one line telling an operator a
@@ -3908,7 +3928,6 @@ expect_script "interpreter: the trunk audit CATCHES the outcome the gate let pas
 # hole: `git reset --hard <spec-branch>` moves the trunk onto unclosed work outright. | asserted
 # hole: `git checkout <spec-branch> -- <path>` copies role-path files onto the trunk without any merge to read. | asserted
 # hole: The pathspec hole. | asserted
-# hole: A broken or missing `jq` is handled by the GIT hooks, not by the session gates. | asserted
 # hole: Completing a refused merge on the trunk side, as the hook's own message prescribes, is accepted at commit and refused at push. | asserted
 # hole: A timed-out hook is a skipped gate. | unassertable | harness behaviour, not hook behaviour; verified live 2026-07-25 with a sleeping hook under timeout 1 and 10, recorded in close-gate.sh's header
 # hole: The staged-content scans read every staged line unless you scope them. | asserted
@@ -3933,7 +3952,7 @@ expect_script "interpreter: the trunk audit CATCHES the outcome the gate let pas
 # hole: Secret and style scanning is best-effort early warning, not a guarantee. | asserted
 # hole: git allows one `core.hooksPath`, so Setlist cannot coexist with husky, lefthook or pre-commit, and `refresh-instance.sh --apply` now REFUSES rather than displace one silently. | asserted
 # hole: A checkout is an enforcement switch: every git hook is inert on a branch without `.claude/sdd.json`. | asserted
-# hole: The `SETLIST_SKIP_HOOKS=1` escape is not read by `pre-push`. | asserted
+# hole: The `SETLIST_SKIP_HOOKS=1` escape skips EVERY git hook, `pre-push`'s trunk audit and content scan included. | asserted
 # hole: Merges crafted to evade the trunk audit can succeed, and the list of known routes is maintained rather than complete. | asserted
 # hole: The trunk is recognised by the NAME recorded in `.claude/sdd.json`, so an instance that merges onto a differently-named branch is ungoverned. | asserted
 # LEDGER-END
@@ -7179,16 +7198,16 @@ else
   ok "diagram first-wins b: an anchored later answering bullet cannot ANSWER a placeholder field (KL1's publish direction, closed)"
 fi
 
-# THE ESCAPE pre-push DOES NOT READ (v1.7 second bound leg, F9), pinned because
-# the hook's own refusal text names it and a reader will try it. Documented
-# rather than fixed: the message is mechanism, and the bound forbids a repair
-# round. The assertion is on the SOURCE rather than on a live push, because what
-# is being pinned is that pre-push consults no such variable at all.
-# BEHAVIOURAL, because the first version of this assertion grepped the source for
-# the NAME and reported the hole closed: the string is present in pre-push, only
-# inside the refusal message that recommends it. A mention is not a read, and a
-# pattern match cannot tell them apart. So a real refusal is provoked and the
-# escape is actually set.
+# THE ESCAPE pre-push READS (the 2.5.0 leg, F7; the case was written at the v1.7
+# second bound leg for the OPPOSITE fact and then, when 2.2.0's pre-push started
+# honouring the variable, was left reporting ok on BOTH arms, so for four
+# releases it pinned nothing while the public bullet went on saying the escape
+# was inert at push). It is a real pin now, in the documented direction: with
+# SETLIST_SKIP_HOOKS=1 the refused push LANDS (the whole-hook escape), and with
+# SETLIST_SKIP_TRUNK_AUDIT=1, the narrow one, the same secret-carrying push is
+# still refused by the content scan. BEHAVIOURAL, because the first version of
+# this assertion grepped the source for the NAME and reported the hole closed: a
+# mention is not a read, and a pattern match cannot tell them apart.
 SKIPE="$WORK/skip-escape"; rm -rf "$SKIPE" "$SKIPE-rem.git"
 scan_ref_fixture "$SKIPE"
 git -C "$SKIPE" checkout -q -b spec/0007-esc main
@@ -7200,10 +7219,17 @@ if git -C "$SKIPE" push -q origin spec/0007-esc >/dev/null 2>&1; then
       "the push succeeded with no escape set, so the case below proves nothing"
 else
   ok "skip escape control: the push is refused without the escape"
-  if SETLIST_SKIP_HOOKS=1 git -C "$SKIPE" push -q origin spec/0007-esc >/dev/null 2>&1; then
-    ok "skip escape: SETLIST_SKIP_HOOKS now gets a push through, which CLOSES a documented hole; update the bullet and this ledger entry"
+  if SETLIST_SKIP_TRUNK_AUDIT=1 git -C "$SKIPE" push -q origin spec/0007-esc >/dev/null 2>&1; then
+    bad "skip escape narrow: SETLIST_SKIP_TRUNK_AUDIT=1 skips the audit ALONE, and the content scan still refuses the secret" \
+        "the push landed under the narrow escape, so the content scan did not run; the bullet says it does"
   else
-    ok "skip escape: SETLIST_SKIP_HOOKS does not get a refused push through, as Known limitations records (documented hole, still open)"
+    ok "skip escape narrow: SETLIST_SKIP_TRUNK_AUDIT=1 skips the audit ALONE, and the content scan still refuses the secret"
+  fi
+  if SETLIST_SKIP_HOOKS=1 git -C "$SKIPE" push -q origin spec/0007-esc >/dev/null 2>&1; then
+    ok "skip escape: SETLIST_SKIP_HOOKS=1 gets the refused push through, the whole-hook escape the bullet now describes"
+  else
+    bad "skip escape: SETLIST_SKIP_HOOKS=1 gets the refused push through, the whole-hook escape the bullet now describes" \
+        "the push was still refused under the escape; pre-push no longer honours it, and the bullet, its ledger row and this case must move together"
   fi
 fi
 
@@ -14742,6 +14768,238 @@ fi
 
 fi; shard_region_end
 # <<< SHARD-END merge-completion-f10
+# >>> SHARD-BEGIN jq-cat-hardening-0130 cost=5
+if shard_region jq-cat-hardening-0130; then
+# =============================================================================
+# THE jq-AND-cat HARDENING AT KL6's JOIN (spec 0130, plugin 2.5.0), pinned RED
+# FIRST on the shipped 2.4.1 bytes. Two findings of the 2.4.0 leg and the fix
+# the public jq bullet had scheduled since 2.3.0:
+#
+#   F6   the advisory gates' jq probe (`printf '{}' | jq -e .`) checks STATUS
+#        and not OUTPUT, so a jq that exits 0 printing nothing is classified
+#        usable and close-gate and commit-gate emit ZERO BYTES; the scope hook
+#        denies under a config code that names the file; the regrounding hook
+#        emits the malformed object leg 4's F1 fixed for the nonzero shape.
+#   F12  `INPUT=$(cat)` is the one load-bearing dependency no gate probes, and
+#        every degradation arm is scoped behind `case "$INPUT" in *merge*)`, so
+#        a PATH that loses cat suppresses every deny at once.
+#   KL6  the git-hook layer never RUNS jq before reading .claude/sdd.json: a jq
+#        that fails refuses under SLH-UNREADABLE-CONFIG (the config's code) and
+#        a jq that prints nothing refuses under SLH-TRUNK-INVALID (the file
+#        declared nothing wrong), both fail-closed and both pointing at a file
+#        that is fine.
+#
+# Every fixture proves itself before it is used, on the suite's standing rule
+# that a stub which accidentally works makes every case pass for the wrong
+# reason. Every case has a healthy control beside it.
+# =============================================================================
+
+JC_QUIETJQ="$WORK/jc-quietjq-bin"; JC_NOCAT="$WORK/jc-nocat-bin"; JC_LOUDJQ="$WORK/jc-loudjq-bin"; JC_HEALTHY="$WORK/jc-healthy-bin"
+jc_bin() { # jc_bin <dir> <omit-tool-or-empty> ; links the toolchain, git included, minus one tool
+  rm -rf "$1"; mkdir -p "$1"
+  local t p
+  for t in bash sh git grep sed awk cat head tail od tr wc cut sort uniq printf env dirname basename \
+           mkdir rm cp mv ls chmod date mktemp shasum find xargs comm diff jq; do
+    [[ "$t" == "$2" ]] && continue
+    p="$(command -v "$t" 2>/dev/null || true)"
+    [[ -n "$p" ]] && ln -sf "$p" "$1/$t"
+  done
+}
+jc_bin "$JC_HEALTHY" ""
+jc_bin "$JC_NOCAT" cat
+jc_bin "$JC_QUIETJQ" jq; printf '#!/bin/sh\nexit 0\n' > "$JC_QUIETJQ/jq"; chmod +x "$JC_QUIETJQ/jq"
+jc_bin "$JC_LOUDJQ" jq;  printf '#!/bin/sh\necho "jq: error while loading shared libraries: libonig.so.5" >&2\nexit 127\n' > "$JC_LOUDJQ/jq"; chmod +x "$JC_LOUDJQ/jq"
+# The fixtures prove themselves.
+if [[ "$(PATH="$JC_QUIETJQ" sh -c 'printf "{}" | jq -e . ; printf "|rc=%s" $?' 2>/dev/null)" == "|rc=0" ]]; then
+  ok "0130 fixture: the quiet jq exits 0 and prints nothing, which is the shape F6 named"
+else
+  bad "0130 fixture: the quiet jq exits 0 and prints nothing" "the stub is not quiet: $(PATH="$JC_QUIETJQ" sh -c 'printf "{}" | jq -e . ; printf "|rc=%s" $?' 2>&1)"
+fi
+if PATH="$JC_NOCAT" sh -c 'command -v cat' >/dev/null 2>&1; then
+  bad "0130 fixture: the no-cat PATH has no cat" "cat leaked into the fixture PATH"
+else
+  ok "0130 fixture: the no-cat PATH has no cat, and has jq"
+fi
+if PATH="$JC_LOUDJQ" jq --version >/dev/null 2>&1; then
+  bad "0130 fixture: the loud jq fails" "the loud stub RUNS"
+else
+  ok "0130 fixture: the loud jq exits nonzero"
+fi
+jc_hook() { # jc_hook <bin> <hook-file> <project-dir> <payload>
+  HOOK_OUT="$(printf '%s' "$4" | PATH="$1" CLAUDE_PROJECT_DIR="$3" bash "$2" 2>/dev/null)"
+  HOOK_RC=$?
+}
+
+# --- F6 at the four advisory hooks: a quiet jq is a broken jq --------------
+JCL="$WORK/jc-close"; close_fixture "$JCL" no no answered yes no true   # healthy verdict: a deny (no Closing report)
+JCC="$WORK/jc-commit"; git_init "$JCC"; sdd_json "$JCC" true main true
+JSC="$WORK/jc-scope"; git_init "$JSC"; sdd_json "$JSC" true main true; mkdir -p "$JSC/src"; printf 'x\n' > "$JSC/src/app.js"
+mkdir -p "$JCC/specs" "$JSC/specs"; printf '# inv\n' > "$JCC/specs/STATUS.md"; printf '# inv\n' > "$JSC/specs/STATUS.md"
+
+jc_hook "$JC_HEALTHY" "$HOOKS/close-gate.sh" "$JCL" "$(bash_payload "$MERGE_CMD")"
+expect_deny "0130 F6 control: the close gate denies the unauthored close under a healthy jq" "Closing report"
+jc_hook "$JC_QUIETJQ" "$HOOKS/close-gate.sh" "$JCL" "$(bash_payload "$MERGE_CMD")"
+expect_deny "0130 F6 a: the close gate names CG-JQ-BROKEN under a jq that exits 0 printing nothing" "CG-JQ-BROKEN"
+jc_hook "$JC_QUIETJQ" "$HOOKS/commit-gate.sh" "$JCC" "$(bash_payload 'git commit -m "clean"')"
+expect_deny "0130 F6 b: the commit gate names CM-JQ-BROKEN under a quiet jq" "CM-JQ-BROKEN"
+jc_hook "$JC_QUIETJQ" "$HOOKS/scope-hook.sh" "$JSC" "$(edit_payload "$JSC/src/app.js")"
+expect_deny "0130 F6 c: the scope hook names SH-JQ-BROKEN under a quiet jq, not a config code" "SH-JQ-BROKEN"
+jc_hook "$JC_QUIETJQ" "$HOOKS/regrounding-hook.sh" "$JCC" '{"source":"startup"}'
+expect_context "0130 F6 d: the regrounding hook still emits valid JSON carrying the jq warning under a quiet jq" "jq is not usable"
+# The controls that keep a through d honest: a payload the gate does not govern stays silent.
+jc_hook "$JC_QUIETJQ" "$HOOKS/close-gate.sh" "$JCL" "$(bash_payload 'ls -la')"
+expect_allow "0130 F6 e: under a quiet jq a command the close gate does not govern is still silent"
+jc_hook "$JC_QUIETJQ" "$HOOKS/commit-gate.sh" "$JCC" "$(bash_payload 'apt-get install -y jq')"
+expect_allow "0130 F6 f: under a quiet jq the command that repairs jq is not gated"
+
+# --- F12: the input is read by the shell, and an empty input is reported ----
+jc_hook "$JC_NOCAT" "$HOOKS/close-gate.sh" "$JCL" "$(bash_payload "$MERGE_CMD")"
+expect_deny "0130 F12 a: the close gate judges the merge on a PATH with no cat" "Closing report"
+jc_hook "$JC_NOCAT" "$HOOKS/commit-gate.sh" "$JCC" "$(bash_payload 'git add -A && git commit -m "x"')"
+expect_deny "0130 F12 b: the commit gate judges the compound commit on a PATH with no cat" "one step"
+jc_hook "$JC_NOCAT" "$HOOKS/scope-hook.sh" "$JSC" "$(edit_payload "$JSC/src/app.js")"
+expect_deny "0130 F12 c: the scope hook judges the trunk write on a PATH with no cat, not SH-NO-PATH" "SH-TRUNK-WRITE"
+jc_hook "$JC_NOCAT" "$HOOKS/regrounding-hook.sh" "$JCC" '{"source":"startup"}'
+expect_context "0130 F12 d: the regrounding hook delivers the pointer on a PATH with no cat" "STATUS.md"
+jc_hook "$JC_HEALTHY" "$HOOKS/close-gate.sh" "$JCL" ""
+expect_deny "0130 F12 e: an EMPTY payload at the close gate is reported as CG-NO-INPUT, not exit 0 in silence" "CG-NO-INPUT"
+jc_hook "$JC_HEALTHY" "$HOOKS/commit-gate.sh" "$JCC" ""
+expect_deny "0130 F12 f: an EMPTY payload at the commit gate is reported as CM-NO-INPUT" "CM-NO-INPUT"
+jc_hook "$JC_HEALTHY" "$HOOKS/scope-hook.sh" "$JSC" ""
+expect_deny "0130 F12 g: an EMPTY payload at the scope hook keeps SH-NO-PATH" "SH-NO-PATH"
+
+# --- KL6: the git-hook layer probes jq by OUTPUT before it reads anything ---
+jc_mk() { # jc_mk <name> -> an armed instance with a bare remote and a chore branch, prints its path
+  local d="$WORK/jc-$1"
+  rm -rf "$d" "$WORK/jc-$1.git"
+  mkdir -p "$d/.claude/hooks" "$d/.githooks" "$d/src" "$d/specs" "$d/docs"
+  git_init "$d"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$d/.claude/sdd.json"
+  printf '# inv\n\n| Spec | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | thing | ACTIVE | |\n' > "$d/specs/STATUS.md"
+  printf '# Spec 0001 - thing\n\nStatus: ACTIVE\n\n## Goal\n\nx\n' > "$d/specs/0001-thing.md"
+  printf 'base\n' > "$d/docs/base.txt"
+  cp "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" \
+     "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$d/.githooks/"
+  cp "$SCRIPTS/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  chmod +x "$d/.githooks/pre-push" "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+  git -C "$d" config core.hooksPath .githooks
+  git -C "$d" add -A >/dev/null 2>&1
+  SETLIST_SKIP_HOOKS=1 git -C "$d" commit -qm base >/dev/null 2>&1
+  git init -q --bare "$WORK/jc-$1.git"
+  git -C "$d" remote add origin "$WORK/jc-$1.git"
+  git -C "$d" checkout -q -b chore/001-dep
+  printf 'dep\n' > "$d/docs/dep.txt"; git -C "$d" add -A >/dev/null 2>&1
+  SETLIST_SKIP_HOOKS=1 git -C "$d" commit -qm "chore: dep" >/dev/null 2>&1
+  git -C "$d" checkout -q main
+  printf '%s' "$d"
+}
+jc_refused_by() { # jc_refused_by <name> <outfile> <code> after a NONZERO git status
+  if grep -q "\[$3\]" "$2"; then ok "$1"; else bad "$1" "refused, but not by $3: $(tr '\n' ' ' < "$2" | cut -c1-240)"; fi
+}
+jc_layer() { # jc_layer <label> <bin> ; pre-commit, pre-merge-commit, pre-push and the audit under that PATH
+  local label="$1" bin="$2" d
+  d="$(jc_mk "$label")"
+  printf 'n\n' > "$d/docs/n.txt"; git -C "$d" add -A >/dev/null 2>&1
+  if PATH="$bin" git -C "$d" commit -qm docs >"$WORK/jc-$label.commit" 2>&1; then
+    bad "0130 KL6 $label 1: pre-commit refuses under a $label jq" "it committed"
+  else jc_refused_by "0130 KL6 $label 1: pre-commit refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.commit" SLH-JQ-BROKEN; fi
+  git -C "$d" reset -q --hard HEAD >/dev/null 2>&1; git -C "$d" clean -qfd >/dev/null 2>&1
+  if PATH="$bin" git -C "$d" merge -q --no-ff -m "merge chore" chore/001-dep >"$WORK/jc-$label.merge" 2>&1; then
+    bad "0130 KL6 $label 2: pre-merge-commit refuses under a $label jq" "it merged"
+  else jc_refused_by "0130 KL6 $label 2: pre-merge-commit refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.merge" SLH-JQ-BROKEN; fi
+  git -C "$d" merge --abort >/dev/null 2>&1; git -C "$d" reset -q --hard HEAD >/dev/null 2>&1
+  if PATH="$bin" git -C "$d" push -q origin main >"$WORK/jc-$label.push" 2>&1; then
+    bad "0130 KL6 $label 3: pre-push refuses under a $label jq" "it pushed"
+  else jc_refused_by "0130 KL6 $label 3: pre-push refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.push" SLH-JQ-BROKEN; fi
+  PATH="$bin" bash "$SCRIPTS/trunk-audit.sh" "$d" >"$WORK/jc-$label.audit" 2>&1
+  local rc=$?
+  if [[ "$rc" -eq 0 ]]; then
+    bad "0130 KL6 $label 4: the trunk audit stops under a $label jq" "it audited clean at exit 0"
+  else jc_refused_by "0130 KL6 $label 4: the trunk audit stops under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.audit" SLH-JQ-BROKEN; fi
+}
+jc_layer loud  "$JC_LOUDJQ"
+jc_layer quiet "$JC_QUIETJQ"
+# CONTROL: the same instance under a healthy PATH commits, and the audit passes.
+JCH="$(jc_mk healthy)"
+printf 'n\n' > "$JCH/docs/n.txt"; git -C "$JCH" add -A >/dev/null 2>&1
+if PATH="$JC_HEALTHY" git -C "$JCH" commit -qm docs >"$WORK/jc-healthy.commit" 2>&1 \
+   && PATH="$JC_HEALTHY" bash "$SCRIPTS/trunk-audit.sh" "$JCH" >"$WORK/jc-healthy.audit" 2>&1; then
+  ok "0130 KL6 control: under a healthy jq the same instance commits and audits clean"
+else
+  bad "0130 KL6 control: under a healthy jq the same instance commits and audits clean" \
+      "$(tr '\n' ' ' < "$WORK/jc-healthy.commit" | cut -c1-120) / $(tail -1 "$WORK/jc-healthy.audit" | cut -c1-120)"
+fi
+# THE INVERTED MESSAGE: once jq has been probed, a jq that then fails on the
+# file points at the FILE. A malformed .claude/sdd.json under a healthy jq.
+JCM="$(jc_mk malformed)"
+printf '{"trunk":"main",\n' > "$JCM/.claude/sdd.json"
+printf 'n\n' > "$JCM/docs/n.txt"; git -C "$JCM" add -A >/dev/null 2>&1
+if PATH="$JC_HEALTHY" git -C "$JCM" commit -qm docs >"$WORK/jc-malformed.commit" 2>&1; then
+  bad "0130 KL6 5: a malformed .claude/sdd.json under a healthy jq is refused" "it committed"
+elif grep -q '\[SLH-UNREADABLE-CONFIG\]' "$WORK/jc-malformed.commit" \
+     && grep -q 'jq \. \.claude/sdd\.json' "$WORK/jc-malformed.commit" \
+     && ! grep -q 'LIKELIER CAUSE IS THE TOOLCHAIN' "$WORK/jc-malformed.commit"; then
+  ok "0130 KL6 5: a malformed .claude/sdd.json under a probed-healthy jq refuses with SLH-UNREADABLE-CONFIG pointing at the FILE"
+else
+  bad "0130 KL6 5: a malformed .claude/sdd.json under a probed-healthy jq refuses with SLH-UNREADABLE-CONFIG pointing at the FILE" \
+      "$(tr '\n' ' ' < "$WORK/jc-malformed.commit" | cut -c1-300)"
+fi
+
+fi; shard_region_end
+# <<< SHARD-END jq-cat-hardening-0130
+# >>> SHARD-BEGIN refresh-silent-jq-0130 cost=1
+if shard_region refresh-silent-jq-0130; then
+# =============================================================================
+# THE REFRESH SCRIPT UNDER A jq THAT EXITS 0 PRINTING NOTHING (the 2.5.0 leg,
+# fix round 1). The one carrier of the "JQ PRESENT IS NOT JQ USABLE" rule that
+# located jq and then read with it: the recorded version read as empty, the
+# downgrade guard stood down, and the version write truncated .claude/sdd.json
+# to ZERO BYTES while the summary reported success. Pinned RED on the 2.5.0
+# candidate first: an instance recording a NEWER plugin than the tree, refreshed
+# under the quiet jq, must be REFUSED with its config byte-identical.
+# =============================================================================
+RSJ_BIN="$WORK/rsj-bin"; rm -rf "$RSJ_BIN"; mkdir -p "$RSJ_BIN"
+for rsj_t in bash sh git grep sed awk cat head tail od tr wc cut sort uniq printf env dirname basename mkdir rm cp mv ls chmod date mktemp diff cmp; do
+  rsj_p="$(command -v "$rsj_t" 2>/dev/null || true)"; [[ -n "$rsj_p" ]] && ln -sf "$rsj_p" "$RSJ_BIN/$rsj_t"
+done
+printf '#!/bin/sh\nexit 0\n' > "$RSJ_BIN/jq"; chmod +x "$RSJ_BIN/jq"
+RSJ="$WORK/rsj-inst"; instance_fixture "$RSJ" 9.9.9 current
+RSJ_BEFORE="$(cat "$RSJ/.claude/sdd.json")"
+# control: a healthy jq refuses the backwards move and writes nothing
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$RSJ"
+if [[ "$SCRIPT_RC" -ne 0 ]] && printf '%s' "$SCRIPT_OUT" | grep -q "BACKWARDS" && [[ "$(cat "$RSJ/.claude/sdd.json")" == "$RSJ_BEFORE" ]]; then
+  ok "refresh silent-jq control: a healthy jq refuses the backwards move and leaves sdd.json byte-identical"
+else
+  bad "refresh silent-jq control: a healthy jq refuses the backwards move and leaves sdd.json byte-identical" "rc=$SCRIPT_RC: $(printf '%s' "$SCRIPT_OUT" | tr '\n' ' ' | cut -c1-200)"
+fi
+SCRIPT_OUT="$(PATH="$RSJ_BIN" bash "$SCRIPTS/refresh-instance.sh" --apply "$RSJ" 2>&1)"; SCRIPT_RC=$?
+if [[ "$SCRIPT_RC" -ne 0 ]] && printf '%s' "$SCRIPT_OUT" | grep -q "does not work here"; then
+  ok "refresh silent-jq a: a jq that exits 0 printing nothing is REFUSED before anything is read, naming jq"
+else
+  bad "refresh silent-jq a: a jq that exits 0 printing nothing is REFUSED before anything is read, naming jq" \
+      "rc=$SCRIPT_RC: $(printf '%s' "$SCRIPT_OUT" | tr '\n' ' ' | cut -c1-240). On the 2.5.0 candidate this ran to completion and reported success."
+fi
+if [[ "$(cat "$RSJ/.claude/sdd.json")" == "$RSJ_BEFORE" ]]; then
+  ok "refresh silent-jq b: .claude/sdd.json is byte-identical after the refusal ($(printf '%s' "$RSJ_BEFORE" | wc -c | tr -d ' ') bytes)"
+else
+  bad "refresh silent-jq b: .claude/sdd.json is byte-identical after the refusal" \
+      "it is now $(wc -c < "$RSJ/.claude/sdd.json" | tr -d ' ') bytes; on the 2.5.0 candidate the version write truncated it to zero"
+fi
+# THE SECOND HALF: a jq that is healthy at the probe and writes NOTHING at the
+# version write (an OOM kill between the two, modelled by a jq that answers the
+# probe and nothing else) must leave the old config in place.
+printf '#!/bin/sh\ncase "$*" in *probe*) printf x ;; *-e*) exit 0 ;; *) exit 0 ;; esac\n' > "$RSJ_BIN/jq"; chmod +x "$RSJ_BIN/jq"
+RSJ2="$WORK/rsj-inst2"; instance_fixture "$RSJ2" 1.0.0 current
+RSJ2_BEFORE="$(cat "$RSJ2/.claude/sdd.json")"
+SCRIPT_OUT="$(PATH="$RSJ_BIN" bash "$SCRIPTS/refresh-instance.sh" --apply "$RSJ2" 2>&1)"; SCRIPT_RC=$?
+if [[ "$(cat "$RSJ2/.claude/sdd.json")" == "$RSJ2_BEFORE" ]]; then
+  ok "refresh silent-jq c: a version write that produces no JSON leaves .claude/sdd.json untouched (rc=$SCRIPT_RC)"
+else
+  bad "refresh silent-jq c: a version write that produces no JSON leaves .claude/sdd.json untouched" \
+      "sdd.json changed to $(wc -c < "$RSJ2/.claude/sdd.json" | tr -d ' ') bytes; rc=$SCRIPT_RC: $(printf '%s' "$SCRIPT_OUT" | tr '\n' ' ' | cut -c1-200)"
+fi
+fi; shard_region_end
+# <<< SHARD-END refresh-silent-jq-0130
 # --- summary -----------------------------------------------------------------
 
 shard_region_end

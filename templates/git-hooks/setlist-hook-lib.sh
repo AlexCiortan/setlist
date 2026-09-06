@@ -346,7 +346,7 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
         elif ([.scan_exclusions[] | select(contains("\n") or contains("\r"))] | length) > 0 then "shape"
         else ((["ok " + (.scan_exclusions | length | tostring)]) + [.scan_exclusions[] | ">" + .] | join("\n")) end' "$proj/.claude/sdd.json" 2>/dev/null)"; then
     SLH_SCAN_EXCLUSIONS_STATE="bad"
-    slh_refuse "SLH-UNREADABLE-CONFIG" "jq ran and failed while reading the scan exclusion set from .claude/sdd.json, so which paths this scan may skip could not be determined. THE LIKELIER CAUSE IS THE TOOLCHAIN, NOT THE FILE: the trunk was read from this same file moments ago. Check 'jq --version' and 'jq . .claude/sdd.json' in that order. Refusing rather than scanning against a configuration nobody read."
+    slh_refuse "SLH-UNREADABLE-CONFIG" "jq ran and failed while reading the scan exclusion set from .claude/sdd.json, so which paths this scan may skip could not be determined. THE LIKELIER CAUSE IS THE FILE: jq was probed working before anything was read (a jq that fails refuses under SLH-JQ-BROKEN first), so run 'jq . .claude/sdd.json' to see the syntax error, and 'jq --version' only if that is clean. Refusing rather than scanning against a configuration nobody read."
     return 1
   fi
   verdict="$(printf '%s\n' "$raw" | head -n1)"
@@ -862,6 +862,24 @@ slh_require_toolchain() { # slh_require_toolchain
     slh_refuse "SLH-NO-TOOLCHAIN" "grep is installed but does not work here, so the close verification cannot read the spec and would otherwise let this through unchecked. Run 'grep --version' to see the failure. Hooks fail closed by design."
     return 1
   fi
+  # jq, RUN and its OUTPUT compared (spec 0130, KL6's join). Until this probe
+  # existed the layer LOCATED jq and then read .claude/sdd.json with it, so a
+  # jq that failed refused under the config's code (SLH-UNREADABLE-CONFIG, with
+  # a message guessing that the toolchain was the likelier cause) and a jq that
+  # exited 0 printing nothing refused as a file that "declares" an empty trunk
+  # (SLH-TRUNK-INVALID). Fail-closed both times, and both pointing at a file
+  # that was fine; the 2.4.0 leg's F6 measured the second shape walking past a
+  # status-only probe at the advisory layer. An ABSENT jq keeps its own code at
+  # the readers (SLH-NO-JQ); this is the present-and-unusable case, which had
+  # none. Once this passes, a jq that then fails on the file points at the FILE,
+  # and the config readers below say so.
+  if command -v jq >/dev/null 2>&1; then
+    probe="$(printf '{"probe":"x"}\n' | jq -r '.probe' 2>/dev/null)" || probe=""
+    if [ "$probe" != "x" ]; then
+      slh_refuse "SLH-JQ-BROKEN" "jq is installed but does not work here: run on a one-key document it did not print the value back (it exited nonzero, or exited 0 and printed nothing). Every reader of .claude/sdd.json in this layer needs jq, so nothing below can be trusted and this refuses before reading anything. Run 'jq --version' to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Your .claude/sdd.json is not the problem. Hooks fail closed by design."
+      return 1
+    fi
+  fi
   return 0
 }
 
@@ -889,7 +907,7 @@ slh_trunk() { # slh_trunk <proj>  -> prints the REDUCED trunk, or refuses
   # broken link, an OOM kill, the wrong architecture) would otherwise yield an
   # empty string indistinguishable from a legitimate absent key.
   if ! v="$(jq -r 'if (.trunk == null) then "main" elif ((.trunk | type) == "string" and (.trunk | length) > 0) then .trunk else "" end' "$proj/.claude/sdd.json" 2>/dev/null)"; then
-    slh_refuse "SLH-UNREADABLE-CONFIG" "jq ran and failed while reading .claude/sdd.json, so the trunk could not be determined. THE LIKELIER CAUSE IS THE TOOLCHAIN, NOT THE FILE: jq exists here (it was probed above), so a jq that then fails is usually a broken link, the wrong architecture, or an OOM kill, and the config is usually fine. Check 'jq --version' and 'jq . .claude/sdd.json' in that order. Refusing rather than defaulting."
+    slh_refuse "SLH-UNREADABLE-CONFIG" "jq ran and failed while reading .claude/sdd.json, so the trunk could not be determined. THE LIKELIER CAUSE IS THE FILE: jq was probed working before anything was read (a jq that fails refuses under SLH-JQ-BROKEN first), so run 'jq . .claude/sdd.json' to see the syntax error, and 'jq --version' only if that is clean. Refusing rather than defaulting."
     return 1
   fi
   if [ -z "$v" ]; then
@@ -958,7 +976,7 @@ slh_role_paths() { # slh_role_paths <proj>
   # indistinguishable from a legitimate absent key.
   local shape
   if ! shape="$(jq -r 'if (.roles == null) then "absent" elif ((.roles | type) == "object") then "ok" else "bad" end' "$proj/.claude/sdd.json" 2>/dev/null)"; then
-    slh_refuse "SLH-UNREADABLE-CONFIG" "jq ran and failed while reading the role paths from .claude/sdd.json. THE LIKELIER CAUSE IS THE TOOLCHAIN, NOT THE FILE: the trunk was read from this same file moments ago, so a failure here points at jq (a broken link, the wrong architecture, an OOM kill) rather than at the config. Check 'jq --version' and 'jq . .claude/sdd.json' in that order. Refusing rather than treating an unreadable config as a project with no feature code."
+    slh_refuse "SLH-UNREADABLE-CONFIG" "jq ran and failed while reading the role paths from .claude/sdd.json. THE LIKELIER CAUSE IS THE FILE: jq was probed working before anything was read (a jq that fails refuses under SLH-JQ-BROKEN first), so run 'jq . .claude/sdd.json' to see the syntax error, and 'jq --version' only if that is clean. Refusing rather than treating an unreadable config as a project with no feature code."
     return 1
   fi
   if [ "$shape" = "bad" ]; then
@@ -1220,7 +1238,7 @@ slh_attest_load() { # slh_attest_load <proj>
           else "on " + $a.custody + " " + $a.verify_with end' \
         "$proj/.claude/sdd.json" 2>/dev/null)"; then
     SLH_ATTEST_STATE="bad"
-    slh_refuse "SLH-ATTEST-UNVERIFIABLE" "jq ran and failed while reading the attestation declaration from .claude/sdd.json, so whether an approval attestation is required here could not be determined. THE LIKELIER CAUSE IS THE TOOLCHAIN, NOT THE FILE: the trunk was read from this same file moments ago. Check 'jq --version' and 'jq . .claude/sdd.json' in that order. Refusing rather than treating an unread file as a project that requires nothing."
+    slh_refuse "SLH-ATTEST-UNVERIFIABLE" "jq ran and failed while reading the attestation declaration from .claude/sdd.json, so whether an approval attestation is required here could not be determined. THE LIKELIER CAUSE IS THE FILE: jq was probed working before anything was read (a jq that fails refuses under SLH-JQ-BROKEN first), so run 'jq . .claude/sdd.json' to see the syntax error, and 'jq --version' only if that is clean. Refusing rather than treating an unread file as a project that requires nothing."
     return 1
   fi
   verdict="${raw%% *}"

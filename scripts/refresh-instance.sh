@@ -67,6 +67,16 @@ SDD="$INSTANCE/.claude/sdd.json"
 command -v jq >/dev/null 2>&1 \
   || die "refusing to refresh: jq is not installed, so the version recorded in .claude/sdd.json cannot be read and a downgrade would be indistinguishable from an upgrade. Install jq, then retry."
 
+# JQ PRESENT IS NOT JQ USABLE, here too (the 2.5.0 leg, F-degraded-1). Every
+# other carrier of this rule probes jq by OUTPUT before reading the config;
+# this script located it and read. Under a jq that exits 0 printing nothing the
+# recorded version read as EMPTY, the empty read was taken as "stamped before
+# the version was recorded", the downgrade guard stood down, the refresh ran to
+# completion, and the version write below truncated .claude/sdd.json to zero
+# bytes while the summary reported success. Measured on the 2.5.0 candidate.
+[[ "$(printf '{"probe":"x"}' | jq -r '.probe' 2>/dev/null)" == "x" ]] \
+  || die "refusing to refresh: jq is installed but does not work here (run on a one-key document it did not print the value back: it exited nonzero, or exited 0 and printed nothing), so the version recorded in .claude/sdd.json cannot be read and a downgrade would be indistinguishable from an upgrade. Run 'jq --version' to see the failure; a broken dynamic library, a wrong-architecture binary and an out-of-memory kill all look like this. Nothing was written."
+
 jq -e . "$SDD" >/dev/null 2>&1 \
   || die "refusing to refresh: $SDD does not parse as JSON, so the recorded plugin version cannot be read. Fix the file, then retry."
 
@@ -812,6 +822,17 @@ TMP="$SDD.refresh.$$"
 if ! jq --arg v "$PLUGIN_VERSION" '.plugin = ((.plugin // {}) + {version: $v})' "$SDD" > "$TMP"; then
   rm -f "$TMP"
   die "the hooks were refreshed but recording the plugin version in $SDD failed; record .plugin.version = \"$PLUGIN_VERSION\" by hand before closing"
+fi
+# THE OUTPUT IS VALIDATED BEFORE IT REPLACES THE CONFIG, not only jq's status
+# (the 2.5.0 leg, F-degraded-1, its second half). A jq healthy at the top of
+# this run can die between there and here, and a jq that exits 0 having written
+# nothing produced an EMPTY temp file that the mv below then made the instance's
+# config. The write must be one JSON object carrying the version it claims to
+# record, or the old file stays and the refusal names the state.
+if ! [[ -s "$TMP" ]] \
+   || ! jq -e -s --arg v "$PLUGIN_VERSION" 'length == 1 and (.[0] | type == "object") and (.[0].plugin.version == $v)' "$TMP" >/dev/null 2>&1; then
+  rm -f "$TMP"
+  die "the hooks were refreshed but the rewritten $SDD did not read back as one JSON object recording plugin $PLUGIN_VERSION, so the old file is left in place untouched (jq exited 0 and wrote nothing, or wrote something else). Check 'jq --version', then record .plugin.version = \"$PLUGIN_VERSION\" by hand before closing"
 fi
 # The version is only recorded if the file really moved. A failed mv here would
 # leave the OLD sdd.json in place while the summary below announces the new

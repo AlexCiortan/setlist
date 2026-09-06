@@ -37,12 +37,13 @@ held in one table the edition's Changelog updates per edition.
   degraded planning turn a journal line so the record stays honest about
   which model actually decided.
 
-Current bindings, re-verified 2026-08-13 against the live harness (from the
+Current bindings, re-verified 2026-09-04 against the live harness (from the
 edition's Part 2 table, which carries the verification method): planning tier
 Opus via `opusplan` plan mode; execution tier Sonnet via `opusplan` execution
-mode; escalation tier Claude Fable 5, alias `fable`, or the availability-aware
-alias `best` (Fable where the organization has access, latest Opus otherwise),
-reached with `/model`. On the Anthropic API `opus` and `sonnet` resolve to Opus
+mode; escalation tier Claude Fable, alias `fable`, which resolves to Fable 5.1
+since Claude Code 2.1.257 (v1.13), or the availability-aware alias `best`
+(Fable where the organization has access, latest Opus otherwise), reached with
+`/model`. On the Anthropic API `opus` and `sonnet` resolve to Opus
 5 and Sonnet 5; on some third-party providers the same aliases resolve to older
 versions, so the row names the ALIAS rather than the version. `opusplan[1m]`
 forces the 1M window in both phases where the tier does not upgrade it.
