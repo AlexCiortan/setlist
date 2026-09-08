@@ -91,10 +91,16 @@ When the instance predates this plugin, also:
   version, rather than falling through to the copy. Read its report before
   applying: any file listed as differing may be a deliberate instance edit, and
   Part 8c is explicit that a customized stamped copy is a fork to surface in
-  the umbrella ADR, never a file to silently overwrite. On --apply the four
-  hooks (scope-hook, commit-gate, close-gate, regrounding-hook) are copied byte
-  for byte, the git-hook boundary is delivered (`.githooks/` plus
-  `core.hooksPath` and `merge.ff`, see the boundary bullet below), and the plugin
+  the umbrella ADR, never a file to silently overwrite. On --apply the five
+  hooks (scope-hook, commit-gate, close-gate, regrounding-hook, and since 2.6.0
+  stop-hook) are copied byte for byte, the trunk audit and the forge check
+  beside them, the git-hook boundary is delivered (`.githooks/` plus
+  `core.hooksPath` and `merge.ff`, see the boundary bullet below), the two
+  wiring files (`.github/workflows/setlist-forge-check.yml`,
+  `.github/CODEOWNERS`) are delivered when ABSENT and otherwise reported by
+  file and LEFT AS IS (they are the team's; an ownership file that does not
+  name `/.github/` is told so by path), the `gates` block is written on an
+  instance that lacks it (see the v1.14 bullet below), and the plugin
   version is recorded in `.claude/sdd.json`.
   **Exit code 3 means the refresh applied INCOMPLETELY**: the hook bytes and the
   version record are current, but `.claude/settings.json` still needs an edit the
@@ -228,7 +234,10 @@ When the instance predates this plugin, also:
   own approval, so switching this on without that conversation would hand
   somebody an integrity chain whose strength nobody established. Tell the human
   the block exists, that `"custody": "signer"` with a key they hold is the model
-  that works today, and that `"custody": "forge"` is designed and not yet built.
+  that works without a forge, and that `"custody": "forge"` (built in edition
+  v1.14) means no key at all: the approval is the flip landing on the protected
+  trunk through a required review, verified by the stamped forge check, which
+  the team must REQUIRE on the trunk for it to be a boundary.
 - **Mention the status record, and migrate NOTHING** (RP1, edition v1.12;
   BL-005's precedent applied a third time). An upgrade NEVER creates
   `.claude/status.json`: stamp parity explicitly excludes it, because the only
@@ -250,6 +259,21 @@ When the instance predates this plugin, also:
   2.4.0 review). If the file exists and is not Setlist's, surface it to the
   human BEFORE arming: the honest exits are relocating the foreign file or
   declining the record path, never overwriting their file.
+- **The v1.14 delta (plugin 2.6.0): the forge side, the Stop hook and the
+  `gates` block.** The refresh delivers all of it (above); what is left for a
+  person is three things. Wire the Stop hook: the refresh exits 3 until
+  `.claude/settings.json` carries the `Stop` entry the template shows (no
+  matcher, timeout 60), because that file is never machine-rewritten. Fill the
+  `@OWNER` slot in `.github/CODEOWNERS` with the team that owns the enforcement
+  layer (a standing slot is `/setlist:validate`'s finding), and require the
+  check named `setlist forge check` on the trunk at the forge, with one
+  approving review: until then the check reports rather than governs, and it
+  says so on every pull request. The `gates` migration is the ONE migration
+  this edition makes, because it changes no verdict: `close` and `push` from
+  the single `gate_command`, `commit` empty; tell the human the tiers exist
+  and let them declare a cheaper `commit` tier if they want one. Under
+  `forge` custody an instance that refused every commit since v1.11 stops
+  refusing the day the check is in the tree (the hooks defer to it by name).
 - Record all of this inside the umbrella ADR.
 
 ## 4. Instance skill flags (any instance stamped before plugin 1.6)

@@ -78,10 +78,17 @@ mode=new
 Then run:
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stamp.sh" .claude/stamp-answers.txt .`
 
-The stamp emits every framework-fixed file, including the gate hooks (enabled;
-each documents its one-line disable in its header), `specs/TEMPLATE.md`
+The stamp emits every framework-fixed file, including the five session hooks
+(enabled; each documents its one-line disable in its header), the git hooks,
+the trunk audit and the forge check beside it, `.github/workflows/
+setlist-forge-check.yml` (the check as a required status check, `setlist forge
+check`) and `.github/CODEOWNERS` (the four protected paths under an `@OWNER`
+slot that phase 2 fills with the team that owns the enforcement layer; a
+standing slot is a validate finding), the `gates` block in `sdd.json` (three
+empty tiers `/scaffold` records beside `gate_command`), `specs/TEMPLATE.md`
 extracted from the edition, and the committed edition copy. Do not regenerate
-any stamped file by hand.
+any stamped file by hand. Requiring the check on the trunk is the user's act at
+their forge; name it in the hand-off rather than assuming it.
 
 ## 5. Phase 2: tailored generation (the 20 percent that is the product)
 

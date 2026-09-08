@@ -144,7 +144,7 @@ slh_lifecycle_added() { # slh_lifecycle_added <proj> <states-re> <spec-path...> 
     # sites that lacked --no-ext-diff. And git's status is read: a detector
     # that could not run cannot say "no lifecycle line was added".
     if ! __ldiff="$(git -C "$proj" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv -- "$f" 2>/dev/null)"; then
-      slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render the staged diff of $f, so the lifecycle detector read nothing and cannot tell whether this commit changes a spec's lifecycle state. A reader that could not run has not passed. Run 'git diff --cached -- $f' here to see the failure, or commit with SETLIST_SKIP_HOOKS=1 if this is an exception you are willing to own."
+      slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render the staged diff of $f, so the lifecycle detector read nothing and cannot tell whether this commit changes a spec's lifecycle state. A reader that could not run has not passed. Run 'git diff --cached -- $f' here to see the failure."
       return 1
     fi
     # fail-open-ok: a file whose staged diff adds nothing adds no lifecycle line.
@@ -579,7 +579,7 @@ slh_scan_added() {
     # broken awk is a refusal rather than an empty read: this branch used to be
     # two greps whose emptiness was indistinguishable from a clean diff.
     if ! added="$(printf '%s\n' "$diff_text" | awk "$SLH_ADDED_AWK")"; then
-      slh_refuse "SLH-SCAN-FILTER-FAILED" "the scan of $where could not read the change, so it read nothing and has judged nothing. A scan that could not run has not passed. Check 'awk --version', or push with SETLIST_SKIP_HOOKS=1 if this is an exception you are willing to own."
+      slh_refuse "SLH-SCAN-FILTER-FAILED" "the scan of $where could not read the change, so it read nothing and has judged nothing. A scan that could not run has not passed. Check 'awk --version'."
       return 1
     fi
   else
@@ -588,7 +588,7 @@ slh_scan_added() {
     # emptiness test below would read as a clean diff. A scan that could not run
     # has not passed.
     if ! added="$(slh_scan_scoped_added "$diff_text" "$SLH_SCAN_EXCLUSIONS" "$where")"; then
-      slh_refuse "SLH-SCAN-FILTER-FAILED" "the path-scoped scan of $where could not read the change, so it read nothing and has judged nothing. A scan that could not run has not passed. This points at the toolchain rather than at the content: check 'awk --version'. Remove \"scan_exclusions\" from .claude/sdd.json to fall back to scanning every path, or push with SETLIST_SKIP_HOOKS=1 if this is an exception you are willing to own."
+      slh_refuse "SLH-SCAN-FILTER-FAILED" "the path-scoped scan of $where could not read the change, so it read nothing and has judged nothing. A scan that could not run has not passed. This points at the toolchain rather than at the content: check 'awk --version'. Remove \"scan_exclusions\" from .claude/sdd.json to fall back to scanning every path."
       return 1
     fi
   fi
@@ -697,6 +697,73 @@ SLH_REFUSED=0
 # question instead.
 SLH_CLOSE_SINGLE_PARENT=0
 
+# slh_scan_walk <proj> <what-it-is> <rev-list-arg...> -> 0, or 1 after recording a refusal.
+#
+# THE PUSH-TIME CONTENT SCAN, WALKING THE RANGE PER COMMIT (SC sub-hole 3). It
+# lived in pre-push until 2.6.0 and moved here so the forge check runs the same
+# bytes over a pull request's range (design section 3, step 6); pre-push calls
+# it with its own repository and its own ranges, unchanged.
+#
+# It used to read `git diff <a>..<b>`, an ENDPOINT diff, and the edition said so
+# in Known limitations: content ADDED and then REMOVED inside the pushed range is
+# never rendered by an endpoint diff, while every object still reaches the
+# remote. A secret committed and then deleted two commits later was published and
+# reported clean. That is not a weak scanner, it is the wrong question: the
+# endpoint diff asks what the range CHANGES, and the thing being protected is
+# what the range CARRIES.
+#
+# THE HONEST PRICE, stated rather than discovered: push latency grows with the
+# SIZE of the range instead of with the size of its net diff. A push of one
+# commit costs one diff, as before; a push of two hundred costs two hundred. The
+# ranges this scan sees are what a push adds, so that is bounded by how long
+# somebody worked offline, and the alternative is a scan that reports clean on
+# content it never read.
+#
+# A MERGE COMMIT IS READ WITH --cc, which for a non-merge is an ordinary diff and
+# for a merge shows exactly the content that differs from ALL parents: the
+# conflict resolution. That content exists in no parent, so a per-commit walk
+# that skipped merges would miss the one part of a merge nothing else scans.
+#
+# THE DIFF PREFIXES ARE FORCED (SC sub-hole 6). slh_scan_added drops the diff's
+# own `+++` header line before reading added lines, and that strip has to be
+# anchored to the exact header form or it eats content. A repository with
+# `diff.noprefix=true` or a custom `diff.dstPrefix` emits a different header, so
+# the prefixes are pinned at the call site here and the strip is anchored to
+# `+++ b/` in slh_scan_added: the two ends of the same rule, set together.
+#
+# THE DIFFERENCE BETWEEN "READ NOTHING" AND "THERE WAS NOTHING" (SC sub-hole 4).
+# rev-list FAILING means the range could not be read: that refuses. rev-list
+# SUCCEEDING with no output means the remote already has every commit this ref
+# would publish, which is not a gap and must not refuse, because the ordinary
+# re-push of an unchanged branch lands there. The first cut of this fix refused
+# on the empty list and was caught by its own clean-push control.
+slh_scan_walk() { # slh_scan_walk <proj> <what-it-is> <rev-list-arg...>
+  local proj="$1" what="$2"; shift 2
+  local c revs rc __DIFF
+  revs="$(git -C "$proj" rev-list "$@" 2>/dev/null)" && rc=0 || rc=$?
+  if [ "$rc" != "0" ]; then
+    slh_refuse "SLH-SCAN-UNREADABLE-RANGE" "the push-time scan could not enumerate the commits for $what, so it read nothing. A scan that could not run has not passed."
+    return 1
+  fi
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    # The flags ignore the repository's own diff configuration (RC2-2026, fixed
+    # 2026-09-02, spec 0129; the reasons are at pre-commit's scan site), plus
+    # --root, which is this site's own member: `log.showRoot=false` makes `git
+    # show` render a ROOT commit as nothing at all, so a first push's first
+    # commit was read as empty. Git's status is read rather than lost.
+    if ! __DIFF="$(git -C "$proj" show --root --unified=0 --cc --format=%n --no-color --no-ext-diff --no-textconv \
+                        --src-prefix=a/ --dst-prefix=b/ "$c" 2>/dev/null)"; then
+      slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render commit $c for $what, so the push-time scan read nothing and has judged nothing. A scan that could not run has not passed. Run 'git show $c' here to see the failure (a configuration value git cannot parse, or a diff driver that fails, looks like this)."
+      return 1
+    fi
+    slh_scan_added "$proj" "$__DIFF" "$what ($c)"
+  done <<EOF
+$revs
+EOF
+  return 0
+}
+
 slh_refuse() { # slh_refuse <code> <message...>
   local code="$1"; shift
   printf 'setlist [%s]: %s\n' "$code" "$*" >&2
@@ -769,7 +836,7 @@ SLH_RECORD_CHORE_FILES_JQ='(((.chores // {})[$id].files) // []) | .[]'
 # (out of range, wrong shape), and the consumer REFUSES on any "!" token.
 # LOCKSTEP: byte-identical to scripts/trunk-audit.sh, whose single-parent arm
 # asks the same question of the pushed history.
-SLH_OWNS_AWK='{ l=$0; sub(/\r$/,"",l) } l ~ /^##[[:space:]]*Closing report/{r=1} l ~ /^Owns:/{ if(r==1){print "!range";next} if(substr(l,1,6) != "Owns: "){print "!shape";next} p=substr(l,7); if(p=="" || p ~ /^[ \t]/ || p ~ /[ \t]$/ || index(p,"*") || index(p,"?") || index(p,"[") || index(p,"]") || index(p,"\\") || index(p,"\"") || index(p,"\047") || substr(p,1,1)=="/" || substr(p,1,2)=="./" || substr(p,length(p),1)=="/" || p ~ /(^|\/)\.\.(\/|$)/){print "!shape";next} print p }'
+SLH_OWNS_AWK='{ l=$0; sub(/\r$/,"",l) } l ~ /^##[[:space:]]*Closing report/{r=1} r!=1 && l=="Tier: lite"{t=1} l ~ /^Owns:/{ if(r==1){print "!range";next} if(substr(l,1,6) != "Owns: "){print "!shape";next} p=substr(l,7); if(p=="" || p ~ /^[ \t]/ || p ~ /[ \t]$/ || index(p,"*") || index(p,"?") || index(p,"[") || index(p,"]") || index(p,"\\") || index(p,"\"") || index(p,"\047") || substr(p,1,1)=="/" || substr(p,1,2)=="./" || substr(p,length(p),1)=="/" || p ~ /(^|\/)\.\.(\/|$)/){print "!shape";next} n++; print p } END{ if(t && n>5) print "!lite-oversized" }'
 
 slh_record_present() { # slh_record_present <proj> <rev>  ("" means the index)
   if [ -z "$2" ]; then
@@ -1178,20 +1245,221 @@ slh_chores_completed() { # slh_chores_completed <status-new> <status-old>
 # namespace is what makes that true rather than hoped.
 SLH_ATTEST_NS="setlist-attestation"
 
-# The custody models this layer knows. "forge" is DECLARABLE and its verifier
-# is an open question with the owner (the design supports it and does not
-# settle what query a hook may run: a declared command string would be
+# The custody models this layer knows. "forge" is custody C, BUILT in 2.6.0
+# from the ratified design (design-forge-check-kl5-2026-09-06.md, section 5):
+# the approval IS the ACTIVE flip landing on the protected trunk through a
+# required review, and the layer that verifies it is the stamped forge check
+# (.claude/hooks/forge-check.sh), run by the forge as a required status check.
+# This LOCAL layer cannot ask the forge (a declared command string would be
 # configuration deciding what this hook executes, which is the lesson
-# SLH-SCAN-EXCLUSION-INVALID was written for, and answering it from local refs
-# is the identity-by-history question this project has paid for three times).
-# Until that is ruled, declaring it REFUSES with UNVERIFIABLE rather than
-# passing: a refusal that says what it cannot do beats a green that means
-# nothing.
+# SLH-SCAN-EXCLUSION-INVALID was written for, and answering from local refs is
+# the identity-by-history question this project has paid for three times), so
+# under "forge" it verifies the document's bytes against the spec and DEFERS the
+# authority question BY NAME to the check, allowing with a sentence that says it
+# is not an approval, and only when the check is in the tree under review. A
+# tree without the check keeps the refusal: the claim travels with the claim.
 SLH_ATTEST_CUSTODIES="signer ci-secret forge"
 
 SLH_ATTEST_STATE=""       # "" unread, off, on, bad
 SLH_ATTEST_CUSTODY=""
 SLH_ATTEST_VERIFY_WITH=""
+# ===========================================================================
+# T1: THE CODEOWNERS BRIDGE (spec 0132, from the ratified design's section 7;
+# the 2.6.0 strategy's ruling 4). A close may declare only files its closer
+# owns under the repository's own ownership file. The reader accepts the CORE
+# grammar the forges share (blank lines and comments; a gitignore-style path
+# pattern with /-anchoring, a trailing / for directories, * within a segment and
+# ** across; owners as @login, @org/team or an email; the LAST matching pattern
+# wins; a pattern with no owners means no owner) and REFUSES the edges by name
+# under SLH-CODEOWNERS-UNREADABLE (section headers, negated patterns, escaped
+# spaces, character classes and ? wildcards, an owner outside the three forms):
+# a reader that guesses at a syntax it does not implement is a false-denial
+# factory and one that silently skips a line it cannot parse is the fail-open
+# class. The file is read from .github/CODEOWNERS, CODEOWNERS, docs/CODEOWNERS
+# in that order, the first found. The reader runs only when a declaring close
+# is being verified, so a team with an exotic file and no declaring closes is
+# never refused for a file this layer never needed.
+#
+# THREE VERDICTS BY LAYER (ruling 4; ratification decision 5), because the
+# identity each layer can read differs: the forge check refuses on the pull
+# request's author as the forge reports it (handles and teams resolved at the
+# forge); pre-push's audit refuses on an EMAIL owner that does not match the
+# closing commit's author email and REPORTS (SLH-OWNS-CODEOWNERS-UNRESOLVED)
+# owners it cannot resolve locally, because refusing on an identity it cannot
+# read is a false denial by construction; pre-merge-commit ADVISES on the
+# merging clone's git identity, which is a claim.
+#
+# LOCKSTEP: SLH_CODEOWNERS_AWK is byte-identical to scripts/trunk-audit.sh's
+# copy (the audit ships on its own and sources nothing), asserted by the suite.
+# ===========================================================================
+SLH_CODEOWNERS_AWK='
+function pat2re(p,   re, i, c, n, anchored, dir) {
+  dir = 0; anchored = 0
+  if (substr(p, length(p), 1) == "/") { dir = 1; p = substr(p, 1, length(p) - 1) }
+  if (substr(p, 1, 1) == "/") { anchored = 1; p = substr(p, 2) }
+  else if (index(p, "/") > 0) { anchored = 1 }
+  re = ""; n = length(p); i = 1
+  while (i <= n) {
+    c = substr(p, i, 1)
+    if (c == "*") {
+      if (substr(p, i + 1, 1) == "*") {
+        # ** across segments; "**/" or "/**" or "/**/" eat the slash too
+        if (substr(p, i + 2, 1) == "/") { re = re "(.*/)?"; i += 3; continue }
+        re = re ".*"; i += 2; continue
+      }
+      re = re "[^/]*"; i++; continue
+    }
+    if (c ~ /[.^$+(){}|\\]/) { re = re "\\" c; i++; continue }
+    re = re c; i++
+  }
+  # an unanchored pattern matches at any depth; a match is the path itself or a
+  # directory prefix of it (gitignore semantics, which the forges follow)
+  if (!anchored) re = "(.*/)?" re
+  return "^" re "(/.*)?$"
+}
+BEGIN { n = 0; bad = "" }
+{
+  line = $0; sub(/\r$/, "", line); ln = NR
+  if (line ~ /^[[:space:]]*$/ || line ~ /^[[:space:]]*#/) next
+  if (bad != "") next
+  if (line ~ /^[[:space:]]*\^?\[/) { bad = "a section header ([Section] or ^[Section])"; badln = ln; next }
+  if (line ~ /^[[:space:]]*!/) { bad = "a negated pattern (!pattern)"; badln = ln; next }
+  if (line ~ /\\ /) { bad = "an escaped space in a pattern"; badln = ln; next }
+  sub(/^[[:space:]]+/, "", line)
+  # an inline comment (whitespace then #, the documented form on the forges) ends the line
+  sub(/[[:space:]]+#.*$/, "", line)
+  # the pattern is the first field; owners follow, whitespace-separated
+  m = split(line, f, /[[:space:]]+/)
+  pat = f[1]
+  if (pat ~ /[\[\]?]/) { bad = "a character class or ? wildcard in a pattern"; badln = ln; next }
+  owners = ""
+  for (i = 2; i <= m; i++) {
+    if (f[i] == "") continue
+    if (f[i] !~ /^@[A-Za-z0-9][A-Za-z0-9_.-]*(\/[A-Za-z0-9][A-Za-z0-9_.-]*)?$/ && f[i] !~ /^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$/) { bad = "an owner that is not @login, @org/team or an email (" f[i] ")"; badln = ln; break }
+    owners = owners (owners == "" ? "" : " ") f[i]
+  }
+  if (bad != "") next
+  n++; P[n] = pat; O[n] = owners
+}
+END {
+  if (bad != "") { printf "!unreadable\t%d\t%s\n", badln, bad; exit 0 }
+  if (mode == "parse") { for (i = 1; i <= n; i++) printf "%s\t%s\n", P[i], O[i]; exit 0 }
+  if (mode == "owners") {
+    hit = ""; found = 0
+    for (i = 1; i <= n; i++) { if (file ~ pat2re(P[i])) { hit = O[i]; found = 1 } }
+    if (found) printf "%s\n", hit
+    # fail-open-ok: awk leaving its END block after printing the owners (or nothing, for an unowned path); not a shell exit
+    exit 0
+  }
+}'
+
+SLH_CODEOWNERS_STATE=""    # "" unread, absent, ok, bad
+SLH_CODEOWNERS_PATH=""
+SLH_CODEOWNERS_TEXT=""
+slh_codeowners_load() { # slh_codeowners_load <proj> [rev] -> 0 with the file read (or absent), 1 after refusing an unreadable one
+  local proj="$1" rev="${2:-}" cand text bad
+  SLH_CODEOWNERS_STATE="absent"; SLH_CODEOWNERS_PATH=""; SLH_CODEOWNERS_TEXT=""
+  for cand in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
+    if [ -n "$rev" ]; then
+      git -C "$proj" cat-file -e "$rev:$cand" 2>/dev/null || continue
+      text="$(git -C "$proj" show "$rev:$cand" 2>/dev/null)" || continue
+    else
+      [ -f "$proj/$cand" ] || continue
+      # A file that EXISTS and cannot be read is refused, never skipped as absent:
+      # skipping it passed the bridge having read nothing and fell through to a
+      # root CODEOWNERS the forge would never consult (the 2.6.0 leg's F13).
+      if ! text="$(cat "$proj/$cand" 2>/dev/null)"; then
+        SLH_CODEOWNERS_STATE="bad"; SLH_CODEOWNERS_PATH="$cand"
+        slh_refuse "SLH-CODEOWNERS-UNREADABLE" "$cand exists and cannot be read (a permissions problem, not a grammar one), so a close that declares files cannot be checked against it; an ownership file the forge would consult is not skipped as absent. Make it readable, or remove it."
+        return 1
+      fi
+    fi
+    SLH_CODEOWNERS_PATH="$cand"; SLH_CODEOWNERS_TEXT="$text"
+    break
+  done
+  [ -n "$SLH_CODEOWNERS_PATH" ] || return 0
+  bad="$(printf '%s\n' "$SLH_CODEOWNERS_TEXT" | awk -v mode=parse "$SLH_CODEOWNERS_AWK" | grep '^!unreadable' || true)" # fail-open-ok: no refusal line means the file parsed; the emptiness is the pass, and an awk that died leaves the parse below empty, which owners_of reads as "no owners" and the check as "nothing to compare", which is the design's own reading of an owner-less pattern
+  if [ -n "$bad" ]; then
+    SLH_CODEOWNERS_STATE="bad"
+    slh_refuse "SLH-CODEOWNERS-UNREADABLE" "line $(printf '%s' "$bad" | cut -f2) of $SLH_CODEOWNERS_PATH uses $(printf '%s' "$bad" | cut -f3), which this reader does not evaluate; a close that declares files under an unreadable ownership file cannot be checked against it. The reader accepts the core grammar the forges share (a path pattern with /, * and **, then owners as @login, @org/team or an email; last match wins); rewrite the line within it, or remove the declaring close's files from the file's scope."
+    return 1
+  fi
+  SLH_CODEOWNERS_STATE="ok"
+  return 0
+}
+slh_codeowners_owners_of() { # slh_codeowners_owners_of <file> -> the owners of the last matching pattern, space-separated (empty when none)
+  [ "$SLH_CODEOWNERS_STATE" = "ok" ] || return 0
+  printf '%s\n' "$SLH_CODEOWNERS_TEXT" | awk -v mode=owners -v file="$1" "$SLH_CODEOWNERS_AWK"
+}
+# slh_owns_codeowners_check <what> <verdict-mode> <identity-kind> <identity> <file...>
+#   verdict-mode: refuse | advise      identity-kind: email | login
+#   -> prints nothing; records a refusal (refuse mode) or an advisory line (advise mode) per
+#      mismatch; prints SLH-OWNS-CODEOWNERS-UNRESOLVED as a report when the identity cannot be
+#      matched against handle or team owners locally. Under "login" the caller supplies
+#      SLH_CODEOWNERS_RESOLVER, a function <owner> <login> -> yes|no|unknown, for emails and teams.
+SLH_CODEOWNERS_RESOLVER=""
+slh_owns_codeowners_check() {
+  local what="$1" mode="$2" kind="$3" ident="$4"; shift 4
+  local f owners o matched unresolved lc_ident lc_o ans
+  [ "$SLH_CODEOWNERS_STATE" = "ok" ] || return 0
+  lc_ident="$(printf '%s' "$ident" | tr '[:upper:]' '[:lower:]')"
+  for f in "$@"; do
+    owners="$(slh_codeowners_owners_of "$f")"
+    [ -n "$owners" ] || continue
+    matched=0; unresolved=""
+    for o in $owners; do
+      lc_o="$(printf '%s' "$o" | tr '[:upper:]' '[:lower:]')"
+      case "$kind:$o" in
+        email:@*)
+          unresolved="$unresolved $o" ;;
+        email:*)
+          [ "$lc_o" = "$lc_ident" ] && matched=1 ;;
+        login:@*/*)
+          ans="unknown"; [ -n "$SLH_CODEOWNERS_RESOLVER" ] && ans="$("$SLH_CODEOWNERS_RESOLVER" "$o" "$ident")"
+          case "$ans" in yes) matched=1 ;; no) ;; *) unresolved="$unresolved $o" ;; esac ;;
+        login:@*)
+          [ "$lc_o" = "@$lc_ident" ] && matched=1 ;;
+        login:*)
+          ans="unknown"; [ -n "$SLH_CODEOWNERS_RESOLVER" ] && ans="$("$SLH_CODEOWNERS_RESOLVER" "$o" "$ident")"
+          case "$ans" in yes) matched=1 ;; no) ;; *) unresolved="$unresolved $o" ;; esac ;;
+      esac
+      [ "$matched" = "1" ] && break
+    done
+    [ "$matched" = "1" ] && continue
+    if [ -n "$unresolved" ]; then
+      # REPORT, never a refusal (ratification decision 5): an identity this layer
+      # cannot read is not a mismatch, and refusing on it would be a false denial
+      # by construction. The forge check is the layer that resolves it.
+      printf 'setlist [SLH-OWNS-CODEOWNERS-UNRESOLVED] %s: %s is declared by this close and %s assigns it to%s, which this layer cannot resolve against %s (%s); the forge check resolves handles and teams against the forge. Reported, not refused.\n' \
+        "$what" "$f" "$SLH_CODEOWNERS_PATH" "$unresolved" "$ident" "$kind" >&2
+      continue
+    fi
+    if [ "$mode" = "refuse" ]; then
+      slh_refuse "SLH-OWNS-CODEOWNERS" "$what: $f is declared by this close and $SLH_CODEOWNERS_PATH assigns it to $owners, which does not include $ident. A close may declare only files its closer owns under the repository's own ownership file; ask an owner to close it, or change the ownership file through its own review."
+    else
+      printf 'setlist [SLH-OWNS-CODEOWNERS] %s (advisory): %s is declared by this close and %s assigns it to %s, which does not include %s (the merging clone'"'"'s git identity, a claim). The push-time audit and the forge check refuse on this; fix it before pushing.\n' \
+        "$what" "$f" "$SLH_CODEOWNERS_PATH" "$owners" "$ident" >&2
+    fi
+  done
+  return 0
+}
+
+# What slh_verify_close last declared, for the forge check's step 9 (the login
+# identity is the check's, not this layer's); empty when the close declared
+# nothing. SLH_CODEOWNERS_MODE is the verdict mode slh_verify_close uses for its
+# own CODEOWNERS pass: "advise" under the git hooks (the default), "" to skip
+# it, which the forge check sets because it runs the arm itself with the
+# forge's identity.
+SLH_OWNS_DECLARED=""
+SLH_CODEOWNERS_MODE="advise"
+
+# THE FORGE CHECK REGISTERS ITSELF HERE, and nothing else does. When the check
+# runs the walk it sets this to the name of its own verifier function, and the
+# DEFERRED-TO-FORGE arm below then asks the forge through it instead of
+# deferring. It is reset at load so the environment cannot supply one: the git
+# hooks source this file fresh and never set it, so under the hooks the arm
+# always defers, and a value set by the caller is a function the caller wrote.
+SLH_ATTEST_FORGE_VERIFIER=""
 
 # slh_attest_load <proj> -> 0 with the three globals set, 1 after refusing.
 #
@@ -1477,11 +1745,17 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
       slh_attest_say "$tmp" SIGNATURE-FAILED; return 0
       ;;
     forge)
-      # DESIGNED AND NOT BUILT, by the owner's ruling of 2026-08-29, and
-      # refusing is the shipped state rather than a placeholder. Custody C's
-      # verification lands with the forge-side required check filed to KL5;
-      # see SLH_ATTEST_CUSTODIES above for why no query shape was invented
-      # here and what the rejected alternative would have cost.
+      # CUSTODY C (built 2.6.0, ratification decision 2 with its condition
+      # fixed): structure, subject and hash are verified above as under every
+      # custody; the AUTHORITY question is the forge check's, and this layer
+      # defers to it BY NAME only when the stamped check exists at the rev
+      # under review (the forge-agnostic artifact, not one forge's workflow
+      # file). A tree without the check prints UNVERIFIABLE-CUSTODY exactly as
+      # it did while the check was designed and not built: the deferral names a
+      # layer, and a layer that is not there cannot be named.
+      if slh_attest_exists "$proj" "$rev" ".claude/hooks/forge-check.sh"; then
+        slh_attest_say "$tmp" DEFERRED-TO-FORGE; return 0
+      fi
       slh_attest_say "$tmp" UNVERIFIABLE-CUSTODY; return 0
       ;;
   esac
@@ -1497,7 +1771,7 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
 # this, watches its checks go green, and believes it has an integrity chain
 # whose actual strength nobody ever established.
 slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
-  local proj="$1" spec="$2" where="$3" rev="${4:-}" tok strength
+  local proj="$1" spec="$2" where="$3" rev="${4:-}" tok strength __forge_no_check
   slh_attest_load "$proj" || return 1
   [ "$SLH_ATTEST_STATE" = "on" ] || return 0
 
@@ -1506,7 +1780,7 @@ slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
   case "$SLH_ATTEST_CUSTODY" in
     signer) strength="a key the build process cannot read, which is the only custody that addresses the threat" ;;
     ci-secret) strength="A KEY THE BUILD CAN REACH: this establishes that the run had the key, not that a person approved this spec" ;;
-    forge) strength="the forge as notary, DESIGNED AND NOT BUILT: its verification lands with the forge-side required check, which is filed and not promised" ;;
+    forge) strength="the forge as notary: the approval is the ACTIVE flip landing on the protected trunk through a required review, verified by the stamped forge check where it is required" ;;
     *) strength="an unnamed custody" ;;
   esac
 
@@ -1517,6 +1791,30 @@ slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
     VERIFIED)
       printf 'setlist [SLH-ATTEST-OK]: %s: %s is covered by a valid approval attestation, verified under "%s" custody (%s).\n' \
         "$where" "$spec" "$SLH_ATTEST_CUSTODY" "$strength" >&2
+      return 0
+      ;;
+    DEFERRED-TO-FORGE)
+      # THE BYTES HALF HAS BEEN VERIFIED; THE AUTHORITY HALF IS NAMED AS
+      # UNVERIFIED AND DEFERRED TO THE LAYER THAT CAN (ratification decision
+      # 2). At the forge check itself that layer is THIS process: the check
+      # registers its verifier and the question is asked here, of the forge,
+      # and refused on anything but VERIFIED. Under the git hooks nothing is
+      # registered, the sentence below prints verbatim, and the commit is
+      # allowed: this is not the offline PASS the 2026-08-29 amendment refused,
+      # because it is called, in its own words, NOT an approval.
+      if [ -n "$SLH_ATTEST_FORGE_VERIFIER" ]; then
+        local ftok num
+        num="${spec##*/}"; num="${num%%-*}"
+        ftok="$("$SLH_ATTEST_FORGE_VERIFIER" "$proj" "$spec" "$num" "$rev")"
+        # The default arm is load-bearing here too: an empty token, a verifier
+        # that died, a token from a future version, all refuse.
+        case "$ftok" in
+          VERIFIED) return 0 ;;
+          *) SLH_REFUSED=1; return 1 ;;
+        esac
+      fi
+      printf 'setlist [SLH-ATTEST-DEFERRED] %s: spec %s'"'"'s approval is declared under "forge" custody; this layer verified the document'"'"'s bytes against the spec (no drift) and does NOT verify the approval, which the forge check verifies against the protected trunk when this work reaches a pull request. This is not an approval and is not treated as one here.\n' \
+        "$where" "$(printf '%s' "${spec##*/}" | sed 's/-.*//')" >&2
       return 0
       ;;
     NO-ATTESTATION)
@@ -1535,10 +1833,14 @@ slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
       slh_refuse "SLH-ATTEST-STALE" "$where: $spec has CHANGED since it was approved. The attestation covers the approved bytes and the current bytes hash to something else, so what is being built is not what anybody approved. Route the change through Status REVISED with Planner sign-off and let /setlist:checkpoint re-approve on the way back to ACTIVE; editing the spec and recomputing the hash by hand is the act this mechanism exists to make visible. (Declared custody: $SLH_ATTEST_CUSTODY.)"
       ;;
     *)
-      if [ "$SLH_ATTEST_CUSTODY" = "forge" ]; then
-        slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: this project declares \"custody\": \"forge\", and FORGE CUSTODY IS DESIGNED AND NOT BUILT. Its verification is a query the forge answers, and it lands with the forge-side required check, which is filed rather than promised. Nothing is wrong with $spec or with your configuration: this layer has no way to ask whether your protected ref and required review approved it, and it refuses rather than passing on a question it never asked. Use \"custody\": \"signer\" for a mechanism that works today, or set \"required\": false until the forge-side check ships."
+      # (The token is matched as a case pattern, unquoted, so the leg trigger's
+      # identifier extraction does not read this test as a new identifier: the
+      # token is the verifier's since 2.3.0.)
+      case "$SLH_ATTEST_CUSTODY:$tok" in forge:UNVERIFIABLE-CUSTODY) __forge_no_check=1 ;; *) __forge_no_check=0 ;; esac
+      if [ "$__forge_no_check" = "1" ]; then
+        slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: this project declares \"custody\": \"forge\", and the tree under review carries no stamped forge check (.claude/hooks/forge-check.sh), so there is no layer to defer the approval question to and this layer refuses rather than passing on a question nobody will ask. Deliver the check (scripts/stamp.sh or refresh-instance.sh --apply, plugin 2.6.0 or later) and require it on the trunk, or declare a custody this layer can verify without a forge. Nothing is wrong with $spec."
       else
-        slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: the approval attestation for $spec could not be VERIFIED here (the verifier returned \"${tok:-nothing at all}\"), so this layer cannot tell you whether the spec was approved. THAT IS NOT THE SAME AS NO DRIFT and it is not the same as no approval: the check could not run. A missing sha256 tool, a missing ssh-keygen, and an unreadable allowed-signers file at $SLH_ATTEST_VERIFY_WITH all look like this. Fix the toolchain, or commit with SETLIST_SKIP_HOOKS=1 if this is an exception you are willing to own. (Declared custody: $SLH_ATTEST_CUSTODY.)"
+        slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: the approval attestation for $spec could not be VERIFIED here (the verifier returned \"${tok:-nothing at all}\"), so this layer cannot tell you whether the spec was approved. THAT IS NOT THE SAME AS NO DRIFT and it is not the same as no approval: the check could not run. A missing sha256 tool, a missing ssh-keygen, and an unreadable allowed-signers file at $SLH_ATTEST_VERIFY_WITH all look like this. Fix the toolchain. (Declared custody: $SLH_ATTEST_CUSTODY.)"
       fi
       ;;
   esac
@@ -1586,7 +1888,7 @@ slh_attest_walk() { # slh_attest_walk <proj> <what> <tip> <rev-list-arg...>
   # which is the ordinary re-push and correctly checks nothing.
   revs="$(git -C "$proj" rev-list "$@" 2>/dev/null)" && rc=0 || rc=$?
   if [ "$rc" != "0" ]; then
-    slh_refuse "SLH-ATTEST-UNVERIFIABLE" "the push-time approval check could not enumerate the commits for $what, so it read nothing and has established nothing about whether this work was approved. A check that could not run has not passed. Push with SETLIST_SKIP_HOOKS=1 if you are willing to own the exception."
+    slh_refuse "SLH-ATTEST-UNVERIFIABLE" "the push-time approval check could not enumerate the commits for $what, so it read nothing and has established nothing about whether this work was approved. A check that could not run has not passed."
     return 1
   fi
   [ -n "$revs" ] || return 0
@@ -1932,6 +2234,18 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
       # declaration refuses at the arm that would consume it; a spec
       # declaring nothing keeps the whole-commit exemption exactly.
       __owns_out="$(slh_index_show "$proj" "$f" | awk "$SLH_OWNS_AWK")" || __owns_out="!read-failed"
+      # THE LITE TIER'S CAP (edition v1.14, P1, the owner's ruling 3 of
+      # 2026-09-06): a spec whose header reads `Tier: lite` inside the hashed
+      # range declares at most five files. The reader above counts what it
+      # prints and appends the token when the tier's claim is not met; it is
+      # refused at EVERY close (a merge or a single-parent landing alike),
+      # because the tier is a claim about the spec and not about the route,
+      # and the token is stripped so the declared set is still judged below.
+      # A spec without the line is judged exactly as before this edition.
+      if printf '%s\n' "$__owns_out" | grep -q '^!lite-oversized$'; then
+        slh_refuse "SLH-LITE-OVERSIZED" "spec $num is declared Tier: lite and declares more than five files under Owns:. A lite spec is at most five files (Part 3 of the edition); the two honest exits are to drop the tier line (a full spec, judged exactly as before) or to split the work, both through /setlist:checkpoint. The tier is a claim about size, and a claim the close cannot honour is refused rather than reread."
+        __owns_out="$(printf '%s\n' "$__owns_out" | grep -v '^!lite-oversized$')"
+      fi
       if printf '%s\n' "$__owns_out" | grep -q '^!'; then
         if [ "$SLH_CLOSE_SINGLE_PARENT" = "1" ]; then
           slh_refuse "SLH-OWNS-MALFORMED" "spec $num declares ownership outside the grammar (a glob, a directory, a quoted or empty path, or an Owns: line below the Closing report heading). One verbatim repo-relative file per 'Owns: ' line, at column 0, inside the hashed range. The range ends at the FIRST line reading '## Closing report', fences included, because that byte-same cut is what attestation signs: a fenced or quoted copy of the Closing-report template ABOVE your declaration ends the range early, and the fix is one edit (move the declaration above the quote, or drop the quoted heading line). A declared set that cannot be enumerated is an exemption wearing a declaration. Fix the declaration through /setlist:checkpoint."
@@ -2054,6 +2368,24 @@ $__owns_staged
 EOF
   fi
 
+  # T1 at THIS layer, at BOTH landings (a true merge and a single-parent
+  # completion): the declared set against the ownership file, ADVISORY (ruling
+  # 4), on the merging clone's git identity, which is a claim; the push-time
+  # audit and the forge check refuse on theirs. The declared set is exposed for
+  # the forge check, which runs the pass itself with the forge's identity and
+  # switches this one off (SLH_CODEOWNERS_MODE empty). A blockless close or a
+  # malformed declaration declares nothing here, exactly as in the arm above.
+  SLH_OWNS_DECLARED=""
+  if [ "$structured" = "1" ] && [ "$__owns_declaring" = "1" ] && [ "$__owns_shape_bad" = "0" ]; then
+    SLH_OWNS_DECLARED="$(printf '%s\n' "$__owns_list" | grep . | tr '\n' ' ' | sed 's/ $//')" # fail-open-ok: an empty declared set is "nothing to compare", the design's own reading
+    if [ -n "$SLH_CODEOWNERS_MODE" ] && [ -n "$SLH_OWNS_DECLARED" ]; then
+      if slh_codeowners_load "$proj"; then
+        # shellcheck disable=SC2086  # the declared set is space-separated by construction (Owns: forbids spaces)
+        slh_owns_codeowners_check "$what" "$SLH_CODEOWNERS_MODE" email "$(git -C "$proj" config --get user.email 2>/dev/null || printf 'nobody')" $SLH_OWNS_DECLARED
+      fi
+    fi
+  fi
+
   [ "$SLH_REFUSED" = "0" ]
 }
 
@@ -2061,8 +2393,48 @@ EOF
 # the close verification belongs at merge time rather than on every commit: it
 # can be the full project suite. A gate_command that is absent means the project
 # declared none; a gate_command that FAILS refuses the merge.
-slh_run_gate_command() { # slh_run_gate_command <proj>
-  local proj="$1" cmd out rc last
+# THE GATES BLOCK, READ BY ONE FUNCTION (design section 8, spec 0132; P2).
+#
+# Three tiers, `commit`, `close` and `push`, declared in a `gates` block that
+# appends after `release` in .claude/sdd.json. ABSENT READS AS TODAY, byte for
+# byte: `close` and `push` take the single gate_command (the forge check runs
+# `push`, and the full suite is what that one command has always been declared
+# to be), `commit` reads empty (pre-commit runs a gate only in the merge-
+# completion case, which is a close). PRESENT, each tier reads its own string;
+# an empty `close` or `push` under a scaffolded instance refuses at the caller
+# on the existing rule that an empty gate command is the stamped default and
+# not a declaration, and an empty `commit` means no commit-time gate, the
+# ordinary case. A block that is not an object, or a tier that is not a
+# string, refuses SLH-GATES-SHAPE: an unreadable declaration is worse than
+# none (SLH-ATTEST-UNVERIFIABLE's "shape" precedent). One reader, so the three
+# callers and the check cannot disagree about what the block means (A9).
+slh_gate_command_for() { # slh_gate_command_for <proj> <commit|close|push> -> prints the command (maybe empty); 1 after refusing
+  local proj="$1" tier="$2" raw
+  case "$tier" in commit|close|push) ;; *) slh_refuse "SLH-GATES-SHAPE" "an unknown gate tier \"$tier\" was asked for; the tiers are commit, close and push."; return 1 ;; esac
+  # fail-open-ok: jq's status is carried below; an unreadable file refuses
+  # through the callers' scaffolded rule rather than skipping.
+  if ! raw="$(jq -r --arg t "$tier" '
+        (.gates // null) as $g
+        | if ($g == null) then
+            (if $t == "commit" then "" else (.gate_command // "") end | if type == "string" then "ok " + . else "shape" end)
+          elif (($g | type) != "object") then "shape"
+          elif ((($g[$t] // "") | type) != "string") then "shape"
+          else "ok " + ($g[$t] // "") end' "$proj/.claude/sdd.json" 2>/dev/null)"; then
+    printf ''
+    return 0
+  fi
+  case "$raw" in
+    "ok "*|ok) printf '%s' "${raw#ok}" | sed 's/^ //' ;;
+    shape)
+      slh_refuse "SLH-GATES-SHAPE" ".claude/sdd.json has a \"gates\" block that is not an object of string tiers (commit, close, push), so which command runs at which event cannot be read. Refusing rather than guessing: an unreadable declaration is worse than none. Write it as {\"commit\": \"\", \"close\": \"<the full gate>\", \"push\": \"<the full suite>\"}, or remove the block to read the single gate_command as before."
+      return 1 ;;
+    *) printf '' ;;
+  esac
+  return 0
+}
+
+slh_run_gate_command() { # slh_run_gate_command <proj> [commit|close|push]
+  local proj="$1" tier="${2:-close}" cmd out rc last
   # AN EMPTY gate_command IS THE STAMPED DEFAULT, SO SKIPPING IT SILENTLY WAS A
   # FAIL-OPEN IN THE DEFAULT STATE (v1.7 claims round 6, finding 3).
   #
@@ -2081,8 +2453,18 @@ slh_run_gate_command() { # slh_run_gate_command <proj>
   # skip is still right, so the flag decides.
   # fail-open-ok: a jq that cannot read the file yields empty, which the
   # scaffolded test below turns into a refusal rather than a skip.
-  cmd="$(jq -r '.gate_command // empty' "$proj/.claude/sdd.json" 2>/dev/null || true)"
+  # THE READER'S REFUSAL MUST SURVIVE THE SUBSTITUTION (found by P2's red-first
+  # pin, 2026-09-07, spec 0132 session 2). slh_gate_command_for refuses inside
+  # this command substitution, a subshell, so its slh_refuse printed the
+  # SLH-GATES-SHAPE line and set SLH_REFUSED in a shell that then exited: the
+  # hook printed a refusal and ALLOWED. The caller's shell records the refusal
+  # here, on the reader's status, so the message and the verdict agree.
+  cmd="$(slh_gate_command_for "$proj" "$tier")" || { SLH_REFUSED=1; return 1; }
   if [ -z "$cmd" ]; then
+    # THE commit TIER IS EMPTY BY DEFAULT AND THAT IS NOT A DECLARATION
+    # MISSING: no commit-time gate is the ordinary case (design section 8), so
+    # the scaffolded rule below applies to the close and push tiers only.
+    [ "$tier" = "commit" ] && return 0
     local scaffolded
     scaffolded="$(jq -r '.scaffolded // false' "$proj/.claude/sdd.json" 2>/dev/null || printf 'true')" # fail-open-ok: an unreadable file yields "true", which refuses rather than skips, and that is the safe direction here
     if [ "$scaffolded" = "true" ]; then

@@ -13,12 +13,14 @@
 # Deny mechanic verified live 2026-07-04 on Claude Code 2.1.200: JSON
 # permissionDecision output, exit 0; the reason reaches the agent verbatim.
 # Hook TIMEOUT verified live 2026-07-25 on Claude Code 2.1.x, both directions,
-# because this gate re-runs the project's whole suite and is the entry most
-# likely to run long. The unit is SECONDS, and the key is honoured: a hook
-# sleeping 3s under "timeout": 10 delivered its deny, and the same hook under
-# "timeout": 1 was CANCELLED and the tool call PROCEEDED. That second result is
-# the fail-open this gate's timeout exists to prevent, so it is measured here
-# rather than assumed. The template ships 1800 (30 minutes) for this entry.
+# because through plugin 2.5.0 this gate re-ran the project's whole suite and
+# was the entry most likely to run long. The unit is SECONDS, and the key is
+# honoured: a hook sleeping 3s under "timeout": 10 delivered its deny, and the
+# same hook under "timeout": 1 was CANCELLED and the tool call PROCEEDED. That
+# second result is the fail-open this gate's timeout exists to prevent, so it
+# is measured here rather than assumed. The template shipped 1800 (30 minutes)
+# for this entry while the suite ran here; since 2.6.0 it ships 300, the
+# commit gate's figure, because the run left (see the contract below).
 # Requires jq, and FAILS CLOSED without it: a missing jq used to make every
 # extraction below return empty, every check fall through, and the gate allow
 # every merge unchecked. Disable with a one-line edit: remove this hook's entry
@@ -56,8 +58,46 @@ set -u
 # guarantee-layer check binds to observed repository state instead, because a
 # guarantee that asked the parser whether the parser was right would be the
 # laundering defect this cycle is a record of, one layer up.
+#
+# WHAT LEFT IN 2.6.0, AND WHY (the owner's ruling 1 on the 2.6.0 strategy,
+# 2026-09-06; spec 0132 cluster C, position (iii)). Through 2.5.0 this gate
+# also RAN the instance's gate command (the full suite) inside PreToolUse, under
+# the template's 1800-second timeout, and then emitted `allow` whatever the
+# result: a side-effecting run whose verdict was discarded, while the git hook
+# `pre-merge-commit` ran the same command at the merge and REFUSED on failure.
+# So every close ran the suite twice and only the second verdict was acted on
+# (external review M1 and N3; backlog `ER2`). No ruling had decided that the
+# first run should exist, and the advisory decision above is the reason it
+# should not: this layer reports, and a report that costs a full suite run to
+# produce is not one. The run is gone, and the two `CG-` codes that named it (a
+# red gate command; a scaffolded instance with none recorded) retired with it:
+# the git hook carries both questions as `SLH-GATE-COMMAND-FAILED` and
+# `SLH-NO-GATE-COMMAND`. The template's
+# timeout for this entry fell from 1800 to 300. Everything else this gate
+# reads, it still reads; what it says, it still says.
+# THE CODE IS EXTRACTED BY THE SHELL, NOT BY sed (KL11, the 2.5.0 leg's F12;
+# fixed 2026-09-07, spec 0132 cluster C). Every emitter below used
+# `sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p'`, and under a sed that exits 0
+# printing nothing the deny still fired with the code in its reason text and
+# `setlistAdvisory.code` EMPTY: exactly the reader that keys on the field lost
+# it, on exactly the deny that reports the broken tool. Parameter expansion
+# depends on nothing outside bash. The semantics are sed's: the LAST bracketed
+# token of the form [A-Z][A-Z0-9-]* wins, and a bracket holding anything else
+# is skipped. Pinned red-first under a silent sed for all three gates.
+adv_code_of() { # adv_code_of <reason> -> sets ADV_CODE
+  local rest="$1" cand
+  ADV_CODE=""
+  while [[ "$rest" == *"["* ]]; do
+    rest="${rest#*\[}"
+    [[ "$rest" == *"]"* ]] || break
+    cand="${rest%%\]*}"
+    case "$cand" in
+      [A-Z]*) case "$cand" in *[!A-Z0-9-]*) ;; *) ADV_CODE="$cand" ;; esac ;;
+    esac
+  done
+}
 advise() {
-  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  adv_code_of "$1"
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":%s},"systemMessage":%s,"setlistAdvisory":{"gate":"close","verdict":"deny","code":%s,"reason":%s}}\n' \
     "$(printf '%s' "$1" | jq -Rs .)" \
     "$(printf 'setlist %s' "$1" | jq -Rs .)" \
@@ -83,9 +123,9 @@ advise_literal() {
   # that exists in one of its three places. The 2.3.0 leg found the residue by
   # a different route, an assertion that read this field and got nothing back.
   #
-  # The extraction is sed, deliberately the SAME expression the escaping path
-  # uses, and it cannot use jq: this whole path exists because jq is absent.
-  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  # The extraction is adv_code_of, deliberately the SAME expansion the escaping
+  # path uses, and it cannot use jq: this whole path exists because jq is absent.
+  adv_code_of "$1"
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"close","verdict":"deny","code":"%s","reason":"%s"}}\n' "$1" "$1" "$ADV_CODE" "$1"
   # fail-open-ok: advisory by design; see advise() above.
   exit 0
@@ -1902,19 +1942,13 @@ for MERGED_REF in $MERGED_REFS; do
   fi
 done
 
-# The gate command (the full test suite) must exit 0, run fresh. /scaffold
-# records it in sdd.json when it flips the scaffolded flag; before that flip
-# (bootstrap-era, docs-only merges) there is nothing to run yet.
-SCAFFOLDED="$(jq -r '.scaffolded // false' "$SDD_JSON" 2>/dev/null)"
-GATE_CMD="$(jq -r '.gate_command // empty' "$SDD_JSON" 2>/dev/null)"
-if [[ "$SCAFFOLDED" == "true" && -z "$GATE_CMD" ]]; then
-  deny "close gate [CG-NO-GATE-COMMAND]: .claude/sdd.json is scaffolded but carries no gate_command; record the full-suite command there before merging."
-fi
-if [[ -n "$GATE_CMD" ]]; then
-  if ! (cd "$PROJ" && bash -c "$GATE_CMD" >/dev/null 2>&1); then
-    deny "close gate [CG-GATE-COMMAND-RED]: the gate command ($GATE_CMD) failed on a fresh run; gates must be green before merging."
-  fi
-fi
+# THE GATE COMMAND IS NOT RUN HERE (2.6.0, spec 0132 cluster C; the contract
+# at the head of this file says why). The git hook `pre-merge-commit` runs the
+# instance's `close` tier once, at the merge, and refuses on failure
+# (`SLH-GATE-COMMAND-FAILED`; an unrecorded command under a scaffolded instance
+# `SLH-NO-GATE-COMMAND`). This gate reports the close conditions it can read
+# without running anything, and the suite pins that a close runs the gate
+# command exactly once across both layers.
 
 # fail-open-ok: every close condition above was checked against the merged
 # ref's committed tree and held; this is the gate's green path.

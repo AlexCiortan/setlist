@@ -50,8 +50,29 @@ set -u
 # guarantee-layer check binds to observed repository state instead, because a
 # guarantee that asked the parser whether the parser was right would be the
 # laundering defect this cycle is a record of, one layer up.
+# THE CODE IS EXTRACTED BY THE SHELL, NOT BY sed (KL11, the 2.5.0 leg's F12;
+# fixed 2026-09-07, spec 0132 cluster C). Every emitter below used
+# `sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p'`, and under a sed that exits 0
+# printing nothing the deny still fired with the code in its reason text and
+# `setlistAdvisory.code` EMPTY: exactly the reader that keys on the field lost
+# it, on exactly the deny that reports the broken tool. Parameter expansion
+# depends on nothing outside bash. The semantics are sed's: the LAST bracketed
+# token of the form [A-Z][A-Z0-9-]* wins, and a bracket holding anything else
+# is skipped. Pinned red-first under a silent sed for all three gates.
+adv_code_of() { # adv_code_of <reason> -> sets ADV_CODE
+  local rest="$1" cand
+  ADV_CODE=""
+  while [[ "$rest" == *"["* ]]; do
+    rest="${rest#*\[}"
+    [[ "$rest" == *"]"* ]] || break
+    cand="${rest%%\]*}"
+    case "$cand" in
+      [A-Z]*) case "$cand" in *[!A-Z0-9-]*) ;; *) ADV_CODE="$cand" ;; esac ;;
+    esac
+  done
+}
 advise() {
-  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  adv_code_of "$1"
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":%s},"systemMessage":%s,"setlistAdvisory":{"gate":"scope","verdict":"deny","code":%s,"reason":%s}}\n' \
     "$(printf '%s' "$1" | jq -Rs .)" \
     "$(printf 'setlist %s' "$1" | jq -Rs .)" \
@@ -80,10 +101,10 @@ deny() { advise "$1"; }
 # note. The assertion added with this fix reads THIS gate, so the record and the
 # bytes now agree in all three.
 #
-# The extraction is sed, deliberately the SAME expression the escaping path
-# uses, and it cannot use jq: this whole path exists because jq is absent.
+# The extraction is adv_code_of, deliberately the SAME expansion the escaping
+# path uses, and it cannot use jq: this whole path exists because jq is absent.
 advise_literal() {
-  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  adv_code_of "$1"
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"scope","verdict":"deny","code":"%s","reason":"%s"}}\n' "$1" "$1" "$ADV_CODE" "$1"
   # fail-open-ok: advisory by design; see advise() above.
   exit 0

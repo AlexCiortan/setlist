@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.13 (the toolchain edition)**
+**Edition v1.14 (the team edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -289,11 +289,12 @@ Two harness realities the loop must bind to explicitly:
 ### Enforcement
 
 Convention first: the role boundary above plus the golden rules in CLAUDE.md, backed by the
-permission rules in `settings.json` (Part 3). As of v1.6, four hooks are stamped into
+permission rules in `settings.json` (Part 3). As of v1.14, five hooks are stamped into
 every instance (Part 6): three PreToolUse gates (the scope hook, the commit gate, and the
 close gate), each enforcing a grep-decidable predicate whose drift the field observed
-under prompting alone, and one SessionStart re-grounding hook that injects the read-budget
-pointer instead of trusting every session to remember it. The rule for anything further is
+under prompting alone, one SessionStart re-grounding hook that injects the read-budget
+pointer instead of trusting every session to remember it, and one Stop hook that refuses to
+end a turn while a spec or `specs/STATUS.md` change sits unstaged, once per turn. The rule for anything further is
 unchanged: add a hook
 only after observing the drift it prevents, never preemptively, and never hook a judgment
 gate. **The status file is the baton passed between the two roles.**
@@ -318,7 +319,8 @@ project-root/
 ├── .claude/                       # Claude Code configuration, part of the framework
 │   ├── settings.json              # model + permission rules + hook wiring (below)
 │   ├── sdd.json                   # instance config read by the hooks and /setlist:checkpoint:
-│   │                              #   role paths, gate command, scaffolded flag
+│   │                              #   role paths, gate command, the gates block (v1.14),
+│   │                              #   scaffolded flag
 │   ├── status.json                # THE STATUS RECORD (v1.12): the machine inventory the
 │   │                              #   gates read; /setlist:checkpoint is its ONE writer
 │   ├── skills/
@@ -327,8 +329,15 @@ project-root/
 │   │                              #   (checkpoint and validate ship as plugin commands:
 │   │                              #    /setlist:checkpoint v1.5, /setlist:validate v1.6)
 │   ├── agents/                    # optional: QA verifier subagent (Part 5 QA loop)
-│   └── hooks/                     # the four stamped hooks (Part 6): three gates
-│                                  #   plus session re-grounding, enabled
+│   └── hooks/                     # the five stamped hooks (Part 6): three gates, session
+│                                  #   re-grounding, the Stop hook (v1.14), enabled; beside
+│                                  #   them the trunk audit and the forge check (v1.14)
+│
+├── .github/                       # the team edition's forge side (v1.14, Part 6)
+│   ├── workflows/setlist-forge-check.yml   # runs the stamped forge check on every pull
+│   │                              #   request; require it on the trunk as "setlist forge check"
+│   └── CODEOWNERS                 # the enforcement layer is a reviewed change: .githooks/,
+│                                  #   .claude/, specs/attest/ and .github/ under one owner slot
 │
 ├── steering/                      # the slow-changing "constitution", rarely edited
 │   ├── product.md                 # what we ARE and are NOT building; scope + legal posture
@@ -380,7 +389,8 @@ convention only:
   "permissions": {
     "deny": [
       "Read(.env)",
-      "Read(.env.*)"
+      "Read(.env.*)",
+      "Bash(cat .env*)"
     ],
     "ask": [
       "Bash(git push*)",
@@ -394,6 +404,13 @@ convention only:
 
 Adapt the exact rule syntax to the current Claude Code version during bootstrap; the intent
 is fixed: secrets are never read, pushing always asks, destructive operations always ask.
+**A deny list is a spelling list (v1.14).** The two `Read` rules stop the Read tool; the
+`Bash(cat .env*)` rule stops one Bash spelling and nothing else, since `less`, `head`, a
+`$(<.env)` expansion, a `source` or a `grep` read the same file and are not listed, and the
+scope hook watches the file-writing tools, not Bash. The stamped template says so in a
+`_comment` key inside the `permissions` block, which is the one place the harness tolerates
+a note (measured: a `_comment` key leaves every rule in force; a `//` comment line makes the
+file unreadable and silently drops every rule in it, so never add one).
 
 **The fallback chain.** `fallbackModel` names up to three models tried in order when the
 primary is overloaded or unavailable, and the harness shows a notice when a turn degrades.
@@ -407,12 +424,38 @@ harness routing around an outage, and a degraded planning turn is worth a journa
 escalation patterns stay readable.
 Since v1.5 the stamp emits this file complete with a `hooks` block wiring the stamped
 hooks (scope hook on the file-writing tools, commit gate and close gate on Bash, all
-PreToolUse, and, since v1.6, the re-grounding hook on SessionStart), each entry carrying
+PreToolUse, since v1.6 the re-grounding hook on SessionStart, and since v1.14 the Stop hook
+on the Stop event, no matcher), each entry carrying
 an explicit `timeout` because a hook the harness cancels is a gate that did not run; the
 wiring is never hand-maintained, and the template is the authority on the exact matcher
 set. Next to it sits `.claude/sdd.json`, the instance config
 the hooks and `/setlist:checkpoint` read: the src and tests role paths, the gate command
-(recorded by `/scaffold`), and the `scaffolded` flag that arms the scope hook.
+(recorded by `/scaffold`), the `gates` block (below), and the `scaffolded` flag that arms
+the scope hook.
+
+**The `gates` block: three tiers, and who runs which (new in v1.14).** One gate command
+was one answer to three questions asked at different prices. The block names a command per
+tier, each a string, empty meaning "nothing at this tier":
+
+```json
+"gates": {
+  "commit": "",
+  "close": "npm test",
+  "push": "npm test"
+}
+```
+
+`commit` runs in `pre-commit` on EVERY commit, and is empty by default because a full
+suite on every commit is the cost that teaches people to reach for the escape; `close`
+runs once at a spec's landing (the merge hook, or `pre-commit` completing a squash), where
+the full suite belongs; `push` runs in the forge check against the merge a pull request
+would make. An instance stamped before the block behaves byte for byte as it did: the one
+reader in the hook library treats an absent block as the single `gate_command` at `close`
+and `push` and nothing at `commit`, and `/setlist:upgrade`'s refresh writes exactly that
+block on an instance that lacks it, so no verdict changes on the day of the upgrade. A block
+that is not an object of three strings refuses (`SLH-GATES-SHAPE`) rather than being guessed
+at, and a scaffolded instance whose `close` and `push` are both empty refuses every close,
+exactly as an empty `gate_command` always has: `/scaffold` records the tiers beside it.
 
 **The `attestation` block (new in v1.11), and OFF is the default.** A project that wants
 the headless build integrity chain of Part 6 declares it:
@@ -435,8 +478,10 @@ which is the whole of what makes this more than a signature check; Part 6 says w
 
 `custody` takes `signer` (a key the approver holds and the build process cannot read),
 `ci-secret` (a key the build CAN reach, permitted and self-described), or `forge` (the forge
-as notary, **designed and not built**: its verification is a query the forge answers and it
-lands with the forge-side required check, so declaring it today refuses and says so).
+as notary, **built in v1.14**: there is no key, the approval is the ACTIVE flip landing on
+the protected trunk through a required review, and the stamped forge check verifies it as a
+required status check while the local hooks defer to that check by name; Part 6 says what
+the verification establishes and what it does not).
 
 **The transcript-secrets rule.** The permission rules stop the agent from reading secrets;
 they do nothing about secrets flowing INTO the conversation. A secret pasted into a chat
@@ -510,6 +555,23 @@ messages and cross-references always carry the prefix that disambiguates them: `
   `structure.md` (Part 4) ride spec closes without an ADR.
 - **`specs/` is the work queue**: fast-changing, one file added per feature.
 - **`STATUS.md` is the seam between them**, and it is *bounded by design* (Part 4).
+
+### The lite tier (new in v1.14)
+
+A spec is either full or **lite**, and the tier is one header line: `Tier: lite` at column
+0, inside the hashed range, exactly so. Absence, or any other value, is a full spec, judged
+exactly as every spec was before this edition. A lite spec is a change small enough that its
+paperwork should be small too, and the size is stated once, here, where an instance's shape
+is fixed: **at most five files under `Owns:`, and no role-path file outside them.** The
+threshold is pinned by the suite rather than left to judgment: a lite spec that declares
+more than five files is refused at the close by the ownership reader, under
+`SLH-LITE-OVERSIZED` (Part 6), at every layer that reads declarations (the per-merge hook,
+the landing commit, the push-time audit on either route, the forge check), with the two
+honest exits named: drop the tier line and close as a full spec, or split the work. "No
+role-path file outside them" is the coverage question the single-parent close arm already
+asks of every declaring spec; the tier adds the cap and nothing else. The cap is the tier's,
+not the declaration's: a full spec declares as many files as it owns. Part 5 says what a
+lite spec drops and what it keeps; Appendix C carries the shape.
 
 ---
 
@@ -741,6 +803,22 @@ file:
   dependencies. Each row can be promoted to its own spec later. This beats writing DRAFT
   specs for everything: DRAFT proliferation creates the illusion of plan.
 - **(At close) Closing report:** see lifecycle below.
+
+**The lite tier (new in v1.14).** Not every change earns the full skeleton, and a template
+that costs more than the change invites the skip that costs the record. A spec declared
+`Tier: lite` in its header keeps the parts the gates read and drops the rest: the header
+(the tier line beside the other fields; `Owns:` written by checkpoint as ever, at most five
+files, Part 3), a Goal, a Scope with its out-of-scope list, ONE acceptance criterion (plus
+the human-acceptance item where the work is experience-critical), the Gates block unchanged
+(the full suite is the full suite whatever the spec's size), and a Closing report whose QA
+verdict block is one line and whose diagram field is answered exactly as a full spec answers
+it. The v1.7 clauses are deleted rather than left unanswered. What a lite spec does not get
+is a lighter guarantee: the same hooks read the same record, checkpoint writes the same
+close facts, and the only mechanism the tier adds is the cap, refused at the close as
+`SLH-LITE-OVERSIZED`. A spec that outgrows five files drops the tier line and continues as a
+full spec, or splits (the split rule, above); it never argues with the cap. Checkpoint drafts
+the Closing report from the record at the close in either tier (Part 6), verdicts left to
+the human, so the lite tier's saving is authoring time and not evidence.
 
 **Strictness scales with who reviews** (stated once, applied everywhere): if the human
 writes code, specs can leave reasonable discretion. If the human only reviews, specs must be
@@ -1405,11 +1483,21 @@ means they also read content that arrived from somewhere else.
   not implement is worse than one that admits the gap, because the reader spends their time
   looking for the setting.
 
-  Until the pathspec ships, the honest position is that there is no procedure that works end to end. Committing the foreign material with
-  `SETLIST_SKIP_HOOKS=1` exempts the COMMIT and not the PUSH: `pre-push` does not read that variable, so the push is
-  refused on the same content. Keep foreign material out of the scanned paths, or accept that its branch needs
-  `--no-verify` on the push, which is a decision to own rather than a procedure this edition endorses (v1.7 claims
-  audit).
+  The pathspec shipped in v1.10 (plugin 2.2.0) as the `scan_exclusions` list below, and the
+  procedure that works end to end is that one: declare the paths, and both scans skip them
+  at the commit layer and the push layer alike, announcing each skip. **Corrected in v1.14
+  (dated 2026-09-07):** from v1.7 through v1.13 this paragraph went on saying that no
+  procedure existed and that committing the foreign material with `SETLIST_SKIP_HOOKS=1`
+  exempted the commit and not the push because `pre-push` did not read the variable. Both
+  halves were stale, the second in the unsafe direction: `pre-push` has honoured that
+  variable as its whole-hook escape since plugin 2.2.0, skipping the trunk audit and the
+  content scan both, so a reader carrying it for a noisy commit hook was told it was inert
+  at push when it was not. The public README's bullet was corrected at 2.5.0; this paragraph
+  was not, and the comparator now reads the changelog's correction paragraphs against this
+  body so the next one cannot stand. The escape remains a decision to own, not a procedure
+  this edition endorses, and since v1.14 no refusal names it: the escape is documented here,
+  in the public README and in the hooks' own headers, never in the message a refused
+  command prints.
 - **Name the scanner honestly.** A secret scan that matches token-shaped strings is a
   token-shape scan. Calling it a secret scan in a report implies a guarantee it does not
   make, and the gap between the name and the mechanism is where a false sense of coverage
@@ -1448,7 +1536,7 @@ skill of their own (upgrading repos remove them; the Changelog is the delta list
   exactly one framework edition file is present, STATUS.md has its bounded sections AND
   passes row discipline (inventory notes and chore archive lines are single lines; no
   resolved items linger under Open questions), structure.md has a diagram, `.gitignore`
-  does not exclude `.claude/`, the four stamped hooks are present and wired (a disabled
+  does not exclude `.claude/`, the five stamped hooks are present and wired (a disabled
   hook is a finding, reported with the settings line that would re-enable it),
   `.claude/sdd.json` parses and names the role paths and, once scaffolded, a gate
   command, and no phase-2 slot marker survives anywhere in the instance. Reports
@@ -1612,7 +1700,8 @@ is maintained rather than complete, one of its entries was introduced by the fix
 the checks that once refused two of them were removed on 2026-08-07 because they could not tell a crafted merge
 apart from `git pull` on a shared trunk. Those routes are open and documented rather than defended.
 A boundary that must hold against deliberate evasion belongs on the forge, in branch protection and required
-checks, where the committer does not control the enforcement point.
+checks, where the committer does not control the enforcement point, which Setlist now stamps as
+`setlist forge check` (v1.14, below).
 
 **"Where the hooks run" is a real condition and not a formality, and v1.7's own hostile
 legs are what narrowed this paragraph.** A git hook fires only when `core.hooksPath` points
@@ -1666,9 +1755,9 @@ not in fact warn the agent today.
 What that leaves is honest and still useful. The in-session feedback surface is the git hooks'
 refusal messages, which arrive as ordinary command output at the moment of the attempt, and
 which is where the guarantee lives. The advisory verdict stays machine-readable for tooling,
-CI and the suite. The gap is filed upstream and re-checked every release by
-`dogfood/advisory-visibility-probe.sh`; if the harness begins rendering reasons on allow, the
-warning value returns with no decision to re-take.
+CI and the suite. The gap is filed upstream and re-checked at every release gate by the
+maintainer's probe, run in the source repository; if the harness begins rendering reasons on
+allow, the warning value returns with no decision to re-take.
 
 The parsers and their test corpus are FROZEN together from that date. A newly discovered
 spelling they read wrongly is a documented limitation, not a fix: the review that priced this
@@ -1693,6 +1782,63 @@ which is why the stamp sets **`merge.ff = false`** alongside `core.hooksPath`: w
 `git merge spec/0001-x` walks unreviewed work onto the trunk past an otherwise airtight
 boundary.
 
+### The forge check: the layer that survives `--no-verify` (new in v1.14)
+
+Every hole in the list below that bypasses a git hook shares one shape: the committer
+controls the clone the hook runs in. The forge check is the same predicates run where the
+committer does not. It is stamped beside the trunk audit as `.claude/hooks/forge-check.sh`,
+and a stamped workflow (`.github/workflows/setlist-forge-check.yml`, no mechanism byte in
+it) runs it on every pull request as the status check named **`setlist forge check`**. A
+pull request has no trunk history, only a base, a head and a merge the forge has not made,
+so the check MAKES that merge in a scratch clone of the checkout and asks it, in order, what
+the hooks ask: the toolchain and a full checkout; that the head is an instance and the base
+the recorded trunk (a pull request against another base passes with the words "not a trunk
+pull request; nothing to verify", the one pass on nothing, said out loud); the scratch merge
+under a fixed identity; the close verification over the merge index; the attestation walk
+over the range; the content scan; the `push` gate tier in the merged worktree; the merge
+committed and the trunk audit over it; the forge questions; then ONE token on stdout. It
+reads the checkout's own stamped bytes and fetches nothing, so it verifies what `pre-push`
+verifies and nothing more, and a check that died prints nothing, which the workflow refuses.
+
+**It governs the merge button only where the trunk requires it.** Protect the trunk, require
+a pull request with one approving review and the check by its name, and the forge's merge
+button then enforces what the local gate would have. What the check cannot do is require
+itself: on a trunk that does not list it, it has a report, not a boundary, and it says so.
+The forge questions are reports under `signer`, `ci-secret` and no custody (an unprotected
+trunk, no review required, this check not required, a repository that allows rebase merges
+where a ruleset for the trunk does not forbid them) and the verdict rests on the predicates
+above; under `forge` custody they are the verification itself, below. The trunk's protection
+is read from both of the forge's mechanisms, rulesets and classic branch protection, as the
+union the forge enforces; a forge that does not answer, may not be read, or is rate limiting
+is UNVERIFIABLE, never absence, and never retried inside a required check.
+
+**`forge` custody, built (Part 3 declares it).** There is no key. The approval is the ACTIVE
+flip landing on the protected trunk through a required review: the check verifies that the
+commit which added `specs/attest/NNNN.json` is an ancestor of the base, that the trunk
+requires a review and this check now, and that the document's hash covers the spec's bytes
+in this merge, and it prints, on every pass, that this establishes the forge's review
+happened and not that any particular person decided; the forge's account security is the
+custody. The local hooks read the same document and DEFER to the check by name when the
+stamped check is in the tree at the revision under review (`SLH-ATTEST-DEFERRED`, an allow
+that says which layer verifies), and refuse as unverifiable when it is not.
+`/setlist:checkpoint` writes the document at the flip and signs nothing.
+
+**The CODEOWNERS bridge (T1).** The stamped `.github/CODEOWNERS` names the enforcement layer
+as a reviewed change: `/.githooks/`, `/.claude/`, `/specs/attest/` and `/.github/` under one
+`@OWNER` slot the team fills. The audit and the check read the same file (the core grammar
+the forges share: patterns, `@login`, `@org/team`, emails, last match wins; sections,
+negations and character classes refused by name) and judge a close's `Owns:` declarations
+against it: a declared file another owner's pattern claims REFUSES at the forge check on
+the pull request's author and at `pre-push`'s audit on the closing commit's email, and
+ADVISES at the merge hook, whose identity is the merging clone's claim. Locally only email
+owners can be matched; a handle or a team the audit cannot resolve is REPORTED, not refused,
+and resolved at the forge. Ownership here is what the file says.
+
+**There is no escape variable.** The check reads neither `SETLIST_SKIP_HOOKS` nor
+`SETLIST_SKIP_TRUNK_AUDIT`, and nothing it prints names either. A workflow that wants to skip
+the check edits the workflow, which the stamped CODEOWNERS makes a reviewed change from the
+day the instance is born.
+
 ### Known limitations of the mechanical layer
 
 The edition describes a mechanical enforcement layer, so it owes an honest statement of
@@ -1707,14 +1853,6 @@ where that layer ends. Everything below is a real hole, known and accepted, not 
   fix. Two further edges: **whoever can commit can enrol a public key**, so this is
   trust-on-first-use over the repository's own history, and the attestation is verified by
   git hooks, so every hole in this list that bypasses a git hook bypasses this too.
-- **`forge` custody is designed and NOT BUILT (new in v1.11).** Verification would be a
-  query the forge answers, and it lands with the forge-side required check that this list
-  already names as a candidate rather than a promise. Declaring it today REFUSES rather than
-  passing, and says so; `signer` custody is the model that works now. This is a designed
-  mechanism that exists as a design, which is a state this project has been burned by
-  before, and it is written here rather than left in a private note precisely because that
-  is the difference between a deferral and an accident.
-
 - **The single-parent close arm is as strong as your declarations, and a declaration is a
   claim, not a verified fact (new in v1.12).** A declaring close is audited file by file
   against its `Owns:` set, so a close can no longer exempt a whole commit by one record
@@ -1792,10 +1930,29 @@ where that layer ends. Everything below is a real hole, known and accepted, not 
   instead: they are versioned, reviewed in diffs, and present in every clone. What is still
   per-clone is the CONFIG pointing at them, since `.git/config` is not cloned either. A fresh
   clone is unprotected until the instance is set up. `merge.ff = false` is per-clone for the
-  same reason.
-- **The forge merge button is uncovered.** No local hook sees a merge performed in a web UI.
-  `pre-push`'s trunk audit catches the Closing-report, QA-verdict, diagram and CLOSED-row conditions on the next push, but does NOT re-run the gate command, so a red suite reaches the remote by this route, which is the reason that
-  layer exists at all rather than being redundant with the other two.
+  same reason. For a team, the stamped forge check (v1.14) is the layer that does not live
+  in a clone: required on the trunk, it verifies every pull request against the same
+  predicates whether or not the committer's clone had its hooks armed. It is a boundary
+  only where it is required, and the check says so when it is not.
+- **The forge check governs the merge button only where the trunk requires it (new in
+  v1.14).** No local hook sees a merge performed in a web UI; the stamped check runs the
+  hooks' predicates against the merge a pull request would make, and the merge button
+  enforces them where the trunk requires the check by name. What the check cannot do is
+  require itself: on a trunk that does not list it, it has a report, not a boundary, and
+  under `forge` custody it refuses for exactly that reason. A rebase merge lands every
+  branch commit on the trunk as direct feature code: the check reports the setting before
+  the fact, no later run of the check sees the commit, and an armed clone's `pre-push`
+  refuses the trunk from then on, so disable rebase merging where the check governs. The
+  check judges the base its checkout carries; the forge's require-up-to-date setting keeps
+  that base current, and the check does not read it.
+- **The CODEOWNERS bridge reads a subset of the file's grammar (new in v1.14).** Patterns,
+  `@login`, `@org/team`, emails, last match wins; sections, negations and character classes
+  are refused by name. Locally only email owners can be matched, so a handle or a team the
+  audit cannot resolve is reported and left to the forge check. Ownership is what the file
+  says, and a pattern is a claim about paths.
+- **The forge check reads the trunk's protection as it stands (new in v1.14).** A trunk
+  protected after an unreviewed flip landed verifies that flip; the forge's audit log is
+  where that history lives, and the check does not read it.
 - **The Bash escape hatch remains.** A human typing git in their own terminal is sovereign by
   design; hooks bind the agent, and for teams the same checks move into CI.
 - **The secret scan is a first cut.** Token-shaped, connection-string-shaped and
@@ -1905,7 +2062,9 @@ a refusal inverts the mechanism into a rubber stamp.
 public key, so this is trust-on-first-use over your repository's own history. And
 `--no-verify` and an unset `core.hooksPath` bypass this exactly as they bypass every other
 git hook. A boundary that must hold against deliberate evasion belongs on your forge, as a
-required check, which is where this document has said the real boundary lives since v1.7.
+required check, which is where this document has said the real boundary lives since v1.7 and
+which Setlist now stamps as `setlist forge check` (v1.14): under `forge` custody there is no
+key, and what the check establishes is stated above, in the forge check's own section.
 
 ### Closing with an open criterion (new in v1.7)
 
@@ -2033,6 +2192,7 @@ token, so an empty result is a refusal by construction. The codes:
 | close facts absent or not the exact tokens at a close | `SLH-RECORD-NO-CLOSE` |
 | an `Owns:` declaration outside the grammar (a glob, a directory, out of range) | `SLH-OWNS-MALFORMED` |
 | an undeclared role-path file in a declaring spec's single-parent close | `SLH-OWNS-UNDECLARED` |
+| a spec declared `Tier: lite` whose `Owns:` set exceeds five files, at any close (v1.14) | `SLH-LITE-OVERSIZED` |
 
 The session gates mirror these as warnings in the same words (`CG-RECORD-*`,
 `CM-RECORD-MALFORMED`), because that layer has no deny mechanic; the git hooks are what
@@ -2053,14 +2213,30 @@ checkpoint, or take the `--no-ff` route). A chore flip is audited the same way a
 whole-commit exemption included**: absence of the declaration is never a widened pass and
 never a refusal of the honest legacy close, on the same precedent as `Spec-hash` absence.
 The declaration is a claim and the arm verifies coverage, not truth; the Known
-limitations text below carries that boundary in full.
+limitations text below carries that boundary in full. **The declarations are also the
+parallel-spec story (v1.14):** Two specs that declare disjoint `Owns:` sets cannot collide at the audit, and with CODEOWNERS in place cannot claim each other's files: that is the parallel-spec story, and it is a property of the declarations, not of a coordination tool. **The lite tier's cap rides the same
+reader (new in v1.14):** a spec whose header reads `Tier: lite` (Part 3) declares at most
+five files, and a sixth is refused as `SLH-LITE-OVERSIZED` wherever the declaration is read,
+on either landing route, because the tier is a claim about the spec and not about how it
+landed. A spec without the line is read exactly as before.
 
 ### The stamped hooks (`.claude/hooks/`)
 
 A gate becomes a hook exactly when its predicate is decidable by a grep or an exit code;
-judgment gates stay with the human. Four hooks are stamped into every instance, enabled,
+judgment gates stay with the human. Five hooks are stamped into every instance, enabled,
 wired in `settings.json`: three PreToolUse gates (new in v1.5, **advisory since v1.7**, see
-"The enforcement boundary" above) and one SessionStart re-grounding hook (new in v1.6):
+"The enforcement boundary" above), one SessionStart re-grounding hook (new in v1.6), and one
+Stop hook (new in v1.14):
+
+- **The Stop hook** (the Stop event): refuses to end a turn that leaves `specs/STATUS.md`
+  or a spec file, tracked or untracked, changed and unstaged, because a session ending with
+  a record and a page that disagree is the failure the one-writer rule exists for. A staged
+  change passes (the session's deliberate act); a change outside `specs/` is not its
+  question; a repository with no `sdd.json` is not an instance. It refuses ONCE per end of
+  turn and allows the continuation the harness marks, so a change the session cannot stage
+  is a nudge, never a lock; and it is the one session hook whose reason the harness renders
+  (the three gates' reasons are dropped on `allow`, Known limitations). A session killed
+  from outside fires no Stop, which is the boundary it does not reach.
 
 - **The scope hook** (Write and Edit): REPORTS a verdict on writes under the src and tests role paths and permits them
   while the current branch is the trunk, once `/scaffold` has flipped the `scaffolded`
@@ -2191,7 +2367,13 @@ repo-relative file each, refusing a glob or a directory at declaration time beca
 declared set you cannot enumerate is an exemption wearing a declaration. Under declared
 attestation custody those appends drift the hash, the SessionStart warning fires, and
 re-attestation happens at the next checkpoint, WHERE THE HUMAN ALREADY IS: the ownership
-set is precisely a thing an approver should re-approve. At the close, checkpoint writes
+set is precisely a thing an approver should re-approve. At the close, checkpoint DRAFTS
+the Closing report from what the record and the tree already hold (new in v1.14): the QA
+verdict block scaffolded one line per criterion with the verdict left blank, what was built
+from the branch's commit subjects, test counts from the gate run where the runner prints
+them, the field names for the rest; the verdicts and the diagram answer are the human's,
+never pre-filled, because a "no impact" written by a tool is the claim the field exists to
+make a person make. Then checkpoint writes
 the close facts (`qa_pass_1`, `diagram`) into the record from the QA it just gated, on the
 branch, before the merge.
 
@@ -2414,10 +2596,14 @@ on the TUI. How they bind:
   run that reaches one parks it (an open question in STATUS.md, or a resume note) and
   ends cleanly rather than self-certifying; the hooks make the mechanical subset
   unbypassable, and everything else waits for a human session.
-- **CI is the team binding of the same gates.** The close-gate checks move into the
-  pipeline exactly as Part 6 binds them; the hooks are the solo binding of the same
-  predicates. A team repo runs both without conflict: the hook gates the agent's local
-  merge attempt, CI gates the pull request.
+- **CI is the team binding of the same gates, and since v1.14 it is a stamped one.** The
+  forge check (`.claude/hooks/forge-check.sh`, run by the stamped
+  `.github/workflows/setlist-forge-check.yml` as the required status check `setlist forge
+  check`) runs the close verification, the attestation walk, the content scan, the `push`
+  gate tier and the trunk audit against the merge a pull request would make, refusing on
+  any of them; the hooks are the solo binding of the same predicates. A team repo runs both
+  without conflict: the hook gates the agent's local merge attempt, the check gates the
+  pull request, and the merge button enforces it where the trunk requires the check.
 - **The session-end checklist still applies.** A headless session ends with gates run,
   STATUS.md truthful, and the next action named, exactly like an interactive one; a
   scripted run that cannot complete the checklist ends by parking, not by guessing.
@@ -2431,8 +2617,10 @@ on the TUI. How they bind:
   being replaced by it. Two conditions carry over unchanged. The chain is exactly as strong
   as the instance's key custody, and a key the headless run can reach is not custody: such a
   run can sign its own approval and the chain verifies while proving only that the run had
-  the key. And it is enforced by git hooks, so the bypasses in Part 6's Known limitations
-  apply to it too. **A headless run that meets a refusal PARKS**, per this Part's own rule
+  the key; under `forge` custody (v1.14) there is no key at all, and the approval is the
+  flip landing through the forge's required review, verified by the forge check. And it
+  is enforced by git hooks, so the bypasses in Part 6's Known limitations apply to it too,
+  except at the forge check, which is the layer they do not reach. **A headless run that meets a refusal PARKS**, per this Part's own rule
   below: an open question in STATUS.md or a resume note, and a clean end. It does not
   re-sign, and it does not self-certify around a refusal.
 - **Observing CI takes the RECORD-THE-DEBT path by default.** A `claude -p` session cannot
@@ -2512,9 +2700,12 @@ wiring**;
 stamped instance is structured from birth**: born with `setlist_status: 1` and empty
 maps, born valid against the grammar the gates read, with `/setlist:checkpoint` its one
 writer from the first spec on (tell the user this file exists and that checkpoint owns
-it, one sentence in the hand-off); **the four stamped hooks in `.claude/hooks/`,
-enabled** (three gates
-plus session re-grounding); the `scaffold` skill (web UIs also get `browser-qa`; the
+it, one sentence in the hand-off); **the five stamped hooks in `.claude/hooks/`,
+enabled** (three gates, session re-grounding, and the Stop hook, v1.14), beside them the
+trunk audit and **the forge check (v1.14)**, with its workflow under `.github/workflows/`
+and **`.github/CODEOWNERS` carrying the four protected paths under an `@OWNER` slot that
+phase 2 fills** (a required check whose bytes any pull request can edit protects nothing);
+the `gates` block in `sdd.json`, three empty tiers `/scaffold` records; the `scaffold` skill (web UIs also get `browser-qa`; the
 health check ships as `/setlist:validate`); the `.claude/agents/qa-verifier.md`
 stub; **the framework markdown itself
 committed into the repo** (the audit trail of which edition governed which work; upgrades
@@ -2607,6 +2798,10 @@ The Part 8 Step 3 file set, generated in the same two phases, with retrofit diff
   dependency graph, never from intent.
 - No `/scaffold` is emitted: the project is already scaffolded, and the health check
   ships as `/setlist:validate` (web UIs still get `browser-qa`).
+- **A retrofit gets the forge side too (new in v1.14):** the forge check beside the audit,
+  its workflow and the ownership file with its `@OWNER` slot, which the retrofit fills with
+  the team that owns the enforcement layer, and the `gates` block. Requiring the check on
+  the trunk is the team's act at the forge, named in the hand-off and never assumed.
 - **A retrofit is structured from birth too (new in v1.12):** the stamp writes
   `.claude/status.json` with empty maps in retrofit mode exactly as in new mode, and the
   existing specs the inventory found get their entries at their next checkpoint touch,
@@ -2714,6 +2909,21 @@ action.
   it. Transcribed closed specs carry no close facts and that is correct: the record does
   not manufacture evidence about closes it never saw, and only specs closed AFTER the
   record exists are held to the record's close facts.
+- **The v1.14 delta: the forge side, the Stop hook and the `gates` block (new in v1.14).**
+  `refresh-instance.sh --apply` delivers the forge check beside the audit under the audit's
+  backup discipline, the Stop hook with the other four (its `settings.json` entry restored
+  from the template, which the wiring check now enumerates on the Stop event), and the two
+  wiring files, `.github/workflows/setlist-forge-check.yml` and `.github/CODEOWNERS`, when
+  ABSENT; when either differs from its template it is LEFT AS IS and the divergence is
+  reported BY FILE, in report mode and on `--apply`, because both are the team's own (a
+  runner label, a matrix; the `@OWNER` slot and the paths the team adds), and an ownership
+  file that does not name the fourth protected path `/.github/` is told so by path. The
+  `gates` block IS migrated, the one exception to BL-005's precedent, because the
+  migration changes no verdict: `close` and `push` are written from the single
+  `gate_command`, `commit` empty, which is exactly what the reader returns for an absent
+  block; a present block is left alone. `forge` custody stops refusing on the day of the
+  upgrade wherever the stamped check is in the tree; requiring the check on the trunk is
+  the team's act at the forge, and the check reports until they do.
 - **Accepted deviations are recorded, not erased.** If the repo keeps a non-canonical
   layout (paths are roles), say so inside the umbrella ADR; a future chore can relocate.
 - **Close like any chore:** gates pass (docs-only, so results must match pre-migration), a
@@ -2908,10 +3118,23 @@ even a placeholder: a placeholder is bytes the grammar would have to read, and t
 declaration is checkpoint's act at acquisition, not an authoring chore. A spec that never
 declares closes under the pre-v1.12 rules.
 
+**The lite shape (new in v1.14).** A lite spec (Part 5) is this template with `Tier: lite`
+in its header and the middle trimmed: one acceptance criterion (plus the human-acceptance
+item where the work is experience-critical), the v1.7 clauses deleted, the Gates block as it
+stands, and the Closing report kept whole where the gates read it: the QA Pass 1 verdict
+block (one line), QA Pass 2, and the mandatory diagram field answered exactly as a full spec
+answers it. The `Tier:` line ships in the template reading `full`, because the tier is a
+fact every spec states; only the exact line `Tier: lite` is read by the hooks, so a full
+spec's header is judged exactly as before this edition. `Owns:` stays checkpoint's to write
+in either tier; in a lite spec the set is capped at five files (Part 3) and the close refuses
+`SLH-LITE-OVERSIZED` past it. The QA verdict block is drafted by checkpoint at the close in
+either tier, one line per criterion with the verdict blank; the verdicts are yours.
+
 ````markdown
 # Spec NNNN - <feature name>
 
 Status: QUEUED
+Tier: full <or lite: the trimmed shape of Part 5, at most five Owns: files; the hooks read only the exact line "Tier: lite">
 Spec-hash: <written by /setlist:checkpoint when Status flips to ACTIVE; leave blank until then>
 Depends on: <spec numbers, or "none"> (must all be CLOSED in STATUS.md before starting)
 Owner docs: <the steering docs the Builder must load for this spec>
@@ -3000,7 +3223,8 @@ person.>
   ```qa-pass-1
   <one line per criterion: `<criterion>: PASS|PARTIAL|FAIL`, criterion is a bare
   identifier with no spaces. A line here that is not a verdict line is refused, not
-  skipped. Delete this note and list the criteria.>
+  skipped. /setlist:checkpoint drafts the lines from the criteria at the close with the
+  verdicts blank (v1.14); the verdicts are yours. Delete this note and list the criteria.>
   ```
 - QA Pass 1 report (pasted verbatim):
 - QA Pass 2: confirmed by developer on <date>; spot-checked criterion: <which>
@@ -3022,6 +3246,71 @@ judgment. Appendix A is the part worth keeping; everything else is implementatio
 ---
 
 ## Changelog
+
+- **v1.14 (the team edition).** This delta list is authoritative for
+  `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases
+  (this edition ships as plugin 2.6.0), the edition counts revisions of this document.
+  v1.14 moves because the PROTOCOL gains its team half: the layer that survives a clone,
+  a tier of gate commands, a tier of spec, and a fifth session hook.
+
+  **THE FORGE CHECK, AND `forge` CUSTODY BUILT (Parts 3, 6, 7c, 8, 8b, 8c).** The same
+  predicates the git hooks ask are run where the committer does not control the clone:
+  `.claude/hooks/forge-check.sh`, stamped beside the trunk audit, makes the merge a pull
+  request would make and asks it the close verification, the attestation walk, the content
+  scan, the `push` gate tier and the trunk audit, one token on stdout, never a pass on
+  absence; the stamped workflow runs it as the status check `setlist forge check`, which
+  governs the merge button only where the trunk requires it, and says so when it does not.
+  `forge` custody, designed in v1.11, is built: no key, the approval is the ACTIVE flip
+  landing on the protected trunk through a required review, verified at the check with the
+  trunk's protection read from both of the forge's mechanisms as a union, and the local
+  hooks defer to the check by name when it is in the tree. The stamped `.github/CODEOWNERS`
+  names `/.githooks/`, `/.claude/`, `/specs/attest/` and `/.github/` as reviewed changes
+  under one `@OWNER` slot, and the audit and the check judge `Owns:` declarations against
+  it (refuse at the forge on the author, refuse at `pre-push` on an email owner, report a
+  handle the local layer cannot resolve, advise at the merge). The check has no escape
+  variable, and no refusal anywhere names the two that exist.
+
+  **THREE GATE TIERS (Part 3).** The `gates` block names a command per tier: `commit` on
+  every commit (empty by default), `close` once at the landing, `push` in the forge check.
+  An absent block reads as the single `gate_command` at `close` and `push` and nothing at
+  `commit`, byte for byte today's behaviour; the upgrade writes exactly that block, the one
+  migration this edition makes, because it changes no verdict. The close gate's PreToolUse
+  run of the gate command left in plugin 2.6.0: the git hook runs the suite once, at the
+  landing, so its timeout fell from thirty minutes to five.
+
+  **THE LITE TIER, AND CHECKPOINT DRAFTS THE PAPERWORK (Parts 3, 5, 6, 7, Appendix C).**
+  `Tier: lite` is one header line inside the hashed range; a lite spec owns at most five
+  files under `Owns:` and is refused `SLH-LITE-OVERSIZED` at every close past that, on either
+  landing route, by the ownership reader both layers share; it keeps the diagram field, the
+  one-line QA verdict block and the Gates block, and drops the rest of the skeleton. A spec
+  without the line is judged exactly as before. Checkpoint drafts the Closing report from
+  the record and the tree at the close, verdicts and the diagram answer left to the human.
+  Appendix C ships the template's inert `Tier: full` line and the lite shape.
+
+  **A FIFTH SESSION HOOK, AND THE DENY LIST NAMED FOR WHAT IT IS (Parts 2, 3, 6).** The Stop
+  hook refuses to end a turn that leaves a spec or `specs/STATUS.md` change unstaged, once
+  per turn, and allows the continuation the harness marks: a nudge, never a lock, and the one
+  session hook whose reason the harness renders. The stamped deny list gains
+  `Bash(cat .env*)` and a `_comment` key saying that a deny list is a spelling list.
+
+  **A CORRECTION, DATED 2026-09-07, TO PART 6'S SCANNING SECTION.** From v1.7 through v1.13
+  the provenance paragraph said no path-scoping procedure existed and that committing
+  foreign material under `SETLIST_SKIP_HOOKS=1` exempted the commit and not the push because
+  `pre-push` "does not read that variable". The pathspec shipped in v1.10 as
+  `scan_exclusions`, and `pre-push` has honoured the variable as its whole-hook escape since
+  plugin 2.2.0, the unsafe direction: a reader was told the escape was inert at push when it
+  skipped the audit and the scan both. The public README's bullet was corrected at 2.5.0 and
+  this paragraph was not; the comparator now reads the changelog's correction paragraphs
+  against this document's body, watched failing on the v1.13 text with that phrase named,
+  so the next one cannot stand two editions.
+
+  **The Known-limitations list (Part 6):** the `forge` custody bullet LEAVES as built in
+  this edition (15 to 14); the merge-button bullet is reworded as the forge check's
+  boundary, the per-clone bullet gains the forge check's sentence, and two bullets enter
+  (the CODEOWNERS bridge's grammar; the trunk's protection read as it stands), 14 to 16,
+  each mapped to a bullet of the public list and checked per push by the maintainer's
+  comparator in the source repository. The parallel-spec sentence (P4) lands in Part 6's
+  ownership paragraph and in the public README.
 
 - **v1.13 (the toolchain edition).** This delta list is authoritative for
   `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases

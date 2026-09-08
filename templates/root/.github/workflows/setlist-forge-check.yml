@@ -1,0 +1,60 @@
+# Setlist: the forge check, run as a REQUIRED status check on every pull request.
+#
+# This workflow carries NO mechanism byte. It runs the check your instance
+# already carries at .claude/hooks/forge-check.sh (stamped beside the trunk
+# audit by scripts/stamp.sh and refreshed by refresh-instance.sh), which reads
+# the same stamped copies pre-push reads (.githooks/setlist-hook-lib.sh and
+# .claude/hooks/trunk-audit.sh) and asks the same questions of the merge this
+# pull request would make: the close verification, the attestation walk, the
+# content scan, the third gate tier and the trunk audit. One token on stdout;
+# anything that is not PASS refuses.
+#
+# WHAT TO REQUIRE, AND WHERE. Branch protection requires status checks BY NAME,
+# and a renamed job silently stops being required. The job below is named
+# `setlist forge check`; require exactly that name on your trunk (Settings >
+# Branches or Rules > require status checks to pass), together with a pull
+# request and one approving review. Under "forge" custody the check verifies
+# that both are required and refuses when they are not.
+#
+# There is no escape variable. To skip the check, edit this file, which the
+# stamped .github/CODEOWNERS makes a reviewed change.
+name: setlist forge check
+
+on:
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  forge-check:
+    name: setlist forge check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The check builds the merge it audits and runs the trunk audit over
+          # it; a shallow checkout has no history to read and is refused.
+          fetch-depth: 0
+      - name: ensure jq
+        run: command -v jq >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq jq)
+      - name: setlist forge check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          out="$(bash .claude/hooks/forge-check.sh \
+            --base "$GITHUB_BASE_REF" \
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --forge github \
+            --repo "$GITHUB_REPOSITORY" \
+            --author "${{ github.event.pull_request.user.login }}")" || true
+          printf '%s\n' "$out"
+          # The caller refuses anything that is not exactly the pass token on
+          # the LAST line: an empty output (the check died) refuses too.
+          case "$(printf '%s\n' "$out" | tail -n1)" in
+            "PASS ("*) exit 0 ;;
+            *) echo "setlist forge check: refused (see the log above)"; exit 1 ;;
+          esac

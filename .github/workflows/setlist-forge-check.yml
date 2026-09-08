@@ -1,0 +1,51 @@
+# Setlist: the forge check as a REUSABLE workflow (2.6.0, spec 0132, design
+# section 4). An instance that already has its own workflow calls this in one
+# line, pinned by tag:
+#
+#   jobs:
+#     forge-check:
+#       uses: AlexCiortan/setlist/.github/workflows/setlist-forge-check.yml@v2.6.0
+#
+# It carries NO mechanism byte and does exactly what the stamped template
+# templates/root/.github/workflows/setlist-forge-check.yml does: check out the
+# CALLER's repository with full history and run the caller's own stamped
+# .claude/hooks/forge-check.sh against the pull request's merge. The public
+# repository is therefore not a runtime dependency of any instance's merge
+# button: a stale pin here costs a stale wiring, never a stale check.
+#
+# The job is named `setlist forge check`; require that name on the trunk.
+name: setlist forge check
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  forge-check:
+    name: setlist forge check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: ensure jq
+        run: command -v jq >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq jq)
+      - name: setlist forge check
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          out="$(bash .claude/hooks/forge-check.sh \
+            --base "$GITHUB_BASE_REF" \
+            --head "${{ github.event.pull_request.head.sha }}" \
+            --forge github \
+            --repo "$GITHUB_REPOSITORY" \
+            --author "${{ github.event.pull_request.user.login }}")" || true
+          printf '%s\n' "$out"
+          case "$(printf '%s\n' "$out" | tail -n1)" in
+            "PASS ("*) exit 0 ;;
+            *) echo "setlist forge check: refused (see the log above)"; exit 1 ;;
+          esac

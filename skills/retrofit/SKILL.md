@@ -65,7 +65,13 @@ Then run:
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stamp.sh" .claude/stamp-answers.txt .`
 
 In retrofit mode the stamp skips files the repo already has (it reports them);
-merge the framework content into those by hand in phase 2. The stamp emits no
+merge the framework content into those by hand in phase 2. An existing
+`.github/CODEOWNERS` is one of those: the stamp leaves it, and phase 2 adds the
+four protected paths (`/.githooks/`, `/.claude/`, `/specs/attest/`,
+`/.github/`) under the team's own owner rather than replacing the file. The
+forge check, its workflow and the `gates` block are stamped as for a new
+instance (edition v1.14); requiring the check on the trunk is the team's act at
+the forge, named in the hand-off. The stamp emits no
 /scaffold skill: the project is already scaffolded, and the health check ships
 as /setlist:validate. Fill gate_command in `.claude/sdd.json` with the
 repo's real full-suite command and set `scaffolded` to true once it runs, so

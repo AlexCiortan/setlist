@@ -500,7 +500,129 @@ SLH_RECORD_CHORE_FILES_JQ='(((.chores // {})[$id].files) // []) | .[]'
 # SLH-OWNS-MALFORMED at the arm that would have consumed it.
 # LOCKSTEP: byte-identical to templates/git-hooks/setlist-hook-lib.sh, which
 # asks the same question of the STAGED close at the squash landing.
-SLH_OWNS_AWK='{ l=$0; sub(/\r$/,"",l) } l ~ /^##[[:space:]]*Closing report/{r=1} l ~ /^Owns:/{ if(r==1){print "!range";next} if(substr(l,1,6) != "Owns: "){print "!shape";next} p=substr(l,7); if(p=="" || p ~ /^[ \t]/ || p ~ /[ \t]$/ || index(p,"*") || index(p,"?") || index(p,"[") || index(p,"]") || index(p,"\\") || index(p,"\"") || index(p,"\047") || substr(p,1,1)=="/" || substr(p,1,2)=="./" || substr(p,length(p),1)=="/" || p ~ /(^|\/)\.\.(\/|$)/){print "!shape";next} print p }'
+SLH_OWNS_AWK='{ l=$0; sub(/\r$/,"",l) } l ~ /^##[[:space:]]*Closing report/{r=1} r!=1 && l=="Tier: lite"{t=1} l ~ /^Owns:/{ if(r==1){print "!range";next} if(substr(l,1,6) != "Owns: "){print "!shape";next} p=substr(l,7); if(p=="" || p ~ /^[ \t]/ || p ~ /[ \t]$/ || index(p,"*") || index(p,"?") || index(p,"[") || index(p,"]") || index(p,"\\") || index(p,"\"") || index(p,"\047") || substr(p,1,1)=="/" || substr(p,1,2)=="./" || substr(p,length(p),1)=="/" || p ~ /(^|\/)\.\.(\/|$)/){print "!shape";next} n++; print p } END{ if(t && n>5) print "!lite-oversized" }'
+
+
+# T1: THE CODEOWNERS BRIDGE AT THE AUDIT (spec 0132, design section 7; the
+# 2.6.0 strategy's ruling 4). For a declaring close landing on the trunk, each
+# declared file's owners (the LAST matching pattern of the repository's own
+# CODEOWNERS, read at the commit under audit) must include the closer, and the
+# closer at THIS layer is the closing commit's author EMAIL, the one identity a
+# local audit can read. So: an email owner that does not match REFUSES
+# (SLH-OWNS-CODEOWNERS); owners that are handles or teams cannot be resolved
+# here and are REPORTED (SLH-OWNS-CODEOWNERS-UNRESOLVED), never refused, because
+# refusing on an identity this layer cannot read is a false denial by
+# construction (ratification decision 5); the forge check resolves them against
+# the forge. A file this reader cannot parse refuses by name
+# (SLH-CODEOWNERS-UNREADABLE) when a declaring close is being judged, and is
+# never consulted otherwise. LOCKSTEP: the grammar string below is
+# byte-identical to setlist-hook-lib.sh's (this file ships alone and sources
+# nothing), asserted by the suite.
+SLH_CODEOWNERS_AWK='
+function pat2re(p,   re, i, c, n, anchored, dir) {
+  dir = 0; anchored = 0
+  if (substr(p, length(p), 1) == "/") { dir = 1; p = substr(p, 1, length(p) - 1) }
+  if (substr(p, 1, 1) == "/") { anchored = 1; p = substr(p, 2) }
+  else if (index(p, "/") > 0) { anchored = 1 }
+  re = ""; n = length(p); i = 1
+  while (i <= n) {
+    c = substr(p, i, 1)
+    if (c == "*") {
+      if (substr(p, i + 1, 1) == "*") {
+        # ** across segments; "**/" or "/**" or "/**/" eat the slash too
+        if (substr(p, i + 2, 1) == "/") { re = re "(.*/)?"; i += 3; continue }
+        re = re ".*"; i += 2; continue
+      }
+      re = re "[^/]*"; i++; continue
+    }
+    if (c ~ /[.^$+(){}|\\]/) { re = re "\\" c; i++; continue }
+    re = re c; i++
+  }
+  # an unanchored pattern matches at any depth; a match is the path itself or a
+  # directory prefix of it (gitignore semantics, which the forges follow)
+  if (!anchored) re = "(.*/)?" re
+  return "^" re "(/.*)?$"
+}
+BEGIN { n = 0; bad = "" }
+{
+  line = $0; sub(/\r$/, "", line); ln = NR
+  if (line ~ /^[[:space:]]*$/ || line ~ /^[[:space:]]*#/) next
+  if (bad != "") next
+  if (line ~ /^[[:space:]]*\^?\[/) { bad = "a section header ([Section] or ^[Section])"; badln = ln; next }
+  if (line ~ /^[[:space:]]*!/) { bad = "a negated pattern (!pattern)"; badln = ln; next }
+  if (line ~ /\\ /) { bad = "an escaped space in a pattern"; badln = ln; next }
+  sub(/^[[:space:]]+/, "", line)
+  # an inline comment (whitespace then #, the documented form on the forges) ends the line
+  sub(/[[:space:]]+#.*$/, "", line)
+  # the pattern is the first field; owners follow, whitespace-separated
+  m = split(line, f, /[[:space:]]+/)
+  pat = f[1]
+  if (pat ~ /[\[\]?]/) { bad = "a character class or ? wildcard in a pattern"; badln = ln; next }
+  owners = ""
+  for (i = 2; i <= m; i++) {
+    if (f[i] == "") continue
+    if (f[i] !~ /^@[A-Za-z0-9][A-Za-z0-9_.-]*(\/[A-Za-z0-9][A-Za-z0-9_.-]*)?$/ && f[i] !~ /^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$/) { bad = "an owner that is not @login, @org/team or an email (" f[i] ")"; badln = ln; break }
+    owners = owners (owners == "" ? "" : " ") f[i]
+  }
+  if (bad != "") next
+  n++; P[n] = pat; O[n] = owners
+}
+END {
+  if (bad != "") { printf "!unreadable\t%d\t%s\n", badln, bad; exit 0 }
+  if (mode == "parse") { for (i = 1; i <= n; i++) printf "%s\t%s\n", P[i], O[i]; exit 0 }
+  if (mode == "owners") {
+    hit = ""; found = 0
+    for (i = 1; i <= n; i++) { if (file ~ pat2re(P[i])) { hit = O[i]; found = 1 } }
+    if (found) printf "%s\n", hit
+    # fail-open-ok: awk leaving its END block after printing the owners (or nothing, for an unowned path); not a shell exit
+    exit 0
+  }
+}'
+
+codeowners_arm() { # codeowners_arm <rev-with-the-file> <closing-commit> <declared-files, newline-separated> -> adds VIOLATIONS; 0 when nothing refused
+  local rev="$1" c="$2" list="$3" cand text="" path="" bad f owners o ident lc_ident lc_o matched unresolved before
+  before="$VIOLATIONS"
+  for cand in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
+    git -C "$INSTANCE" cat-file -e "$rev:$cand" 2>/dev/null || continue
+    text="$(git -C "$INSTANCE" show "$rev:$cand" 2>/dev/null)" || continue
+    path="$cand"; break
+  done
+  [[ -n "$path" ]] || return 0
+  bad="$(printf '%s\n' "$text" | awk -v mode=parse "$SLH_CODEOWNERS_AWK" | grep '^!unreadable' || true)" # fail-open-ok: an empty result means the file parsed; a parse that printed nothing at all yields no owners below, which is "no owner", the design's own reading of an owner-less pattern
+  if [[ -n "$bad" ]]; then
+    printf 'VIOLATION %s  [SLH-CODEOWNERS-UNREADABLE] line %s of %s uses %s, which this reader does not evaluate; a close that declares files under an unreadable ownership file cannot be checked against it. The reader accepts the core grammar the forges share (a path pattern with /, * and **, then owners as @login, @org/team or an email; last match wins).\n' \
+      "$SHORT" "$(printf '%s' "$bad" | cut -f2)" "$path" "$(printf '%s' "$bad" | cut -f3)"
+    VIOLATIONS=$((VIOLATIONS + 1))
+    return 1
+  fi
+  ident="$(git -C "$INSTANCE" log -1 --format=%ae "$c" 2>/dev/null)" # fail-open-ok: an unreadable author is empty and matches no owner, so every owned file refuses rather than passes
+  lc_ident="$(printf '%s' "$ident" | tr '[:upper:]' '[:lower:]')"
+  while IFS= read -r f; do
+    [[ -n "$f" && "$f" != !* ]] || continue
+    owners="$(printf '%s\n' "$text" | awk -v mode=owners -v file="$f" "$SLH_CODEOWNERS_AWK")"
+    [[ -n "$owners" ]] || continue
+    matched=0; unresolved=""
+    for o in $owners; do
+      case "$o" in
+        @*) unresolved="$unresolved $o" ;;
+        *)  lc_o="$(printf '%s' "$o" | tr '[:upper:]' '[:lower:]')"; [[ "$lc_o" == "$lc_ident" ]] && matched=1 ;;
+      esac
+      [[ "$matched" == "1" ]] && break
+    done
+    [[ "$matched" == "1" ]] && continue
+    if [[ -n "$unresolved" ]]; then
+      printf 'report    %s  [SLH-OWNS-CODEOWNERS-UNRESOLVED] %s is declared by this close and %s assigns it to%s, which this audit cannot resolve against %s (an email); the forge check resolves handles and teams against the forge. Reported, not refused.\n' \
+        "$SHORT" "$f" "$path" "$unresolved" "${ident:-an unreadable author}"
+      continue
+    fi
+    printf 'VIOLATION %s  [SLH-OWNS-CODEOWNERS] %s is declared by this close and %s assigns it to %s, which does not include %s. A close may declare only files its closer owns under the repository'"'"'s own ownership file; ask an owner to close it, or change the ownership file through its own review.\n' \
+      "$SHORT" "$f" "$path" "$owners" "${ident:-an unreadable author}"
+    VIOLATIONS=$((VIOLATIONS + 1))
+  done <<EOF
+$list
+EOF
+  [[ "$VIOLATIONS" -eq "$before" ]]
+}
 
 record_present_at() { git -C "$INSTANCE" cat-file -e "$1:.claude/status.json" 2>/dev/null; }
 # fail-open-ok: unreadable-but-present yields empty text, which is not "ok" to
@@ -655,6 +777,15 @@ while IFS= read -r C; do
         # declared set you cannot enumerate is an exemption wearing a
         # declaration.
         LIN_OWNS_OUT="$(git -C "$INSTANCE" show "$C:$LIN_FILE" 2>/dev/null | awk "$SLH_OWNS_AWK" || true)" # fail-open-ok: an unreadable spec declares nothing, and nothing is the narrow direction here: it forfeits per-file coverage rather than widening it
+        # THE LITE TIER'S CAP (edition v1.14, P1): the reader appends the token
+        # when a `Tier: lite` spec declares more than five files; refused here
+        # as at the hooks, then stripped so the declared set is still judged.
+        if printf '%s\n' "$LIN_OWNS_OUT" | grep -q '^!lite-oversized$'; then
+          printf 'VIOLATION %s  [SLH-LITE-OVERSIZED] spec %s is declared Tier: lite and declares more than five files under Owns:. A lite spec is at most five files (Part 3 of the edition); the two honest exits are to drop the tier line (a full spec, judged exactly as before) or to split the work, both through /setlist:checkpoint. The tier is a claim about size, and a claim the close cannot honour is refused rather than reread.\n' "$SHORT" "$LIN_NUM"
+          printf '          %s\n' "$SUBJ"
+          VIOLATIONS=$((VIOLATIONS + 1))
+          LIN_OWNS_OUT="$(printf '%s\n' "$LIN_OWNS_OUT" | grep -v '^!lite-oversized$')"
+        fi
         if printf '%s\n' "$LIN_OWNS_OUT" | grep -q '^!'; then
           printf 'VIOLATION %s  [SLH-OWNS-MALFORMED] spec %s declares ownership outside the grammar (a glob, a directory, a quoted or empty path, or an Owns: line below the Closing report heading). One verbatim repo-relative file per "Owns: " line, at column 0, inside the hashed range. The range ends at the FIRST line reading "## Closing report", fences included, because that byte-same cut is what attestation signs: a fenced or quoted copy of the Closing-report template ABOVE your declaration ends the range early, and the fix is one edit (move the declaration above the quote, or drop the quoted heading line). A declared set that cannot be enumerated is an exemption wearing a declaration, so this close exempts nothing until the declaration is fixed through /setlist:checkpoint.\n' "$SHORT" "$LIN_NUM"
           printf '          %s\n' "$SUBJ"
@@ -833,6 +964,12 @@ $LIN_CF"
       # and a deleted path arrives nowhere; before the filter the same
       # retirement passed spelled `git mv` and refused spelled `git rm`. The
       # merge arm's provenance sibling already filters (--diff-filter=A below).
+      # T1: the declared set against the repository's ownership file, on the
+      # closing commit's author email (the arm above has already read the set).
+      if [[ "$LIN_OWNS_VIOL" == "0" ]] && ! codeowners_arm "$C" "$C" "$LIN_OWNS_LIST"; then
+        printf '          %s\n' "$SUBJ"
+        LIN_OWNS_VIOL=1
+      fi
       if [[ "$LIN_OWNS_VIOL" == "0" ]]; then
         CLEAN=$((CLEAN + 1))
       fi
@@ -1070,6 +1207,22 @@ $LIN_CF"
         fi
         if [[ "$MRG_PRIOR_ST" != "closed" ]]; then
           CLOSED_SOMETHING=1
+          # T1 on the structured path: the branch's declared set against the
+          # ownership file, on the branch tip's author email (see the page
+          # path's note below; the same ADDED read, not the completion question).
+          # The lite tier's cap on the structured merge route (edition v1.14,
+          # P1): the tier is a claim about the spec, not about how it landed.
+          if git -C "$INSTANCE" show "$P2:$SPEC_FILE" 2>/dev/null | awk "$SLH_OWNS_AWK" | grep -q '^!lite-oversized$'; then
+            printf 'VIOLATION %s  [SLH-LITE-OVERSIZED] spec %s is declared Tier: lite and declares more than five files under Owns:. A lite spec is at most five files (Part 3 of the edition); the two honest exits are to drop the tier line (a full spec, judged exactly as before) or to split the work, both through /setlist:checkpoint. The tier is a claim about size, and a claim the close cannot honour is refused rather than reread.\n' "$SHORT" "$SPEC_NUM"
+            printf '          %s\n' "$SUBJ"
+            VIOLATIONS=$((VIOLATIONS + 1))
+            SEEN_BAD=1
+          fi
+          MRG_OWNS="$(git -C "$INSTANCE" show "$P2:$SPEC_FILE" 2>/dev/null | awk "$SLH_OWNS_AWK" | grep -v '^!' || true)" # fail-open-ok: no declarations is the blockless close, never judged by file
+          if [[ -n "$MRG_OWNS" ]] && ! codeowners_arm "$C" "$P2" "$MRG_OWNS"; then
+            printf '          %s\n' "$SUBJ"
+            SEEN_BAD=1
+          fi
         fi
         continue
       fi
@@ -1186,6 +1339,25 @@ $LIN_CF"
         # Compliant AND not already closed on the trunk: this merge is what
         # closed it, so it can authorise the code riding with it.
         CLOSED_SOMETHING=1
+        # T1: a declaring close landing by merge is judged against the
+        # ownership file too, on the branch tip's author email; the declared
+        # set is the spec's Owns: lines as the branch carries them (a
+        # malformed declaration was already refused at the merge hook and
+        # declares nothing here). An ADDED read of the merge arm, not a change
+        # to the completion question F10-2026 names.
+        # The lite tier's cap on the merge route too (edition v1.14, P1): the
+        # tier is a claim about the spec, not about how it landed.
+        if printf '%s\n' "$SPEC_TEXT" | awk "$SLH_OWNS_AWK" | grep -q '^!lite-oversized$'; then
+          printf 'VIOLATION %s  [SLH-LITE-OVERSIZED] spec %s is declared Tier: lite and declares more than five files under Owns:. A lite spec is at most five files (Part 3 of the edition); the two honest exits are to drop the tier line (a full spec, judged exactly as before) or to split the work, both through /setlist:checkpoint. The tier is a claim about size, and a claim the close cannot honour is refused rather than reread.\n' "$SHORT" "$SPEC_NUM"
+          printf '          %s\n' "$SUBJ"
+          VIOLATIONS=$((VIOLATIONS + 1))
+          SEEN_BAD=1
+        fi
+        MRG_OWNS="$(printf '%s\n' "$SPEC_TEXT" | awk "$SLH_OWNS_AWK" | grep -v '^!' || true)" # fail-open-ok: no declarations is the blockless close, which this arm never judged by file
+        if [[ -n "$MRG_OWNS" ]] && ! codeowners_arm "$C" "$P2" "$MRG_OWNS"; then
+          printf '          %s\n' "$SUBJ"
+          SEEN_BAD=1
+        fi
       fi
     done <<EOF
 $SPECS_TOUCHED

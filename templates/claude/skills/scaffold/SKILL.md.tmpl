@@ -18,8 +18,15 @@ once, after phase 2 of the bootstrap; a repo that is already scaffolded gets
    tailored generation from the Step 2 decisions.]
 
 2. Wire the gates: tests, lint, typecheck, build. Record the single command that
-   runs the FULL suite in .claude/sdd.json as "gate_command" (the close gate and
-   /setlist:checkpoint run it verbatim).
+   runs the FULL suite in .claude/sdd.json as "gate_command" (/setlist:checkpoint
+   runs it verbatim), AND record the three tiers of the "gates" block the
+   template stamps beside it: "close" and "push" the same full-suite command
+   (the git hook runs "close" once at the merge; the forge check runs "push"
+   against a pull request), and "commit" the fast gate that runs on EVERY
+   commit (lint plus typecheck is the usual shape; leave it empty for no
+   commit-time gate). A stamped block with empty "close" and "push" refuses
+   every close once "scaffolded" is true, exactly as an empty "gate_command"
+   did, so fill both when you fill the one.
 
    **The command must run in a BARE shell, with no environment activated
    first.** The close gate and the git hooks run it in their own subshell, which

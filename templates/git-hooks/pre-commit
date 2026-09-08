@@ -114,7 +114,7 @@ STAGED="$(slh_staged_files "$PROJ")"
 if __DIFF="$(git -C "$PROJ" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ 2>/dev/null)"; then
   slh_scan_added "$PROJ" "$__DIFF" "staged content"
 else
-  slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render the staged diff, so the scan of staged content read nothing and has judged nothing. A scan that could not run has not passed. Run 'git diff --cached' here to see the failure (a configuration value git cannot parse, or a diff driver that fails, looks like this), or commit with SETLIST_SKIP_HOOKS=1 if this is an exception you are willing to own."
+  slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render the staged diff, so the scan of staged content read nothing and has judged nothing. A scan that could not run has not passed. Run 'git diff --cached' here to see the failure (a configuration value git cannot parse, or a diff driver that fails, looks like this)."
 fi
 
 # ---------------------------------------------------------------------------
@@ -256,6 +256,15 @@ fi
 # because SLH-STATUS-MISSING happened to fire on unrelated grounds, which is a
 # pass nobody earned. Same reason a conflicted merge resolution reaches here.
 # ---------------------------------------------------------------------------
+# THE commit TIER (P2, design section 8; 2.6.0). Every commit runs the
+# instance's `gates.commit` command, the fast gate: empty by default and empty
+# for every instance stamped before the block existed, so nothing changes until
+# a team declares one. A declared command that fails refuses the commit under
+# SLH-GATE-COMMAND-FAILED, as the close tier's does at the merge; a block the
+# reader cannot read refuses SLH-GATES-SHAPE here too.
+# fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below.
+slh_run_gate_command "$PROJ" commit || true
+
 GITDIR="$(git -C "$PROJ" rev-parse --absolute-git-dir 2>/dev/null || printf '')"
 LANDING=""
 if [ -n "$GITDIR" ]; then
@@ -276,12 +285,11 @@ if [ -n "$LANDING" ] && slh_on_trunk "$PROJ" "$TRUNK"; then
   # a non-zero return must not abort before every check has had its say.
   slh_verify_close "$PROJ" "$TRUNK" "this $LANDING" || true
   # fail-open-ok: same, the refusal is recorded and acted on below.
-  slh_run_gate_command "$PROJ" || true
+  slh_run_gate_command "$PROJ" close || true
 fi
 
 if [ "$SLH_REFUSED" != "0" ]; then
-  printf '\nsetlist pre-commit: refusing this commit. Fix the above, or commit with\n' >&2
-  printf 'SETLIST_SKIP_HOOKS=1 if this is a deliberate exception you are willing to own.\n' >&2
+  printf '\nsetlist pre-commit: refusing this commit. Fix the above.\n' >&2
   exit 1
 fi
 # fail-open-ok: reached only with SLH_REFUSED at 0, meaning every check ran and

@@ -38,7 +38,19 @@ documentation, never copied into instances.
   `release` block (edition v1.7) is the second such block and follows the rule:
   it appends after `plugin`, it carries only the model plus its marker fact, and
   every reader treats an absent block as `{"model": "none"}` and says so rather
-  than inferring a model for an instance that never declared one.
+  than inferring a model for an instance that never declared one. The `gates`
+  block (edition v1.14, plugin 2.6.0; design section 8 of the forge-check
+  design) is the third and follows the rule: it appends after `release`, it
+  carries the three gate tiers `commit`, `close` and `push` as strings (stamped
+  empty; `/scaffold` records them beside `gate_command`), and ONE reader in the
+  hook library (`slh_gate_command_for`) treats an absent block as today's single
+  `gate_command` at the `close` and `push` tiers and nothing at `commit`, so an
+  instance stamped before the block behaves byte for byte as it did. A block
+  that is not an object of three strings refuses `SLH-GATES-SHAPE` rather than
+  being guessed at. `refresh-instance.sh` writes the block on an instance that
+  lacks it (the owner's ruling of 2026-09-07: `close` and `push` from the single
+  command, `commit` empty, so no verdict changes), its report mode naming what
+  it would write, and leaves a present block alone.
 
 ## The mapping
 
@@ -61,10 +73,13 @@ documentation, never copied into instances.
 | `hooks/commit-gate.sh` | `.claude/hooks/commit-gate.sh` | always, byte-verbatim |
 | `hooks/close-gate.sh` | `.claude/hooks/close-gate.sh` | always, byte-verbatim |
 | `hooks/regrounding-hook.sh` | `.claude/hooks/regrounding-hook.sh` | always, byte-verbatim |
+| `hooks/stop-hook.sh` | `.claude/hooks/stop-hook.sh` | always, byte-verbatim (2.6.0, spec 0132 cluster H, the owner's ruling 5: the Stop hook refuses to end a turn that leaves a spec or `specs/STATUS.md` changed and unstaged, once per end of turn; wired on the Stop event, which takes no matcher; the fifth session hook the wiring check enumerates) |
 | `git-hooks/pre-commit` | `.githooks/pre-commit` | always, byte-verbatim |
 | `git-hooks/pre-merge-commit` | `.githooks/pre-merge-commit` | always, byte-verbatim |
 | `git-hooks/pre-push` | `.githooks/pre-push` | always, byte-verbatim |
 | `git-hooks/setlist-hook-lib.sh` | `.githooks/setlist-hook-lib.sh` | always, byte-verbatim |
+| `root/.github/workflows/setlist-forge-check.yml` | `.github/workflows/setlist-forge-check.yml` | always, byte-verbatim (2.6.0: the forge check's wiring, a required status check named `setlist forge check`; carries no mechanism byte, it runs the stamped check below; ratification decision 6) |
+| `root/github/CODEOWNERS.tmpl` | `.github/CODEOWNERS` | always (2.6.0, T1: the four protected paths `/.githooks/`, `/.claude/`, `/specs/attest/` and, by ratification amendment 5 of 2026-09-07, `/.github/` under a phase-2 `@OWNER` slot, so the check's bytes, the config, the approvals, the check's own workflow, this file and the issue form are reviewed changes wherever the forge enforces the file; the audit and the forge check read the same file to refuse a close that declares another owner's files; ratification decision 6) |
 | `docs-design/INDEX.md` | `docs/design/INDEX.md` | design_surface = yes |
 
 ## Git config stamp.sh sets (edition v1.7, the enforcement boundary)
@@ -94,6 +109,13 @@ stops nothing and reports nothing.
 
 ## Created by stamp.sh without a template
 
+- `.claude/hooks/trunk-audit.sh` and `.claude/hooks/forge-check.sh`: copied from
+  `scripts/`, unconditionally ("delivered regardless of the arming decision"),
+  through the one write rule. The audit is what `pre-push` runs; the check is
+  what the stamped workflow runs against a pull request's merge (2.6.0, spec
+  0132) and what the git hooks name when they defer custody C's approval
+  question. Neither is a session hook, so the wiring check does not enumerate
+  them.
 - `specs/TEMPLATE.md`: Appendix C extracted from the bundled edition at stamp
   time via `scripts/part.sh appendix-c` (the fenced template body, unfenced).
   Never a maintained second copy.

@@ -116,6 +116,7 @@ add hooks/scope-hook.sh        .claude/hooks/scope-hook.sh
 add hooks/commit-gate.sh       .claude/hooks/commit-gate.sh
 add hooks/close-gate.sh        .claude/hooks/close-gate.sh
 add hooks/regrounding-hook.sh  .claude/hooks/regrounding-hook.sh
+add hooks/stop-hook.sh         .claude/hooks/stop-hook.sh
 # The GIT hooks, into a TRACKED directory (.githooks/), not .git/hooks. The
 # whole point of core.hooksPath is that .git/hooks is not cloned, so a hook that
 # lives there protects exactly one working copy and a fresh clone is bare. A
@@ -127,6 +128,21 @@ add git-hooks/pre-commit           .githooks/pre-commit
 add git-hooks/pre-merge-commit     .githooks/pre-merge-commit
 add git-hooks/pre-push             .githooks/pre-push
 add git-hooks/setlist-hook-lib.sh  .githooks/setlist-hook-lib.sh
+# THE FORGE CHECK'S WIRING (2.6.0, spec 0132, design section 4): the workflow
+# that runs the stamped check as a required status check on every pull
+# request. Stamped "always", byte-verbatim (ratification decision 6): a
+# repository not on a forge carries one inert file, and an instance that is on
+# one has the check from birth. It carries NO mechanism byte; the check it runs
+# is .claude/hooks/forge-check.sh, delivered beside the audit below.
+add root/.github/workflows/setlist-forge-check.yml  .github/workflows/setlist-forge-check.yml
+# THE OWNERSHIP FILE (2.6.0, T1, design section 7): four protected paths under a
+# phase-2 @OWNER slot. A required check whose bytes any pull request can edit
+# protects nothing; with .githooks/, .claude/, specs/attest/ and .github/ owned
+# (the fourth by ratification amendment 5, 2026-09-07: the check's workflow,
+# this file and the issue form), the check, the config, the approvals and the
+# wiring that runs the check are reviewed changes wherever the forge enforces
+# the file, and the audit reads the same file for T1's verdicts.
+add root/github/CODEOWNERS.tmpl  .github/CODEOWNERS
 [[ "$MODE" == "new" ]] && add claude/skills/scaffold/SKILL.md.tmpl .claude/skills/scaffold/SKILL.md
 [[ "$UI" == "yes" ]] && add claude/skills/browser-qa/SKILL.md .claude/skills/browser-qa/SKILL.md
 [[ "$DESIGN_SURFACE" == "yes" ]] && add docs-design/INDEX.md docs/design/INDEX.md
@@ -427,6 +443,18 @@ if [[ -f "$ROOT/scripts/trunk-audit.sh" ]]; then
     || die "could not install trunk-audit.sh into .claude/hooks/: ${TA_NOTE:-the copy failed} pre-push would refuse every push outside a Claude Code session"
   [[ -z "$TA_NOTE" ]] || printf 'stamp.sh: %s' "$TA_NOTE"
   [[ -f "$TARGET/.claude/hooks/trunk-audit.sh" ]] || die "could not install trunk-audit.sh into .claude/hooks/; pre-push would refuse every push outside a Claude Code session"
+fi
+# THE FORGE CHECK RIDES THE SAME RULE (2.6.0, spec 0132): delivered beside the
+# audit, unconditionally, through the one write rule. It is what the stamped
+# workflow runs and what the local hooks name when they defer custody C's
+# approval question, so an instance without it has a workflow that refuses
+# every pull request and a deferral that names nothing.
+if [[ -f "$ROOT/scripts/forge-check.sh" ]]; then
+  mkdir -p "$TARGET/.claude/hooks"
+  FC_NOTE="$(setlist_deliver_file "$ROOT/scripts/forge-check.sh" "$TARGET" ".claude/hooks/forge-check.sh")" \
+    || die "could not install forge-check.sh into .claude/hooks/: ${FC_NOTE:-the copy failed} the stamped workflow would refuse every pull request"
+  [[ -z "$FC_NOTE" ]] || printf 'stamp.sh: %s' "$FC_NOTE"
+  [[ -f "$TARGET/.claude/hooks/forge-check.sh" ]] || die "could not install forge-check.sh into .claude/hooks/; the stamped workflow would refuse every pull request"
 fi
 
 # Point git at the tracked hooks directory, and stop fast-forward merges.

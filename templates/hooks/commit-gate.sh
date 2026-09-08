@@ -36,19 +36,77 @@ set -u
 # half that moved.
 #
 # THE CONTRACT, frozen with the parsers:
-#   permissionDecision   ALWAYS "allow"
+#   permissionDecision   ALWAYS "allow", with ONE exception ruled 2026-09-06
+#                        and stated in the next paragraph
 #   setlistAdvisory      {gate, verdict: deny|allow, code, reason}
 #   systemMessage        the reason, again, because permissionDecisionReason is
 #                        documented as reaching the USER rather than the model
 #                        when the decision is allow, and the point of a warning
 #                        is that the session sees it.
 #
+# THE ONE DENY (ER1; the 2.6.0 strategy's ruling 1, 2026-09-06; spec 0132
+# cluster B). A command that SPELLS a bypass of the git-hook boundary, an
+# assignment of SETLIST_SKIP_HOOKS=1 or SETLIST_SKIP_TRUNK_AUDIT=1, `--no-verify`
+# as a word in a git command, or `-c core.hooksPath` in a git command, is
+# denied with permissionDecision "deny" (CM-BYPASS-SPELLED, CM-HOOKSPATH-MOVED).
+# WHY this rule and no other: an advisory here is an allow with the reason in
+# systemMessage, and the A1c probe has measured that reason NOT-SEEN by the
+# model at every walk since 2.4.1 (RP5). A detection the model never sees is
+# the coaching leak restated one layer up: the hook saw the bypass and told
+# nobody who could act. This is the highest-confidence rule the layer could
+# hold, and since fix round 1 of the 2.6.0 leg (2026-09-08) it is a WORD test,
+# not a substring test: the command is lexed once, here, into segments and
+# words the way the shell hands them to git (backslash escapes, single and
+# double quotes, the separators), and a git segment carrying the word
+# `--no-verify` or a prefix git accepts for it (`--no-verif`, `--no-veri`), the
+# word `-n` or a bundled `-n` when the subcommand is `commit`, or
+# `-c core.hooksPath` as words, is denied, as is any segment carrying the
+# assignment word SETLIST_SKIP_HOOKS=1 or SETLIST_SKIP_TRUNK_AUDIT=1. The
+# first cut deleted quoted SPANS with two sed substitutions and tested the
+# remainder as text; that missed every spelling a quote touched (`"--no-verify"`
+# is the flag to bash and to git alike), paired quotes ACROSS segments (the
+# leg's F2, F3, F10, F11), and hard-denied prose it promised to allow (F8, F9).
+# The lexer is LOCAL to this rule, runs ABOVE strip_wrappers and every
+# segmenter below, and shares no byte with the frozen parsers (PD1 stands): a
+# defect in the parsers cannot reach it. The false-denial surface is stated
+# rather than discovered: a `-m` message is one word and never matches, a
+# filename that CONTAINS the spelling is not the spelling, `-n` on `push` is a
+# dry run and is not denied, and the reason says how a person proceeds. The
+# residual: a message whose ENTIRE text is the spelling (`-m --no-verify`), a
+# bypass reached through a variable or a here-document, and the whole-hook
+# escape spelled to any value but 1; the git hooks such a command would bypass
+# are the layer the design says carries the guarantee, and the forge check is
+# the layer that survives it (2.6.0). The escapes stay DOCUMENTED, here and in
+# the hooks' headers and the edition; what left in 2.6.0 is their spelling in
+# the refusal text the model reads.
+#
 # `setlistAdvisory.verdict` is evidence about THIS layer only. Every
 # guarantee-layer check binds to observed repository state instead, because a
 # guarantee that asked the parser whether the parser was right would be the
 # laundering defect this cycle is a record of, one layer up.
+# THE CODE IS EXTRACTED BY THE SHELL, NOT BY sed (KL11, the 2.5.0 leg's F12;
+# fixed 2026-09-07, spec 0132 cluster C). Every emitter below used
+# `sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p'`, and under a sed that exits 0
+# printing nothing the deny still fired with the code in its reason text and
+# `setlistAdvisory.code` EMPTY: exactly the reader that keys on the field lost
+# it, on exactly the deny that reports the broken tool. Parameter expansion
+# depends on nothing outside bash. The semantics are sed's: the LAST bracketed
+# token of the form [A-Z][A-Z0-9-]* wins, and a bracket holding anything else
+# is skipped. Pinned red-first under a silent sed for all three gates.
+adv_code_of() { # adv_code_of <reason> -> sets ADV_CODE
+  local rest="$1" cand
+  ADV_CODE=""
+  while [[ "$rest" == *"["* ]]; do
+    rest="${rest#*\[}"
+    [[ "$rest" == *"]"* ]] || break
+    cand="${rest%%\]*}"
+    case "$cand" in
+      [A-Z]*) case "$cand" in *[!A-Z0-9-]*) ;; *) ADV_CODE="$cand" ;; esac ;;
+    esac
+  done
+}
 advise() {
-  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  adv_code_of "$1"
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":%s},"systemMessage":%s,"setlistAdvisory":{"gate":"commit","verdict":"deny","code":%s,"reason":%s}}\n' \
     "$(printf '%s' "$1" | jq -Rs .)" \
     "$(printf 'setlist %s' "$1" | jq -Rs .)" \
@@ -76,10 +134,10 @@ deny() { advise "$1"; }
 # rather than the reason text, which is what makes a fourth rediscovery
 # impossible rather than unlikely.
 #
-# The extraction is sed, deliberately the SAME expression advise() uses, and it
-# cannot use jq: this whole path exists because jq is unavailable.
+# The extraction is adv_code_of, deliberately the SAME expansion advise() uses,
+# and it cannot use jq: this whole path exists because jq is unavailable.
 advise_literal() {
-  ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
+  adv_code_of "$1"
   printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"commit","verdict":"deny","code":"%s","reason":"%s"}}\n' "$1" "$1" "$ADV_CODE" "$1"
   # fail-open-ok: advisory by design; see advise() above.
   exit 0
@@ -190,6 +248,91 @@ if ! CMD="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/n
     # fail-open-ok: the unparseable payload does not mention committing either.
     *) exit 0 ;;
   esac
+fi
+
+# THE ONE DENY, above every parser (the contract paragraph at the head of this
+# file says why). The command is lexed ONCE, here, into segments and words the
+# way the shell would hand them to git, and nothing else is done to the text:
+# no wrapper stripping, no normalisation, and none of the parsers below is
+# consulted. A word is the act; a message is one word.
+deny_hard() { # deny_hard <reason>  ->  permissionDecision "deny", the one rule that vetoes
+  adv_code_of "$1"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":%s},"systemMessage":%s,"setlistAdvisory":{"gate":"commit","verdict":"deny","code":%s,"reason":%s}}\n' \
+    "$(printf '%s' "$1" | jq -Rs .)" \
+    "$(printf 'setlist %s' "$1" | jq -Rs .)" \
+    "$(printf '%s' "$ADV_CODE" | jq -Rs .)" \
+    "$(printf '%s' "$1" | jq -Rs .)"
+  # fail-open-ok: this exit 0 delivers a DENY, not an allow: the harness reads
+  # the JSON's permissionDecision, and a hook that exits non-zero would be an
+  # error the harness reports rather than a verdict it enforces.
+  exit 0
+}
+# The lexer, in awk so the same bytes run under bash 3.2 and BWK awk. It reads
+# the whole command from stdin (RS is a byte no command carries), walks it once,
+# and prints ONE verdict: "var", "noverify", "hookspath", or nothing. Words are
+# collected per segment (flush) and a segment is judged at each separator and
+# at the end (judge). The two functions read to the leg trigger as entry points
+# and the fix round that added them re-attested under RP22 rather than reshape
+# the code to silence the trigger.
+BYPASS_LEX_AWK='
+function flush() { if (inw) { W[++nw] = w }; w = ""; inw = 0 }
+function judge(   j, g, k, sub_, x) {
+  if (verdict != "") { nw = 0; return }
+  for (j = 1; j <= nw; j++) if (W[j] ~ /^SETLIST_SKIP_(HOOKS|TRUNK_AUDIT)=1$/) { verdict = "var"; nw = 0; return }
+  g = 0
+  for (j = 1; j <= nw; j++) if (W[j] ~ /(^|\/)git$/) { g = j; break }
+  if (g == 0) { nw = 0; return }
+  # the subcommand: the first word after git that is not a global option or the
+  # value of one (-c k=v, -C dir, --git-dir, --work-tree, --namespace, --exec-path)
+  sub_ = ""; k = g + 1
+  while (k <= nw && W[k] ~ /^-/) {
+    if (W[k] == "-c" || W[k] == "-C" || W[k] == "--git-dir" || W[k] == "--work-tree" || W[k] == "--namespace" || W[k] == "--exec-path") k += 2; else k++
+  }
+  if (k <= nw) sub_ = W[k]
+  for (j = g + 1; j <= nw; j++) {
+    x = W[j]
+    if (x == "--no-verify" || x == "--no-verif" || x == "--no-veri") { verdict = "noverify"; break }
+    if (sub_ == "commit" && j > k && x ~ /^-[aeiopqsvz]*n[a-zA-Z]*$/) { verdict = "noverify"; break }
+    if ((x == "-c" && j < nw && tolower(W[j + 1]) ~ /^core\.hookspath(=|$)/) || tolower(x) ~ /^-ccore\.hookspath(=|$)/) { verdict = "hookspath"; break }
+  }
+  nw = 0
+}
+BEGIN { RS = "\001"; cmd = ""; verdict = "" }
+{ cmd = cmd $0 }
+END {
+  n = length(cmd); i = 1; w = ""; inw = 0; q = ""; nw = 0
+  while (i <= n) {
+    c = substr(cmd, i, 1)
+    if (q == "\047") { if (c == "\047") q = ""; else w = w c; inw = 1; i++; continue }
+    if (q == "\"") {
+      if (c == "\\") { d = substr(cmd, i + 1, 1); if (d == "\"" || d == "\\" || d == "$" || d == "`") { w = w d; i += 2 } else { w = w c; i++ }; continue }
+      if (c == "\"") { q = ""; i++; continue }
+      w = w c; inw = 1; i++; continue
+    }
+    if (c == "\\") { w = w substr(cmd, i + 1, 1); inw = 1; i += 2; continue }
+    if (c == "\047" || c == "\"") { q = c; inw = 1; i++; continue }
+    if (c == " " || c == "\t") { flush(); i++; continue }
+    if (c == "#" && !inw) { while (i <= n && substr(cmd, i, 1) != "\n") i++; continue }
+    if (c == ";" || c == "|" || c == "&" || c == "\n" || c == "(" || c == ")" || c == "{" || c == "}") {
+      flush(); judge()
+      if ((c == "&" || c == "|") && substr(cmd, i + 1, 1) == c) i++
+      i++; continue
+    }
+    w = w c; inw = 1; i++
+  }
+  flush(); judge()
+  print verdict
+}'
+BYPASS_VERDICT="$(printf '%s' "$CMD" | awk "$BYPASS_LEX_AWK" 2>/dev/null)" || BYPASS_VERDICT="" # fail-open-ok: an awk that cannot run yields no deny, and the toolchain probe above this rule has already refused a broken awk under CM-NO-TOOLCHAIN
+BYPASS_WHAT=""
+case "$BYPASS_VERDICT" in
+  hookspath)
+    deny_hard "commit gate [CM-HOOKSPATH-MOVED]: this git command moves core.hooksPath for its own run, which disarms every Setlist git hook at once (commit, merge and push) without touching the repository's configuration. This gate DENIES it (the one rule in this layer that does). If a hook refused something, fix what it named; if you are the person who owns this exception, run the command yourself in a terminal." ;;
+  var)      BYPASS_WHAT="sets a Setlist escape variable, which switches the git-hook boundary off for everything it runs" ;;
+  noverify) BYPASS_WHAT="passes --no-verify to git (or a spelling git reads as it), which skips the git hooks that carry the boundary for this one operation" ;;
+esac
+if [[ -n "$BYPASS_WHAT" ]]; then
+  deny_hard "commit gate [CM-BYPASS-SPELLED]: this command $BYPASS_WHAT. The escapes exist for a PERSON who owns an exception, and a session does not get to spend them: this gate DENIES the command (the one rule in this layer that does). If the boundary refused something, fix what it named; if you are the person and this is your deliberate exception, run the command yourself in a terminal. A message that merely quotes the spelling is not denied."
 fi
 
 # Whether this gate applies must not depend on how the command is SPELLED.

@@ -1,0 +1,74 @@
+name: A refusal I did not expect
+description: A stamped hook, gate, audit or forge check refused something, and you want it looked at. Copy the message verbatim; the code in brackets is what the maintainer reads first.
+title: "[refusal] "
+labels: ["refusal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Field reports are the framework's fuel, and a refusal is the most useful one: every message the hooks print carries a bracketed code, and the code plus the command that drew it is usually enough to reproduce. Paste, do not paraphrase.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: Where the refusal happened. The tested-platform list is a list, not a proof, so "other" is a finding in itself.
+      options:
+        - macOS
+        - Linux
+        - Windows (WSL)
+        - Windows (native)
+        - other (say which below)
+    validations:
+      required: true
+  - type: input
+    id: git-version
+    attributes:
+      label: git version
+      description: The output of `git --version` on the machine that saw the refusal.
+      placeholder: git version 2.45.0
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Plugin and edition
+      description: The plugin version (`.claude/sdd.json`, the `plugin.version` field) and the edition line at the top of your committed `setlist.md`.
+      placeholder: plugin 2.6.0, edition v1.14
+  - type: textarea
+    id: command
+    attributes:
+      label: The command that produced it
+      description: Exactly as typed or as the agent ran it (a `git` command, a merge, a push, a pull request's check run). One command.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: message
+    attributes:
+      label: The exact refusal message
+      description: Every line the hook, gate, audit or check printed, verbatim, bracketed code included. Do not trim it.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Which layer refused
+      options:
+        - a git hook (pre-commit, pre-merge-commit, pre-push)
+        - the push-time trunk audit
+        - the forge check (a pull request's "setlist forge check")
+        - a session gate or the Stop hook (a message inside Claude Code)
+        - not sure
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected instead, and why
+      description: One or two sentences. If you think the refusal is right but the message is wrong, say that too; a message that sends you to the wrong remedy is a defect.
+  - type: checkboxes
+    id: secrets
+    attributes:
+      label: Before posting
+      options:
+        - label: The message and command above contain no secret, token or private hostname (a refusal message can quote a line of your diff).
+          required: true

@@ -113,9 +113,10 @@ if [[ "$SKEW_RC" -eq 1 && "$APPLY" == "yes" ]]; then
   die "refusing to refresh: this session is not bound to the newest plugin tree present in the cache, so it would install the older hook bytes and report an upgrade. Restart the session, then retry."
 fi
 
-# --- the four stamped enforcement files ------------------------------------------
+# --- the five stamped enforcement files (four through 2.5.0; the Stop hook joined
+# in 2.6.0, spec 0132 cluster H) ---------------------------------------------------
 
-STAMPED_HOOKS="scope-hook commit-gate close-gate regrounding-hook"
+STAMPED_HOOKS="scope-hook commit-gate close-gate regrounding-hook stop-hook"
 CHANGED=""
 SAME=""
 NEW=""
@@ -395,6 +396,9 @@ OURS_TEST='
       commit-gate)       ev=PreToolUse;  tool=Bash ;;
       close-gate)        ev=PreToolUse;  tool=Bash ;;
       regrounding-hook)  ev=SessionStart; tool="" ;;
+      # KL10 TAKEN (2026-09-07, spec 0132 cluster H): the wiring check learns the
+      # fifth session hook, on the Stop event, which takes no matcher.
+      stop-hook)         ev=Stop;        tool="" ;;
       *)                 ev=PreToolUse;  tool="" ;;
     esac
     # A MATCH-ALL MATCHER IS COVERAGE, NOT A GAP (F4-2026, 2.2.0 leg finding F4).
@@ -436,7 +440,8 @@ OURS_TEST='
   fires. Restore each entry from the plugin's templates/claude/settings.json.tmpl
   (the scope hook on PreToolUse matching Write|Edit|MultiEdit|NotebookEdit, the
   commit and close gates on PreToolUse matching Bash, the re-grounding hook on
-  SessionStart), keeping this file's own permissions and model settings."
+  SessionStart, the stop hook on Stop), keeping this file's own permissions and
+  model settings."
   fi
 
   # The scope hook is identified by what its entry EXECUTES, and only ITS
@@ -556,6 +561,47 @@ if [[ -f "$ROOT/scripts/trunk-audit.sh" ]]; then
   fi
 fi
 [[ -n "$TA_NOTE" ]] && printf '  .claude/hooks/trunk-audit.sh: %s\n' "$TA_NOTE"
+# The forge check and its workflow are reported the same way (2.6.0, spec
+# 0132): the check is a delivered file beside the audit; the workflow is
+# WIRING and is delivered only when absent, because an instance that edited
+# its workflow (a runner label, a matrix) keeps its edit, and the workflow
+# carries no mechanism byte to go stale.
+FC_DEST="$INSTANCE/.claude/hooks/forge-check.sh"
+FC_NOTE=""
+if [[ -f "$ROOT/scripts/forge-check.sh" ]]; then
+  if [[ ! -f "$FC_DEST" ]]; then FC_NOTE="missing, would be delivered"
+  elif ! cmp -s "$ROOT/scripts/forge-check.sh" "$FC_DEST"; then FC_NOTE="bytes differ, would be REPLACED"
+  fi
+fi
+[[ -n "$FC_NOTE" ]] && printf '  .claude/hooks/forge-check.sh: %s\n' "$FC_NOTE"
+FCW_SRC="$ROOT/templates/root/.github/workflows/setlist-forge-check.yml"
+FCW_DEST="$INSTANCE/.github/workflows/setlist-forge-check.yml"
+FCW_NOTE=""
+if [[ -f "$FCW_SRC" ]]; then
+  if [[ ! -f "$FCW_DEST" ]]; then FCW_NOTE="missing, would be delivered (wiring: the required check's workflow)"
+  elif ! cmp -s "$FCW_SRC" "$FCW_DEST"; then FCW_NOTE="differs from the template and is LEFT AS IS (wiring, not mechanism; the check it runs is refreshed above)"
+  fi
+fi
+[[ -n "$FCW_NOTE" ]] && printf '  .github/workflows/setlist-forge-check.yml: %s\n' "$FCW_NOTE"
+# The ownership file rides the same rule as the workflow (T1, 2.6.0): wiring
+# the team edits (the @OWNER slot is theirs to fill), delivered when absent and
+# otherwise left as is.
+CO_SRC="$ROOT/templates/root/github/CODEOWNERS.tmpl"
+CO_DEST="$INSTANCE/.github/CODEOWNERS"
+CO_NOTE=""
+if [[ -f "$CO_SRC" ]]; then
+  if [[ ! -f "$CO_DEST" ]]; then CO_NOTE="missing, would be delivered (wiring: the ownership file with its @OWNER slot)"
+  elif ! cmp -s "$CO_SRC" "$CO_DEST"; then
+    CO_NOTE="differs from the template and is LEFT AS IS (the team fills its slot and owns its edits)"
+    # Amendment 5 (2026-09-07): an instance stamped between T1 and the fourth
+    # path carries three. The leave stands (ruling 2); the report SAYS what
+    # the file lacks, by path, so the team adds the line under its own owner
+    # rather than diffing the template to find out.
+    grep -qE '^[[:space:]]*/\.github/([[:space:]]|$)' "$CO_DEST" 2>/dev/null \
+      || CO_NOTE="$CO_NOTE; it does not name the fourth protected path /.github/ (2.6.0 amendment 5: the check's workflow, the ownership file and the issue form), which the team adds under its own owner"
+  fi
+fi
+[[ -n "$CO_NOTE" ]] && printf '  .github/CODEOWNERS: %s\n' "$CO_NOTE"
 # The displacement warning is printed WHENEVER apply would refuse, not only
 # when boundary files also happen to differ (round 9, finding 3: a current
 # boundary behind an unreadable directory reported "present and
@@ -586,6 +632,28 @@ fi
 if [[ -n "$WIRING_GAPS" ]]; then
   printf 'settings wiring, NOT refreshed by this script (it holds your own permissions and model settings):%s\n' "$WIRING_GAPS"
 fi
+# THE gates BLOCK MIGRATION (P2, 2.6.0; design section 8 as amended by the
+# owner's ruling of 2026-09-07, spec 0132 "What the contract left open" 5). An
+# instance stamped before the block reads, through the library's one reader,
+# exactly as if the block said {commit: "", close: gate_command, push:
+# gate_command}; --apply WRITES that block so the shape is visible and
+# editable, and no verdict changes. A present block is left alone. A block the
+# reader would refuse (SLH-GATES-SHAPE) is reported here and left alone too: a
+# declaration somebody wrote is not this script's to rewrite. Computed HERE,
+# before the report, so report mode and apply mode describe the same future.
+GATES_WRITE=0
+GATES_STATE="$(jq -r 'if (.gates == null) then "absent" elif ((.gates | type) != "object") then "shape" elif ([.gates.commit, .gates.close, .gates.push] | map(type == "string") | all) then "present" else "shape" end' "$SDD" 2>/dev/null || printf 'unreadable')" # fail-open-ok: an unreadable answer is reported below and nothing is written for it
+GATES_SINGLE="$(jq -r '.gate_command // ""' "$SDD" 2>/dev/null || printf '')" # fail-open-ok: the value is only echoed into the report; the write reads the file again through jq
+case "$GATES_STATE" in
+  absent)
+    GATES_WRITE=1
+    printf '.claude/sdd.json: no gates block (the three gate tiers, 2.6.0); --apply writes {"commit": "", "close": "%s", "push": "%s"}, the single gate_command at the close and push tiers and nothing at commit, which is what the hooks already read for an absent block, so no verdict changes.\n' "$GATES_SINGLE" "$GATES_SINGLE" ;;
+  shape)
+    printf '.claude/sdd.json: the gates block is not an object of three string tiers (commit, close, push), so the hooks refuse SLH-GATES-SHAPE until it is written as {"commit": "", "close": "<the full gate>", "push": "<the full suite>"} or removed; --apply LEAVES it as it is.\n' ;;
+  present) ;;
+  *)
+    printf '.claude/sdd.json: the gates block could not be read; --apply leaves it as it is.\n' ;;
+esac
 
 if [[ "$APPLY" != "yes" ]]; then
   if [[ -n "$CHANGED" ]]; then
@@ -644,7 +712,7 @@ BOUNDARY_UNSAFE="$(setlist_boundary_dir_unsafe "$INSTANCE" 2>/dev/null)"
 # .githooks/ loop sixty lines down has refused this exact shape for three
 # rounds. Every advisory destination is checked before the first one is
 # written, so this refusal can still say "Nothing has been changed" and mean it.
-for h in $STAMPED_HOOKS trunk-audit; do
+for h in $STAMPED_HOOKS trunk-audit forge-check; do
   ADV_UNSAFE="$(setlist_deliver_dest_unsafe "$INSTANCE" ".claude/hooks/$h.sh" 2>/dev/null)"
   [[ -z "$ADV_UNSAFE" ]] || die "refusing to refresh: $ADV_UNSAFE Nothing has been changed."
 done
@@ -705,6 +773,27 @@ if [[ -f "$ROOT/scripts/trunk-audit.sh" ]]; then
     || die "could not deliver trunk-audit.sh to .claude/hooks/: ${ADV_NOTE:-the copy failed} pre-push would refuse every push outside a Claude Code session."
   [[ -z "$ADV_NOTE" ]] || printf 'refresh-instance.sh: %s\n' "$ADV_NOTE"
   [[ -f "$INSTANCE/.claude/hooks/trunk-audit.sh" ]] || die "could not deliver trunk-audit.sh to .claude/hooks/; pre-push would refuse every push outside a Claude Code session."
+fi
+# The forge check, beside the audit, same rule (2.6.0, spec 0132); and its
+# workflow, delivered only when absent (see the report above for why).
+if [[ -f "$ROOT/scripts/forge-check.sh" ]]; then
+  mkdir -p "$INSTANCE/.claude/hooks" # fail-open-ok: as above, the guarded delivery names the file if this failed
+  ADV_NOTE="$(setlist_deliver_file "$ROOT/scripts/forge-check.sh" "$INSTANCE" ".claude/hooks/forge-check.sh")" \
+    || die "could not deliver forge-check.sh to .claude/hooks/: ${ADV_NOTE:-the copy failed} the stamped workflow would refuse every pull request."
+  [[ -z "$ADV_NOTE" ]] || printf 'refresh-instance.sh: %s\n' "$ADV_NOTE"
+  [[ -f "$INSTANCE/.claude/hooks/forge-check.sh" ]] || die "could not deliver forge-check.sh to .claude/hooks/; the stamped workflow would refuse every pull request."
+fi
+if [[ -f "$CO_SRC" && ! -e "$CO_DEST" && ! -L "$CO_DEST" ]]; then
+  mkdir -p "$INSTANCE/.github" # fail-open-ok: the guarded delivery below reports the failure by name
+  ADV_NOTE="$(setlist_deliver_file "$CO_SRC" "$INSTANCE" ".github/CODEOWNERS")" \
+    || die "could not deliver the ownership file to .github/CODEOWNERS: ${ADV_NOTE:-the copy failed}"
+  [[ -z "$ADV_NOTE" ]] || printf 'refresh-instance.sh: %s\n' "$ADV_NOTE"
+fi
+if [[ -f "$FCW_SRC" && ! -e "$FCW_DEST" && ! -L "$FCW_DEST" ]]; then
+  mkdir -p "$INSTANCE/.github/workflows" # fail-open-ok: the guarded delivery below reports the failure by name
+  ADV_NOTE="$(setlist_deliver_file "$FCW_SRC" "$INSTANCE" ".github/workflows/setlist-forge-check.yml")" \
+    || die "could not deliver the forge check's workflow to .github/workflows/: ${ADV_NOTE:-the copy failed}"
+  [[ -z "$ADV_NOTE" ]] || printf 'refresh-instance.sh: %s\n' "$ADV_NOTE"
 fi
 
 if [[ -n "$GITHOOKS_SKIP_NOTE" ]]; then
@@ -819,7 +908,11 @@ fi
 # Record the stamping version. Written last, so a failed copy never leaves an
 # instance claiming a version whose bytes it does not carry.
 TMP="$SDD.refresh.$$"
-if ! jq --arg v "$PLUGIN_VERSION" '.plugin = ((.plugin // {}) + {version: $v})' "$SDD" > "$TMP"; then
+# The gates block rides the same write when it is owed (GATES_WRITE, decided
+# above before the report), appended after every existing key on STAMP-TREE's
+# rule, its close and push tiers the single gate_command read from the file
+# itself here rather than from the report's echo.
+if ! jq --arg v "$PLUGIN_VERSION" --argjson g "$GATES_WRITE" '.plugin = ((.plugin // {}) + {version: $v}) | if ($g == 1 and .gates == null) then .gates = {commit: "", close: (.gate_command // ""), push: (.gate_command // "")} else . end' "$SDD" > "$TMP"; then
   rm -f "$TMP"
   die "the hooks were refreshed but recording the plugin version in $SDD failed; record .plugin.version = \"$PLUGIN_VERSION\" by hand before closing"
 fi
@@ -830,7 +923,7 @@ fi
 # config. The write must be one JSON object carrying the version it claims to
 # record, or the old file stays and the refusal names the state.
 if ! [[ -s "$TMP" ]] \
-   || ! jq -e -s --arg v "$PLUGIN_VERSION" 'length == 1 and (.[0] | type == "object") and (.[0].plugin.version == $v)' "$TMP" >/dev/null 2>&1; then
+   || ! jq -e -s --arg v "$PLUGIN_VERSION" --argjson g "$GATES_WRITE" 'length == 1 and (.[0] | type == "object") and (.[0].plugin.version == $v) and ($g == 0 or ((.[0].gates | type) == "object" and ([.[0].gates.commit, .[0].gates.close, .[0].gates.push] | map(type == "string") | all)))' "$TMP" >/dev/null 2>&1; then
   rm -f "$TMP"
   die "the hooks were refreshed but the rewritten $SDD did not read back as one JSON object recording plugin $PLUGIN_VERSION, so the old file is left in place untouched (jq exited 0 and wrote nothing, or wrote something else). Check 'jq --version', then record .plugin.version = \"$PLUGIN_VERSION\" by hand before closing"
 fi
@@ -840,10 +933,11 @@ fi
 mv "$TMP" "$SDD" \
   || { rm -f "$TMP"; die "the hooks and the git-hook boundary were delivered, but writing the recorded plugin version to $SDD failed. Set .plugin.version = \"$PLUGIN_VERSION\" by hand, or re-run this script."; }
 
+[[ "$GATES_WRITE" -eq 1 ]] && printf 'refresh-instance.sh: wrote the gates block to %s (commit empty; close and push the single gate_command), the shape the hooks already read for an absent block.\n' "$SDD"
 if [[ -n "$GITHOOKS_SKIP_NOTE" ]]; then
-  printf 'refresh-instance.sh: refreshed the four stamped hooks and recorded plugin %s in %s; the git-hook boundary was NOT touched (see above).\n' "$PLUGIN_VERSION" "$SDD"
+  printf 'refresh-instance.sh: refreshed the five stamped hooks and recorded plugin %s in %s; the git-hook boundary was NOT touched (see above).\n' "$PLUGIN_VERSION" "$SDD"
 else
-  printf 'refresh-instance.sh: refreshed the four stamped hooks, delivered the git-hook boundary (.githooks/ plus core.hooksPath and merge.ff), and recorded plugin %s in %s\n' "$PLUGIN_VERSION" "$SDD"
+  printf 'refresh-instance.sh: refreshed the five stamped hooks, delivered the git-hook boundary (.githooks/ plus core.hooksPath and merge.ff), and recorded plugin %s in %s\n' "$PLUGIN_VERSION" "$SDD"
 fi
 printf 'Hooks load at session start, so the refreshed gates bind from the NEXT session onward.\n'
 

@@ -9,6 +9,63 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.6.0
+
+**Edition v1.14 (the team edition).** The team release. This entry is capped under 600 words by a standing rule
+(the 2.5.0 entry ran past a thousand words); the release notes carry the rest.
+
+- **The forge check, the layer that survives a clone.** `.claude/hooks/forge-check.sh`
+  is stamped beside the trunk audit; `.github/workflows/setlist-forge-check.yml` runs
+  it on every pull request as the status check `setlist forge check`. It makes the
+  merge the forge has not made yet and asks it what the hooks ask, one token on
+  stdout, never a pass on absence, no escape variable. Require it on the trunk with
+  one approving review and the merge button enforces what the local gate would have;
+  it cannot require itself, and reports until you do.
+- **`forge` custody is built.** No key: the approval is the ACTIVE flip landing on
+  the protected trunk through a required review, verified at the check from the
+  trunk's protection (rulesets and classic protection, as the forge composes them)
+  and the flip's ancestry; every pass says what that establishes; the local hooks
+  defer to the check by name.
+- **The CODEOWNERS bridge.** The stamped `.github/CODEOWNERS` makes `.githooks/`,
+  `.claude/`, `specs/attest/` and `.github/` reviewed changes under an `@OWNER` slot
+  you fill; the audit and the check judge `Owns:` declarations against it: refused at
+  the forge on the author and at `pre-push` on an email owner, reported for a handle
+  the audit cannot resolve, advised at the merge.
+- **Three gate tiers.** `gates.commit`, `gates.close` and `gates.push` in `sdd.json`;
+  an absent block reads as today's `gate_command`, and the upgrade writes exactly
+  that. The close gate's in-session suite run is gone (the git hook runs it once, at
+  the landing); its timeout fell from 1800 to 300 seconds.
+- **The lite spec tier.** `Tier: lite` owns at most five files, refused past that at
+  every close as `SLH-LITE-OVERSIZED`; absence is judged exactly as before.
+  Checkpoint drafts the Closing report from the record, verdicts left to you.
+- **A Stop hook, and the escape no longer coached.** The fifth session hook refuses
+  to end a turn with an unstaged spec or `specs/STATUS.md` change, once per turn. No
+  refusal names the escape variables any more; a bypass spelled inside a `git`
+  command is the one thing the advisory commit gate denies outright. The deny list
+  gains `Bash(cat .env*)` and says it is a spelling list.
+
+**The Known-limitations list as it leaves this release: 33 design boundaries, 2 open
+limitations, 2 upstream conditions.** The remote-merge bypass leaves Open limitations
+as built, retitled to its remaining boundary; three boundaries enter (the CODEOWNERS
+bridge's grammar, the trunk's protection read as it stands, the Stop hook's reach);
+five bullets are reworded for the check.
+
+**Three blockers the release's own review found in the features above are fixed before
+this tag:** the forge check's trunk comparison, the one deny's quoted and abbreviated
+spellings, the ownership reader's inline comment and unreadable file.
+
+**A correction to the 2.5.0 notes, stated plainly rather than quietly fixed.** The
+2.5.0 entry named the instrument that checks the document's self-claims by a path this
+repository does not contain. It is the maintainer's claims comparator, run per push in
+the source repository. The 2.5.0 entry is not edited; the publish tooling now refuses
+such a path in a public file.
+
+**A second correction, to the framework document.** From v1.7 through v1.13 its
+scanning paragraph said no path-scoping procedure existed and that `pre-push` did not
+read the escape variable. The procedure shipped in v1.10 and `pre-push` has honoured
+the variable since 2.2.0. Corrected in v1.14, dated; the comparator now reads
+correction paragraphs against the document's body.
+
 ## 2.5.0
 
 **Edition v1.13 (the toolchain edition).** The second maintenance release: one

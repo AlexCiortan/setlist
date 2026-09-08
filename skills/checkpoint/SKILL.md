@@ -56,10 +56,35 @@ full mandate when in doubt:
   once the checklist below passes) provided it executes the same checklist.
   The hooks enforce the same conditions either way.
 
+## Drafting the paperwork at the close (Part 7, edition v1.14)
+
+Before the gatekeeper checks below run, DRAFT the Closing report from what the
+record and the tree already hold, and leave every VERDICT to the human:
+
+- the `qa-pass-1` block: one `<criterion>: ` line per acceptance criterion,
+  read from the spec's checklist, the verdict left blank (never PASS by
+  default; a blank line is refused by the gates, correctly, until a person
+  fills it);
+- What was built: from the branch's commit subjects since the trunk;
+- Test counts (before -> after): from the gate command's output where the
+  runner prints them, otherwise the field name with the value left blank;
+- Deviations, Open verifications, Migrations, Design QA, Follow-ups: the
+  field names, answers blank;
+- the diagram field: NEVER pre-filled. "no impact" written by a tool is the
+  claim the field exists to make a person make.
+
+A drafted report is a scaffold, not a close. In a lite spec (`Tier: lite`,
+Part 5) the scaffold is one verdict line and the same fields; the tier saves
+authoring time, not evidence.
+
 ## Closing a spec (the gatekeeper role)
 
 Refuse to merge until every check passes; name the missing item when refusing:
 
+0. If the header reads `Tier: lite`, its `Owns:` set has at most five files.
+   Past that, refuse the close and name the two exits (drop the tier line and
+   close as a full spec, or split the work); the hooks refuse it as
+   `SLH-LITE-OVERSIZED` at every layer anyway, and saying so here is cheaper.
 1. The spec file's Closing report is complete: the fenced `qa-pass-1` verdict
    block (one `<criterion>: PASS|PARTIAL|FAIL` line each) and the QA Pass 1
    report pasted verbatim, QA Pass 2 confirmed by the developer, and the
@@ -112,7 +137,10 @@ this command skips is a fact the machine never learns:
   the Closing report heading), one verbatim file per line. REFUSE to write a
   glob, a directory, a `./`-prefixed or quoted path: a declared set you cannot
   enumerate is an exemption wearing a declaration, and the audit reads exactly
-  that grammar. Under declared attestation custody these appends drift the
+  that grammar. In a spec whose header reads `Tier: lite`, REFUSE to write a
+  sixth line: the cap is the tier's (Part 3), and the close would refuse it as
+  `SLH-LITE-OVERSIZED`; the honest moves are dropping the tier line or
+  splitting. Under declared attestation custody these appends drift the
   hash; that is the mechanism working, and the re-attestation happens at your
   next invocation, where the human already is.
 - **Close (on the branch, before the merge):** flip `status` to `closed` and
@@ -171,6 +199,16 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/spec-attest.sh" specs/NNNN-slug.md
 That writes `specs/attest/NNNN.json` and `specs/attest/NNNN.sig`. Stage both
 with the Status change and the `Spec-hash:` field; the git hooks refuse a build
 commit whose ACTIVE spec has no valid attestation over its current bytes.
+
+**Under `forge` custody (edition v1.14) the same command writes the document
+and SIGNS NOTHING**, and says so: there is no key. The approval is that flip
+landing on the protected trunk through a pull request with a required review,
+verified by the stamped forge check; a document introduced on a branch and
+never landed through review is refused at the check (`FC-FLIP-NOT-ON-TRUNK`).
+Locally the hooks defer to the check by name while it is in the tree
+(`SLH-ATTEST-DEFERRED`, an allow) and refuse as unverifiable when it is not.
+So the flip goes to the trunk through the pull request BEFORE the build starts
+on the branch, and the close's re-attestation is verified at the check again.
 
 **This step belongs to a session where a HUMAN IS PRESENT, and that is the whole
 of what it is for.** A signature proves a key was used, not that a person

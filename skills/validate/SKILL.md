@@ -30,11 +30,18 @@ instance's own name, never in a copy of this command.
 Checks:
 
 1. `.claude/settings.json` parses as JSON and still carries the permission
-   rules (deny on .env reads; ask on push, hard reset, force push, rm -rf).
-2. The four stamped hooks are present in `.claude/hooks/` and wired in
+   rules (deny on .env reads, and since 2.6.0 the one Bash spelling
+   `Bash(cat .env*)` beside them; ask on push, hard reset, force push, rm -rf).
+   The `_comment` key in the permissions block is the deny list's own note
+   (a deny list is a spelling list) and is not a finding; a `//` comment
+   anywhere in the file IS one, because the harness then drops every rule.
+2. The five stamped hooks are present in `.claude/hooks/` and wired in
    settings.json: scope-hook on Write|Edit|MultiEdit|NotebookEdit
    (PreToolUse), commit-gate and close-gate on Bash (PreToolUse),
-   regrounding-hook on SessionStart. A disabled or missing hook is a finding,
+   regrounding-hook on SessionStart, stop-hook on Stop (2.6.0; no matcher).
+   An instance stamped before 2.6.0 lacks the fifth until `/setlist:upgrade`
+   delivers it and its settings entry is restored from the template. A
+   disabled or missing hook is a finding,
    not an error: report it with the settings line that would re-enable it.
    The pre-1.0.3 matcher `Write|Edit` is a finding (NotebookEdit writes files
    past the trunk rule), as is any hook entry with no explicit `timeout` (a
@@ -42,7 +49,14 @@ Checks:
    current template.
 3. `.claude/sdd.json` parses, names the src and tests role paths (`roles.src`,
    `roles.tests`, each a string or a list of strings) and the `trunk`, and
-   carries a non-empty `gate_command` once `scaffolded` is true. A role path
+   carries a non-empty `gate_command` once `scaffolded` is true, and, when it
+   carries a `gates` block (2.6.0, the three tiers), that block is an object
+   of three strings `commit`, `close`, `push` with `close` and `push` non-empty
+   once `scaffolded` is true (an empty tier there is the stamped default, not a
+   declaration, and the git hook refuses every close on it; a block of any
+   other shape is refused `SLH-GATES-SHAPE` by the hooks). An absent block is
+   not a finding: it reads as the single `gate_command` at `close` and `push`,
+   and `/setlist:upgrade`'s refresh writes it. A role path
    of `"."` is a finding: the scope hook ignores it by design (Part 6);
    recommend enumerating the real code paths as a list.
 4. Required files exist: CLAUDE.md, README.md, ROADMAP.md, RUNBOOK.md,
@@ -172,6 +186,27 @@ Checks:
     hands), and refusing it would need a cross-spec read at declaration time
     whose cost nobody has measured. Report the file and both owners; the human
     decides whether it is a handoff or a lie.
+20. **The two wiring files the refresh never replaces** (2.6.0, spec 0132, the
+    owner's ruling 2 of 2026-09-07). `.github/workflows/setlist-forge-check.yml`
+    and `.github/CODEOWNERS` are delivered by `/setlist:upgrade`'s refresh when
+    ABSENT and LEFT AS IS when they differ from the plugin's templates, because
+    both are the team's wiring (a runner label, a matrix; the `@OWNER` slot and
+    the paths the team adds). A silent leave is refused the same way a silent
+    replace is: report, BY FILE, which of the two differs from its template
+    (`cmp -s` against `${CLAUDE_PLUGIN_ROOT}/templates/root/.github/workflows/
+    setlist-forge-check.yml` and `${CLAUDE_PLUGIN_ROOT}/templates/root/github/
+    CODEOWNERS.tmpl`). The ownership file differing is INFORMATION once its slot
+    is filled (a standing `@OWNER` slot is check 8's finding), with one clause
+    the refresh's report carries too: a file that does not name the
+    fourth protected path `/.github/` (ratification amendment 5, 2026-09-07:
+    the check's own workflow, the ownership file and the issue form) leaves
+    the check's wiring an unreviewed change, so say so by path and recommend
+    the line under the team's own owner; the refresh never adds it. The workflow
+    differing is INFORMATION naming the file, and a FINDING only when its edited
+    form no longer runs the stamped check (`.claude/hooks/forge-check.sh` absent
+    from its command line), because then the required check named `setlist
+    forge check` verifies nothing. Either file ABSENT is a finding recommending
+    `/setlist:upgrade`, which delivers it. Replace neither yourself.
 
 ## Gotchas (field-observed)
 

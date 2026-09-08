@@ -18,6 +18,17 @@ specs/TEMPLATE.md, which is the same text, stamped at bootstrap.
   prose: an ADR (the usual case), or a Decision section in the spike file's
   Closing report. Dependent specs cite it by path, so the dependency is a file
   reference, not a remembered sentence.
+- The tier is one header line (edition v1.14). `Tier: full` is what the
+  template ships; `Tier: lite`, exactly so, at column 0 above the Closing
+  report heading, declares the trimmed shape of Part 5: one acceptance
+  criterion (plus the human-acceptance item where the work is
+  experience-critical), the v1.7 clauses deleted, the Gates block unchanged,
+  the Closing report kept whole where the gates read it (the one-line QA
+  verdict block, QA Pass 2, the mandatory diagram field). A lite spec owns at
+  most five files (checkpoint writes the `Owns:` lines and refuses a sixth;
+  the close refuses `SLH-LITE-OVERSIZED`). A change that will touch more is a
+  full spec from the start; a lite spec that outgrows its cap drops the line
+  or splits, and never argues with the hook.
 - The header fields are contracts, not decoration: `Depends on:` names specs
   that must be CLOSED first; `Owner docs:` is the Builder's read budget for
   this spec; `QA binding:` declares how Pass 1 verifies it, decided at
@@ -49,7 +60,9 @@ verifies it mechanically:
 - What was built; deviations and whether each was ratified; test counts
   (before -> after).
 - The QA Pass 1 verdict block (a fenced `qa-pass-1` block, one
-  `<criterion>: PASS|PARTIAL|FAIL` line each), which is what the gates read, and
+  `<criterion>: PASS|PARTIAL|FAIL` line each; checkpoint drafts the lines from
+  the criteria at the close with the verdicts blank, edition v1.14, and the
+  verdicts are the human's), which is what the gates read, and
   below it the full report pasted verbatim, which is what people read. A QA pass that is
   not in the repo did not happen. Honest PARTIALs, never claimed PASSes.
 - QA Pass 2: confirmed by the developer, with the spot-checked criterion named.

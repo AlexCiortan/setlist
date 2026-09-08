@@ -2,9 +2,11 @@
 {{IF:OPUSPLAN}}  "model": "opusplan",
   "fallbackModel": ["default"],
   "permissions": {
+    "_comment": "A deny list is a SPELLING list. Read(.env) and Read(.env.*) stop the Read tool; Bash(cat .env*) stops one Bash spelling and nothing else: less, head, tail, sed, a $(<.env) expansion, a source or a grep read the same file and are not listed, and the scope hook watches the file-writing tools, not Bash. This key is where the note lives because it is what the harness tolerates: measured 2026-09-07 on Claude Code 2.1.259, a _comment key here left every rule in force, and a // comment made the file unreadable and silently dropped every rule in it.",
     "deny": [
       "Read(.env)",
-      "Read(.env.*)"
+      "Read(.env.*)",
+      "Bash(cat .env*)"
     ],
     "ask": [
       "Bash(git push*)",
@@ -36,7 +38,7 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/close-gate.sh",
-            "timeout": 1800
+            "timeout": 300
           }
         ]
       }
@@ -47,6 +49,17 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/regrounding-hook.sh",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/stop-hook.sh",
             "timeout": 60
           }
         ]

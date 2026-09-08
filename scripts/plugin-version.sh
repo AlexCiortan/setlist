@@ -52,8 +52,12 @@ compare() { # compare <a> <b>
   for i in 1 2 3; do
     a="$(part "$1" "$i")"
     b="$(part "$2" "$i")"
-    if [[ "$a" -gt "$b" ]]; then printf 'newer\n'; return 0; fi
-    if [[ "$a" -lt "$b" ]]; then printf 'older\n'; return 0; fi
+    # Base 10, always: [[ -gt ]] read a leading zero as OCTAL, printed an
+    # arithmetic error for 08 and 09, and fell through to "same" at exit 0, the
+    # one answer this file must never give by accident (the 2.6.0 leg's F14).
+    [[ "$a" =~ ^[0-9]+$ && "$b" =~ ^[0-9]+$ ]] || die "not a version: '$1' or '$2' (component $i is not a number)"
+    if (( 10#$a > 10#$b )); then printf 'newer\n'; return 0; fi
+    if (( 10#$a < 10#$b )); then printf 'older\n'; return 0; fi
   done
   printf 'same\n'
 }

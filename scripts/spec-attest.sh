@@ -76,14 +76,13 @@ if [ -z "$CUSTODY" ]; then
   printf '    "attestation": {"required": true, "custody": "signer", "verify_with": ".claude/approvers.pub"}\n' >&2
   exit 1
 fi
-if [ "$CUSTODY" = "forge" ]; then
-  printf 'spec-attest.sh: forge custody is DESIGNED AND NOT BUILT.\n' >&2
-  printf '  Its verification is a query the forge answers and it lands with the\n' >&2
-  printf '  forge-side required check, which is filed rather than promised. Nothing\n' >&2
-  printf '  signed here would be accepted, so nothing is written. Use "signer" for a\n' >&2
-  printf '  mechanism that works today.\n' >&2
-  exit 1
-fi
+# CUSTODY C HAS NO KEY BY DESIGN (design-forge-check-kl5-2026-09-06.md, section
+# 5): under "forge" this writes the DOCUMENT and signs nothing. The document is
+# a claim the forge check verifies when the flip reaches the protected trunk
+# through a pull request; it is not an approval until it lands, and the output
+# below says so rather than letting a written file read as one.
+FORGE_ARM=0
+[ "$CUSTODY" = "forge" ] && FORGE_ARM=1
 
 HASH="$(bash "$ROOT/scripts/spec-hash.sh" "$SPEC")" || HASH=""
 if [ -z "$HASH" ]; then
@@ -92,7 +91,7 @@ if [ -z "$HASH" ]; then
   exit 3
 fi
 
-if ! command -v ssh-keygen >/dev/null 2>&1; then
+if [ "$FORGE_ARM" -eq 0 ] && ! command -v ssh-keygen >/dev/null 2>&1; then
   printf 'spec-attest.sh: ssh-keygen is required to sign and is not installed.\n' >&2
   exit 3
 fi
@@ -133,6 +132,20 @@ cat > "$DOC" <<JSONEOF
   "notes": ""
 }
 JSONEOF
+
+if [ "$FORGE_ARM" -eq 1 ]; then
+  printf 'spec-attest.sh: wrote %s (forge custody: no signature, by design)\n' "specs/attest/${NUM}.json"
+  printf '  spec:     %s\n' "$REL"
+  printf '  hash:     %s\n' "$HASH"
+  printf '  approver: %s (a label; the forge'"'"'s review is the custody)\n' "$APPROVER"
+  printf '  custody:  forge\n'
+  printf '  This document is a CLAIM the forge check verifies, not an approval until the\n'
+  printf '  ACTIVE flip that carries it reaches the protected trunk through a reviewed\n'
+  printf '  pull request. Locally the hooks verify its bytes and defer the approval to\n'
+  printf '  the check by name. Stage it in the SAME commit as the ACTIVE flip and the\n'
+  printf '  Spec-hash, and land that commit through a pull request.\n'
+  exit 0
+fi
 
 # THE SIGNATURE IS NAMESPACED. A signature made with the same key for some
 # other purpose must not verify as an approval, and the namespace is what makes
