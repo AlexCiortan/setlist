@@ -95,35 +95,7 @@ SLH_TEMPLATE_FENCE_AWK='function __f(k,  i){ if(k) for(i=1;i<=n;i++) print b[i];
 # (v1.9 leg, V19-F2). One definition, used by every reader in this file.
 SLH_CLOSING_REPORT_RE=$'^ {0,3}#{1,6}[ \t]+Closing report'
 
-# THE LIFECYCLE DETECTOR, MADE A SIBLING OF THE THREE READERS IT DISAGREED WITH
-# (v1.9 leg, V19-F2: a CONFIRMED FALSE DENIAL, disclosed at 2.1.0 under a dated
-# owner ruling and promised to this cycle by that release's notes).
-#
-# pre-commit asked "does this commit move a spec lifecycle state" by grepping
-# the RAW staged diff for `^\+Status:...|^\+#+[[:space:]]*Closing report`. Two
-# defects, one cause, measured in both directions on a stamped fixture:
-#
-#   - A spec that QUOTES the closing-report template inside a ```markdown fence,
-#     changing no lifecycle state of its own, was refused SLH-STATUS-MISSING.
-#     The quotation is ordinary authoring: the template ships fenced in the
-#     edition, is stamped to specs/TEMPLATE.md, and the authoring skill tells
-#     authors to copy it.
-#   - The mirror: `  ## Closing report` with two spaces of indent was not matched
-#     AT ALL, while the three other readers in the same release accept
-#     `^ {0,3}#{1,6}[ \t]+Closing report`. Three readers, one release, three
-#     different opinions about what a Closing report heading is. That is the
-#     class this repository's leg 2 through 4 blockers came from.
-#
-# THE FIX IS THE SIBLING RULE, NOT A FOURTH SPELLING (A9). The detector reads
-# the spec FROM THE INDEX, strips template quotes with the same
-# SLH_TEMPLATE_FENCE_AWK the close verification uses, and matches the same
-# heading form. Reading the index rather than the diff text is deliberate and is
-# the half a diff-only repair gets wrong: `--unified=0` yields no context, so a
-# fence opened by an earlier commit is invisible and the stripper cannot know it
-# is inside one. The DIFF still decides WHICH lines are new, so an untouched
-# Status line in a file edited for other reasons does not fire the check; the
-# INDEX decides whether that line is live text or a quotation. Both questions
-# get asked of the surface that can answer them.
+# HISTORY: ruling LIB-01 (plugin 2.1.0), in the framework source's private hook-rulings record: THE LIFECYCLE DETECTOR, MADE A SIBLING OF THE THREE READERS IT DISAGREED WITH.
 slh_lifecycle_added() { # slh_lifecycle_added <proj> <states-re> <spec-path...> -> 0 when this change ADDS a live lifecycle line
   local proj="$1" states_re="$2"; shift 2
   local f live added __ldiff
@@ -135,14 +107,7 @@ slh_lifecycle_added() { # slh_lifecycle_added <proj> <states-re> <spec-path...> 
     # fail-open-ok: no live lifecycle line in this spec is nothing to pair with an inventory row.
     live="$(slh_index_show "$proj" "$f" | awk "$SLH_TEMPLATE_FENCE_AWK" | grep -E "^Status:[[:space:]]*(${states_re})|${SLH_CLOSING_REPORT_RE}" || true)"
     [ -n "$live" ] || continue
-    # THIS READER TAKES THE SAME RENDERING THE SCANS TAKE, so it takes the same
-    # flags (RC2-2026, fixed 2026-09-02, spec 0129; the reasons are written out
-    # at pre-commit's scan site). Measured before the fix: under
-    # `color.ui=always` a Status flip staged without STATUS.md committed clean,
-    # because this reader saw a coloured diff as adding no lifecycle line; a
-    # `diff.external` driver did the same, since this was one of the three
-    # sites that lacked --no-ext-diff. And git's status is read: a detector
-    # that could not run cannot say "no lifecycle line was added".
+    # HISTORY: ruling LIB-02 (2026-09-02), in the framework source's private hook-rulings record: THIS READER TAKES THE SAME RENDERING THE SCANS TAKE, so it takes the same.
     if ! __ldiff="$(git -C "$proj" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv -- "$f" 2>/dev/null)"; then
       slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render the staged diff of $f, so the lifecycle detector read nothing and cannot tell whether this commit changes a spec's lifecycle state. A reader that could not run has not passed. Run 'git diff --cached -- $f' here to see the failure."
       return 1
@@ -162,66 +127,11 @@ EOF
   return 1
 }
 
-# ===========================================================================
-# CONTENT SCANNING, BOUND TO CONTENT RATHER THAN TO AN OPERATION (F1, 2026-08-05).
-#
-# The em-dash and secret scans lived in pre-commit and nowhere else, so every
-# route that creates a commit WITHOUT firing pre-commit carried unscanned bytes
-# to the trunk. Measured, each landing a live-shaped key at rc=0 with the audit
-# also reporting clean: cherry-pick, rebase, am, merge --no-ff, merge --ff. The
-# same bytes through `git commit` were refused SLH-SECRET. The siblings that
-# route through the index instead (git apply then commit, checkout -- then
-# commit, stash then commit) all refused correctly, which is what makes this a
-# hook-FIRING gap rather than a weak scanner.
-#
-# The fix is deliberately not an enumeration of operations. Enumerating is the
-# class C lesson from this same leg: the list is always one entry short of the
-# next attack, and git offers no pre-cherry-pick, pre-rebase-commit or pre-am
-# hook to enumerate anyway. So the rule is stated once here and every layer that
-# can see content calls it:
-#
-#   pre-commit         the staged diff        (the ordinary path)
-#   pre-merge-commit   the merge's own diff   (the framework's close path)
-#   pre-push           the pushed range       (the backstop for everything else)
-#
-# WHAT THE COMMIT-TIME LAYERS CANNOT COVER, stated rather than implied: git
-# fires no hook for cherry-pick, for rebase's intermediate commits, or for the
-# apply step of `git am`. Those routes reach the trunk unscanned at commit time
-# BY CONSTRUCTION, and the pre-push range scan is what catches them, which means
-# they are caught before the content is shared rather than before it is
-# committed. What this does NOT establish, and claimed to until the v1.7 claims
-# audit measured it: that a pushed history cannot carry an unscanned secret. It
-# can, by at least four routes the README now names at their real strength, the
-# plainest being that the push-time read is an ENDPOINT DIFF rather than a walk
-# of the commits, so content added and removed inside the pushed range is never
-# rendered while every object still reaches the remote. Treat a secret that
-# reached a commit as compromised regardless of what any layer here reported.
+# HISTORY: ruling LIB-03 (2026-08-05), in the framework source's private hook-rulings record: CONTENT SCANNING, BOUND TO CONTENT RATHER THAN TO AN OPERATION (F1, 2026-08-05).
 SLH_EMDASH="$(printf '\342\200\224')"
 SLH_SECRET_RE='(api[_-]?key|secret|passw(or)?d|token)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{16,}|[a-z][a-z0-9+.-]*://[^/@[:space:]]+:[^@[:space:]]+@'
 
-# ===========================================================================
-# PATH-SCOPED SCANS: THE DECLARED EXCLUSION SET, NAMED OUT LOUD (KL4, spec 0122).
-#
-# The two scans above read every added line, which is right for the author's own
-# writing and wrong for a vendored tree, a fixture carrying a dummy credential,
-# or quoted external text. Splitting the commit does not help (measured): the
-# scan follows the content, so isolating the foreign file isolates it WITH the
-# scanner. So the projects that carry such content declare an exclusion set:
-#
-#   .claude/sdd.json  ->  "scan_exclusions": ["vendor/**", "test/fixtures/**"]
-#
-# FOUR PROPERTIES, each of which is the reason a different failure cannot happen
-# here, and each asserted by the suite rather than promised by this comment.
-#
-# 1. EVERY SKIP IS ANNOUNCED, EVERY TIME. A scan that silently declines to read
-#    a path is the vacuous green this whole layer exists to remove, wearing a
-#    feature's name. The notice carries the path AND the glob that matched it,
-#    at whichever layer did the skipping, so "why did this pass" is answerable
-#    from the output rather than from the config. The honest price: a push that
-#    walks two hundred commits over an excluded tree prints the notice two
-#    hundred times, once per commit, because each is a distinct true statement
-#    about a distinct commit and deduplicating them would be this file deciding
-#    which truths the operator needs.
+# HISTORY: ruling LIB-04 (undated), in the framework source's private hook-rulings record: PATH-SCOPED SCANS: THE DECLARED EXCLUSION SET, NAMED OUT LOUD (KL4, spec 0122).
 #
 # 2. ABSENCE IS BYTE-IDENTICAL TO THE PRE-FEATURE BEHAVIOUR, BY CONSTRUCTION.
 #    With nothing declared, slh_scan_added takes the SAME two greps over the
@@ -231,54 +141,11 @@ SLH_SECRET_RE='(api[_-]?key|secret|passw(or)?d|token)["'"'"']?[[:space:]]*[=:][[
 #    differential against the pinned pre-feature blobs would only tell us
 #    afterwards.
 #
-# 3. IT SCOPES THE CONTENT SCANS AND NOTHING ELSE. The set lives inside this one
-#    function, so role-path judgment, the trunk audit, lifecycle detection and
-#    every close check are out of its reach structurally rather than by
-#    agreement. A glob covering specs/ or .claude/ changes no verdict anywhere
-#    but here. That is what keeps this a seatbelt rather than a general ignore
-#    file: an exclusion set that can hide anything is not one.
-#
-# 4. ATTRIBUTION COMES FROM DIFF STRUCTURE, NOT FROM LINE TEXT. A path is read
-#    only from a `+++` header seen OUTSIDE a hunk, and hunk state is tracked from
-#    `diff --git` / `diff --cc` and `@@`. Every line inside a hunk carries a
-#    prefix column, so none of those three can be forged by content: a
-#    diff-of-a-diff carrying the line `+++ b/vendor/x` cannot point the scanner
-#    at an excluded path and walk a secret through under its name. Without this
-#    rule any excluded glob is a universal exemption for anyone who can write
-#    one line, which is the shape of the hole this feature would otherwise open
-#    while looking like it closed one.
-#
-# WHERE THE MATCH FAILS, THE SCAN RUNS. Every unreadable, unmatched or ambiguous
-# case degrades to scanning, never to skipping: a path git had to quote (non
-# ASCII, control characters) is scanned and said so, a case-variant spelling on
-# a case-insensitive filesystem does not match and is scanned, a glob naming
-# nothing changes nothing. Failing to exclude costs a false refusal the operator
-# can see; failing to scan costs a published secret.
 
-# The glob charset. A pattern is interpolated into a `case` pattern, which is
-# what makes shell globbing available at all, and an unrestricted string there
-# would be config-driven code: a value containing `)` or `;` ends the pattern and
-# starts a command, and an unbalanced `[` is a syntax error inside the hook. So
-# the charset is closed to what a repo-relative path glob actually needs, and
-# anything else is REFUSED rather than sanitised. The cost is that a path with a
-# space or a quote in it cannot be excluded; the direction of that cost is the
-# safe one (it gets scanned), and it is named in the refusal.
+# HISTORY: ruling LIB-05 (undated), in the framework source's private hook-rulings record: The glob charset. A pattern is interpolated into a `case` pattern, which is.
 SLH_SCAN_GLOB_BAD='[!A-Za-z0-9._/*?-]'
 
-# The diff reader. ONE program, two modes, because the path census and the line
-# filter must agree about what a header is: two readers of one structure is the
-# defect this file has paid for repeatedly.
-# THE EXCLUDED SET ARRIVES THROUGH THE ENVIRONMENT, NOT THROUGH -v, and this is
-# a measured correction rather than a preference. `awk -v x="a\nb"` is an ERROR
-# on BWK awk ("newline in string"), which is the awk macOS ships and therefore
-# the awk most operators run. The failure was silent in the worst possible
-# direction: awk exited non-zero having printed nothing, the caller read the
-# empty output as "no added lines to judge", and a commit carrying a secret on a
-# SCANNED path was allowed as soon as any OTHER path in the same change was
-# excluded. That is the 1.0.8 fail-open shape (an empty string reading as
-# "nothing to govern") reintroduced by a new feature, and the mixed-change
-# fixture is what caught it. ENVIRON carries newlines on every awk this project
-# supports, and the status of every awk stage is now checked by its caller.
+# HISTORY: ruling LIB-06 (plugin 1.0.8), in the framework source's private hook-rulings record: The diff reader. ONE program, two modes, because the path census and the line.
 SLH_SCAN_SCOPE_AWK='
 BEGIN { if ("SLH_SCAN_EXLIST" in ENVIRON && ENVIRON["SLH_SCAN_EXLIST"] != "") { __n = split(ENVIRON["SLH_SCAN_EXLIST"], __a, "\n"); for (__i = 1; __i <= __n; __i++) if (__a[__i] != "") ex[__a[__i]] = 1 } }
 {
@@ -304,41 +171,17 @@ BEGIN { if ("SLH_SCAN_EXLIST" in ENVIRON && ENVIRON["SLH_SCAN_EXLIST"] != "") { 
 END { if (mode == "paths" && (unreadable || unattributed)) print "\001unreadable" }
 '
 
-# THE ONE READER (A9). Both layers, both scans, one implementation.
-#
-# It sets globals rather than printing its result, and that is not a style
-# choice: `x="$(f)"` runs f in a SUBSHELL, so a refusal recorded by slh_refuse
-# inside it sets SLH_REFUSED in a process that then exits, which is the exact
-# defect slh_verify_close carries a comment about. Setting globals also lets the
-# read happen ONCE per hook run rather than once per commit in the push walk,
-# so an unreadable config refuses with one message instead of two hundred.
+# HISTORY: ruling LIB-07 (undated), in the framework source's private hook-rulings record: THE ONE READER (A9). Both layers, both scans, one implementation.
 SLH_SCAN_EXCLUSIONS=""
 SLH_SCAN_EXCLUSIONS_STATE=""
 slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCAN_EXCLUSIONS set, 1 after refusing
-  # THE ENTRIES ARE PREFIXED AND COUNTED, and that is a measured correction
-  # rather than defensiveness. The first cut passed them as bare lines after an
-  # "ok" verdict, and `x="$(jq ...)"` STRIPS TRAILING NEWLINES: an empty array
-  # and an array holding one empty string both arrived as the single line "ok",
-  # so a project that declared nothing was refused SLH-SCAN-EXCLUSION-INVALID
-  # for an entry it never wrote. That reached the shipped sdd.json template,
-  # where "scan_exclusions": [] made every commit in a freshly stamped instance
-  # refuse. It was NOT caught by this feature's own empty-array assertion, which
-  # only checked that the commit was refused and got a refusal for the wrong
-  # reason: a green labelled with the verdict instead of with the evidence, the
-  # exact shape A8 exists for, committed by the test for the class.
-  #
-  # So each entry now arrives as ">" plus its text, which survives the strip
-  # because it is never empty, and the verdict carries the DECLARED COUNT so the
-  # reader can assert it read as many as jq wrote rather than assuming.
+  # HISTORY: ruling LIB-08 (undated), in the framework source's private hook-rulings record: THE ENTRIES ARE PREFIXED AND COUNTED, and that is a measured correction.
   local proj="$1" raw verdict pat lit out="" declared="" seen=0
   if [ -n "$SLH_SCAN_EXCLUSIONS_STATE" ]; then
     [ "$SLH_SCAN_EXCLUSIONS_STATE" = "ok" ] && return 0
     return 1
   fi
-  # jq's STATUS is carried, not discarded, for the same reason slh_trunk carries
-  # it: a jq that exists and fails yields an empty string indistinguishable from
-  # a legitimate absent key, and here that empty string would read as "nothing
-  # excluded" while the truth is "the configuration was not read".
+  # HISTORY: ruling LIB-09 (undated), in the framework source's private hook-rulings record: jq's STATUS is carried, not discarded, for the same reason slh_trunk carries.
   if ! raw="$(jq -r '
         if (.scan_exclusions == null) then "absent"
         elif ((.scan_exclusions | type) != "array") then "shape"
@@ -390,10 +233,7 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
         ;;
     esac
     seen=$((seen + 1))
-    # NORMALISED, NOT USED RAW, and normalised the way role paths already are in
-    # this file. A set recorded as "./vendor", "/vendor" or "vendor/" names the
-    # same directory a human means, and four spellings of one value is how the
-    # guarantee layer went blind on "./src" once already.
+    # HISTORY: ruling LIB-10 (undated), in the framework source's private hook-rulings record: NORMALISED, NOT USED RAW, and normalised the way role paths already are in.
     pat="$(printf '%s' "$pat" | tr -s '/')"
     pat="${pat#/}"
     while [ "${pat#./}" != "$pat" ]; do pat="${pat#./}"; done
@@ -412,12 +252,7 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
         return 1
         ;;
     esac
-    # A PATTERN MUST NAME SOMETHING. Strip the wildcards and the separators; if
-    # nothing is left, the pattern matches every path in the repository, and an
-    # exclusion set that can hide anything is not a seatbelt. Decided by what the
-    # pattern IS rather than by a list of spellings: "*", "**", "*/*" and "?" all
-    # fail this one test, and any pattern carrying a single literal character
-    # passes it.
+    # HISTORY: ruling LIB-11 (undated), in the framework source's private hook-rulings record: A PATTERN MUST NAME SOMETHING.
     lit="$(printf '%s' "$pat" | tr -d '*?/')"
     if [ -z "$lit" ]; then
       SLH_SCAN_EXCLUSIONS_STATE="bad"
@@ -429,12 +264,7 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
   done <<EOF
 $(printf '%s\n' "$raw" | tail -n +2)
 EOF
-  # THE COUNT IS ASSERTED BEFORE THE SET IS USED. A reader that silently saw
-  # fewer entries than the file declares would scan paths the project believes
-  # are excluded, which is the safe direction, and would ALSO mean the reader is
-  # wrong about a file it just parsed. The second fact is the one that matters:
-  # this is the same "assert the fixture count before comparing" rule the suite
-  # runs on itself, applied to the reader.
+  # HISTORY: ruling LIB-12 (undated), in the framework source's private hook-rulings record: THE COUNT IS ASSERTED BEFORE THE SET IS USED.
   if [ -n "$declared" ] && [ "$seen" != "$declared" ]; then
     SLH_SCAN_EXCLUSIONS_STATE="bad"
     slh_refuse "SLH-SCAN-EXCLUSIONS-SHAPE" ".claude/sdd.json declares $declared scan exclusions but this hook read $seen of them, so the set it would honour is not the set the file records. Refusing rather than scanning against a partial read of a configuration."
@@ -469,16 +299,10 @@ EOF
   return 1
 }
 
-# The scoped filter. Announcements go to STDERR from inside here on purpose:
-# they are notices rather than refusals, so nothing has to survive the command
-# substitution this function is called through, and the operator sees them
-# interleaved with the refusals they explain.
+# HISTORY: ruling LIB-13 (undated), in the framework source's private hook-rulings record: The scoped filter. Announcements go to STDERR from inside here on purpose.
 slh_scan_scoped_added() { # slh_scan_scoped_added <diff-text> <globs> <what-it-is>
   local diff_text="$1" globs="$2" where="$3" paths p g ex=""
-  # EVERY AWK STAGE CARRIES ITS OWN STATUS. An awk that exits non-zero prints
-  # nothing, and nothing is indistinguishable from a clean diff to the caller's
-  # `[ -n "$added" ]` test. The caller turns a non-zero return here into a
-  # refusal with a named code; it must never turn it into a pass.
+  # HISTORY: ruling LIB-14 (undated), in the framework source's private hook-rulings record: EVERY AWK STAGE CARRIES ITS OWN STATUS.
   paths="$(printf '%s\n' "$diff_text" | awk -v mode=paths "$SLH_SCAN_SCOPE_AWK")" || return 2
   while IFS= read -r p; do
     [ -n "$p" ] || continue
@@ -496,16 +320,7 @@ EOF
   printf '%s\n' "$diff_text" | SLH_SCAN_EXLIST="$ex" awk -v mode=filter "$SLH_SCAN_SCOPE_AWK"
 }
 
-# slh_scan_added <proj> <diff-text> <what-it-is>
-# Reads a unified diff and refuses on added lines only, so pre-existing content
-# is never re-judged by a later layer. <proj> is the first argument because the
-# scan now has a configuration to read; every layer that sees content passes its
-# own project root, and there is no path through this function that reaches the
-# greps without the exclusion set having been read or refused.
-# slh_rows_newly_closed <status-new> <status-old> -> spec numbers whose row
-# flipped to CLOSED in this change, whether or not the spec FILE was touched.
-# This is the set the documentation has always described (v1.7 claims audit,
-# R3-2); the implementation used to intersect it with the staged file list.
+# HISTORY: ruling LIB-15 (plugin v1.7), in the framework source's private hook-rulings record: slh_scan_added <proj> <diff-text> <what-it-is>.
 slh_rows_newly_closed() {
   local status_new="$1" status_old="$2" num
   printf '%s\n' "$status_new" | sed 's/\\|/ /g' | awk -F'|' 'NF >= 5 { gsub(/^[[:space:]]+|[[:space:]]+$/, "", $2); if ($2 ~ /^[0-9]+[a-z]*$/) print $2 }' | while IFS= read -r num; do  # sed: GFM escaped pipe is literal, not a field separator (round 11)
@@ -520,11 +335,7 @@ slh_rows_newly_closed() {
 # INDEX, for the case where a row flipped without the file being staged.
 slh_spec_path_for() {
   local proj="$1" num="$2" hits n
-  # EXACT NUMBER, THEN A HYPHEN (leg F6 and its second half). The second glob
-  # here was `specs/${num}[a-z]-*.md`, which for num=0002 also matched
-  # specs/0002b-parked.md. Part 4's split convention makes 0002b a DISTINCT
-  # spec carrying its own STATUS.md row, so that file is somebody else's spec
-  # and was never a candidate for this one.
+  # HISTORY: ruling LIB-16 (undated), in the framework source's private hook-rulings record: EXACT NUMBER, THEN A HYPHEN (leg F6 and its second half).
   hits="$(git -C "$proj" ls-files "specs/${num}-*.md" 2>/dev/null)"
   [ -n "$hits" ] || return 0
   n="$(printf '%s\n' "$hits" | grep -c .)"
@@ -534,7 +345,7 @@ slh_spec_path_for() {
   printf '%s\n' "$hits"
 }
 
-# THE HEADER STRIP IS POSITIONAL, AND TWO SHAPE-BASED ATTEMPTS PRECEDED IT.
+# HISTORY: ruling LIB-17 (undated), in the framework source's private hook-rulings record: THE HEADER STRIP IS POSITIONAL, AND TWO SHAPE-BASED ATTEMPTS PRECEDED IT.
 #
 # It was `grep -vE '^\+\+\+'`, which dropped the diff's own `+++ b/path` line
 # and also dropped any ADDED line whose content began `++` (SC sub-hole 6).
@@ -546,11 +357,6 @@ slh_spec_path_for() {
 # things that have the same shape. A secret on such a line passed both layers
 # at rc=0, in silence.
 #
-# The separating fact is POSITION, and it is git's own structure: a `+++` line
-# is a header only OUTSIDE a hunk, and once `@@` has been seen every `+` line
-# is content whatever it looks like. SLH_SCAN_SCOPE_AWK already read the diff
-# this way, which is why the defect lived only in the UNSCOPED branch and in
-# the advisory gate's private copy. Both now reach the same rule.
 SLH_ADDED_AWK='
 {
   if ($0 ~ /^diff --git / || $0 ~ /^diff --cc /) { inhunk = 0; next }
@@ -562,22 +368,13 @@ SLH_ADDED_AWK='
 
 slh_scan_added() {
   local proj="$1" diff_text="$2" where="$3" added
-  # The exclusion set is read ONCE per hook run and refuses for the whole run if
-  # it cannot be read. Called from here rather than from each hook so no layer
-  # can scan without having asked (A9), and called OUTSIDE a command
-  # substitution so its refusal survives.
+  # HISTORY: ruling LIB-18 (undated), in the framework source's private hook-rulings record: The exclusion set is read ONCE per hook run and refuses for the whole run if.
   if ! slh_scan_exclusions_load "$proj"; then
     SLH_REFUSED=1
     return 1
   fi
   if [ -z "$SLH_SCAN_EXCLUSIONS" ]; then
-    # NOTHING DECLARED: the pre-feature path, entered verbatim rather than
-    # reproduced. This line is the whole of "the feature is invisible until
-    # asked for", and the suite proves it by differential against the pinned
-    # pre-feature hook blobs rather than by reading it.
-    # POSITIONAL, not shaped (F3). The awk stage carries its own status, so a
-    # broken awk is a refusal rather than an empty read: this branch used to be
-    # two greps whose emptiness was indistinguishable from a clean diff.
+    # HISTORY: ruling LIB-19 (undated), in the framework source's private hook-rulings record: NOTHING DECLARED: the pre-feature path, entered verbatim rather than.
     if ! added="$(printf '%s\n' "$diff_text" | awk "$SLH_ADDED_AWK")"; then
       slh_refuse "SLH-SCAN-FILTER-FAILED" "the scan of $where could not read the change, so it read nothing and has judged nothing. A scan that could not run has not passed. Check 'awk --version'."
       return 1
@@ -608,77 +405,7 @@ slh_scan_added() {
 # satisfy the status check (leg 5, F8).
 SLH_CHORE_DONE_RE='^[-*+>[:space:]]*(CHORE-[0-9]+)[[:space:]]*:[[:space:]]*DONE([^A-Za-z]|$)'
 
-# LIVE TEXT ONLY (2026-08 consolidation, blocker F2). STATUS.md is read for chore
-# archive lines by a bare grep with no notion of a fenced example or an HTML
-# comment, while the frozen QA reader sixty lines of this same file over tracks
-# both. Measured: a CHORE-NNN archive line written inside <!-- --> (invisible in
-# the rendered file) or inside a ```fence (the very format the how-to-archive
-# guidance shows) satisfied the grep and let feature code reach the trunk with no
-# spec closed and no real chore. A line indented four or more spaces (an indented
-# code block, same threshold the QA reader uses for headings and fences) is the
-# same class: an illustration, not a record.
-#
-# THE READER TOLERATES A BLOCK PREFIX, SO THE STRIP MUST TOO (adversary rounds
-# 1-4 of this round). The chore grep and the row reader both accept a leading
-# [-*+>[:space:]]* prefix, so a chore or CLOSED row written inside a code fence
-# that is itself inside a blockquote (> ```), a list item (- ```) or an ordered
-# step (1. ```) renders as a quoted example yet was counted as a record: the
-# fence marker sat past the 0-3-space window the anchor allowed. The fence OPEN
-# is detected on the line with its blockquote markers and ONE list bullet
-# (bulleted -*+ OR ordered 1. / 1)) stripped, so a fence is seen through the
-# same container prefix the readers see the record through, and the blockquote
-# DEPTH at the open is remembered (fbq). A close is honoured only at that same
-# depth and never strips a list bullet, because a closing fence in CommonMark
-# carries no marker and sits at its container's depth: a `- ```` or a `> ````
-# line at a DIFFERENT depth than the open is literal code, not a close, and
-# treating it as one forged an early close that leaked the rest of the block
-# (round 4, the bullet; round 5, the blockquote marker on a top-level fence).
-# The mismatched-depth case fails closed: the fence stays open and the rest is
-# stripped, an honest close refused rather than an illustration kept. Indented
-# code is recognised RELATIVE TO ITS CONTAINER (rounds 6-7): the blockquote peel
-# consumes `>` and its one following space per level but NOT the content's own
-# indentation, tracking depth; then a SEPARATE peel for the indented-code test
-# strips any leading run of blockquote markers AND list bullets (-*+, 1., 1))
-# and asks whether four or more spaces remain, so a `>     CHORE` (code in a
-# quote) and a `-     CHORE` (code in a list item, where CommonMark treats a
-# marker followed by 5+ spaces as an indented code block) both read as code, not
-# a record. That container-marker peel is used ONLY for the indent test and the
-# fence OPEN, NEVER for the fence CLOSE (a closing fence carries no marker; see
-# the depth rule above). The HTML-comment scan looks for `-->` starting two
-# characters after `<!--`, so an abrupt empty comment (`<!-->`, `<!--->`) closes
-# on its own line as a renderer closes it, rather than being read as an unclosed
-# comment that hides every following line to EOF. HTML BLOCKS (round 8, extended
-# round 11-12): a `<script>`, `<style>`, `<textarea>` or `<pre>` block (CommonMark
-# type 1) encloses content GitHub either deletes (script/style/textarea) or draws
-# as a literal code block indistinguishable from a ``` fence (pre); a human reads
-# none of it as a live record, so those enter an html-block state that strips to
-# the matching close tag or EOF. `<details>`, `<div>` and `<table>` are NOT in the
-# set: `<details>` is a type-6 block whose content renders as a LIVE (collapsible,
-# and in a diff fully visible) table, and stripping it to `</details>` over-
-# swallowed and dropped a live CLOSED row, escaping the union check; those tags'
-# content is kept, matching what a reviewer sees. INDENTED CODE CANNOT INTERRUPT A
-# PARAGRAPH (round 8, direction ii): a four-space-indented line at top level is
-# code only when it follows a blank line or the start of file (or continues an
-# open code block); a four-space line directly under a paragraph is a lazy
-# continuation a renderer SHOWS, so it is kept. Dropping it was NOT the safe
-# cooperative over-strip the old comment claimed: a dropped CLOSED inventory row
-# escapes the row-flip union check and launders a spec onto the trunk. Code
-# indented inside a list item or a blockquote stays always-code (a container
-# resets the paragraph), and only a genuine PARAGRAPH sets the continuation flag:
-# a heading, a setext underline (===/---) or a thematic break is not paragraph
-# text, so a following indented line is code, not a continuation (round 9; a
-# STATUS.md heading directly above an indented row otherwise laundered it). A
-# GFM TABLE is not a paragraph either (round 10): a delimiter row (`|---|`) and
-# the table rows that follow it do not set the flag, so an indented line right
-# after the inventory table reads as code, while a LONE pipe row with no
-# delimiter is still a paragraph and keeps its lazy continuation. All leading-whitespace handling is [[:space:]]* or a
-# bounded ` ? ? ?`, identical on BWK and GNU awk (verified), and the
-# indented-code test runs BEFORE the fence open so an indented ``` reads as code,
-# not a fence. A comment opened mid-line, or spanning lines, is deleted as a
-# span; an unclosed <!-- hides to end of file, as a renderer does. Where a line
-# reader genuinely cannot decide it deletes rather than keeps: an over-stripped
-# live line refuses an honest close (cooperative), a kept illustration is a
-# bypass.
+# HISTORY: ruling LIB-20 (undated), in the framework source's private hook-rulings record: LIVE TEXT ONLY (2026-08 consolidation, blocker F2).
 #
 # LOCKSTEP: byte-identical to trunk-audit.sh and close-gate.sh. NEW function, not an edit
 # to the frozen QA_PASS1_AWK/TEMPLATE_FENCE_AWK (dogfood/QA-READER-FREEZE.md):
@@ -689,54 +416,10 @@ SLH_LIVE_TEXT_AWK='{ __l=$0; sub(/\r$/,"",__l); __para=PARA; PARA=0; if (incmt) 
 
 SLH_REFUSED=0
 
-# Set to 1 by a CALLER (pre-commit's squash-landing branch) before
-# slh_verify_close when the commit being verified will have a SINGLE parent:
-# a squash creates no merge commit, so the ownership question (design 8.2)
-# applies at this landing exactly as it does at the audit's NPAR<2 arm. A
-# true merge landing leaves it 0 and keeps the merge arm's provenance
-# question instead.
+# HISTORY: ruling LIB-21 (undated), in the framework source's private hook-rulings record: Set to 1 by a CALLER (pre-commit's squash-landing branch) before.
 SLH_CLOSE_SINGLE_PARENT=0
 
-# slh_scan_walk <proj> <what-it-is> <rev-list-arg...> -> 0, or 1 after recording a refusal.
-#
-# THE PUSH-TIME CONTENT SCAN, WALKING THE RANGE PER COMMIT (SC sub-hole 3). It
-# lived in pre-push until 2.6.0 and moved here so the forge check runs the same
-# bytes over a pull request's range (design section 3, step 6); pre-push calls
-# it with its own repository and its own ranges, unchanged.
-#
-# It used to read `git diff <a>..<b>`, an ENDPOINT diff, and the edition said so
-# in Known limitations: content ADDED and then REMOVED inside the pushed range is
-# never rendered by an endpoint diff, while every object still reaches the
-# remote. A secret committed and then deleted two commits later was published and
-# reported clean. That is not a weak scanner, it is the wrong question: the
-# endpoint diff asks what the range CHANGES, and the thing being protected is
-# what the range CARRIES.
-#
-# THE HONEST PRICE, stated rather than discovered: push latency grows with the
-# SIZE of the range instead of with the size of its net diff. A push of one
-# commit costs one diff, as before; a push of two hundred costs two hundred. The
-# ranges this scan sees are what a push adds, so that is bounded by how long
-# somebody worked offline, and the alternative is a scan that reports clean on
-# content it never read.
-#
-# A MERGE COMMIT IS READ WITH --cc, which for a non-merge is an ordinary diff and
-# for a merge shows exactly the content that differs from ALL parents: the
-# conflict resolution. That content exists in no parent, so a per-commit walk
-# that skipped merges would miss the one part of a merge nothing else scans.
-#
-# THE DIFF PREFIXES ARE FORCED (SC sub-hole 6). slh_scan_added drops the diff's
-# own `+++` header line before reading added lines, and that strip has to be
-# anchored to the exact header form or it eats content. A repository with
-# `diff.noprefix=true` or a custom `diff.dstPrefix` emits a different header, so
-# the prefixes are pinned at the call site here and the strip is anchored to
-# `+++ b/` in slh_scan_added: the two ends of the same rule, set together.
-#
-# THE DIFFERENCE BETWEEN "READ NOTHING" AND "THERE WAS NOTHING" (SC sub-hole 4).
-# rev-list FAILING means the range could not be read: that refuses. rev-list
-# SUCCEEDING with no output means the remote already has every commit this ref
-# would publish, which is not a gap and must not refuse, because the ordinary
-# re-push of an unchanged branch lands there. The first cut of this fix refused
-# on the empty list and was caught by its own clean-push control.
+# HISTORY: ruling LIB-22 (plugin 2.6.0), in the framework source's private hook-rulings record: slh_scan_walk <proj> <what-it-is> <rev-list-arg...> -> 0, or 1 after recording a refusal.
 slh_scan_walk() { # slh_scan_walk <proj> <what-it-is> <rev-list-arg...>
   local proj="$1" what="$2"; shift 2
   local c revs rc __DIFF
@@ -747,11 +430,7 @@ slh_scan_walk() { # slh_scan_walk <proj> <what-it-is> <rev-list-arg...>
   fi
   while IFS= read -r c; do
     [ -n "$c" ] || continue
-    # The flags ignore the repository's own diff configuration (RC2-2026, fixed
-    # 2026-09-02, spec 0129; the reasons are at pre-commit's scan site), plus
-    # --root, which is this site's own member: `log.showRoot=false` makes `git
-    # show` render a ROOT commit as nothing at all, so a first push's first
-    # commit was read as empty. Git's status is read rather than lost.
+    # HISTORY: ruling LIB-23 (2026-09-02), in the framework source's private hook-rulings record: The flags ignore the repository's own diff configuration (RC2-2026, fixed.
     if ! __DIFF="$(git -C "$proj" show --root --unified=0 --cc --format=%n --no-color --no-ext-diff --no-textconv \
                         --src-prefix=a/ --dst-prefix=b/ "$c" 2>/dev/null)"; then
       slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render commit $c for $what, so the push-time scan read nothing and has judged nothing. A scan that could not run has not passed. Run 'git show $c' here to see the failure (a configuration value git cannot parse, or a diff driver that fails, looks like this)."
@@ -774,15 +453,7 @@ slh_refuse() { # slh_refuse <code> <message...>
 # somebody else's repo and none of our business.
 slh_is_instance() { [ -f "$1/.claude/sdd.json" ]; }
 
-# ===========================================================================
-# THE STRUCTURED STATUS RECORD (RP1, edition v1.12).
-#
-# The machine reads only records whose grammar it owns. Prose is for people; a
-# gate that reads prose is a gate whose grammar is someone else's renderer, and
-# it will lose to that renderer one finding at a time, forever. Every reader
-# below reads `.claude/status.json`, a grammar THIS PROJECT defines, so "what
-# does this mean" has one answer and anything outside the grammar is a REFUSAL
-# rather than an interpretation.
+# HISTORY: ruling LIB-24 (plugin v1.12), in the framework source's private hook-rulings record: THE STRUCTURED STATUS RECORD (RP1, edition v1.12).
 #
 # THE SWITCH IS THE PRESENCE OF THE FILE, per tree. Absent: the instance is a
 # legacy instance and every reader takes the page path below, byte-identical,
@@ -792,25 +463,6 @@ slh_is_instance() { [ -f "$1/.claude/sdd.json" ]; }
 # mode, because mixed mode is two readers per fact, which is the A9 violation
 # that makes drift invisible.
 #
-# PRESENT AND MALFORMED REFUSES, never a pass and NEVER A FALLBACK to the page
-# readers: a fallback would let one deliberate syntax error buy back the frozen
-# readers' documented residual class, which is a widened pass wearing an error
-# message. The doctrine line is F2-2026's: a gate that cannot evaluate its
-# predicate denies.
-#
-# ONE TOKEN OUT (the attestation's calling convention, applied a third time):
-# slh_record_verdict prints one token and every caller refuses anything that is
-# not exactly "ok", so an empty result, a crashed jq, or a truncated read is a
-# refusal BY CONSTRUCTION rather than by a branch somebody remembered to write.
-# A record holding two JSON documents prints two tokens, which is not "ok".
-#
-# jq is not a new dependency: it is already a probed, fail-closed, hard
-# requirement of this layer (SLH-NO-JQ at slh_trunk; slh_attest_load refuses
-# without it). The grammar (Part 3 of the edition): setlist_status exactly 1;
-# specs.<num> with status one of the lowercase lifecycle tokens, optional
-# qa_pass_1 exactly "ok", optional diagram exactly "updated" or "no-impact";
-# chores.<id> with status "open" or "done", optional files as an array of
-# strings. Unknown keys, unknown tokens, wrong types: malformed, all of them.
 #
 # LOCKSTEP: the seven SLH_RECORD_*_JQ assignments below are byte-identical in
 # this file, scripts/trunk-audit.sh and templates/hooks/close-gate.sh, asserted
@@ -894,19 +546,7 @@ slh_active_specs() { # slh_active_specs <proj> <rev-or-""-for-index> -> active s
   fi
 }
 
-# THE TOOLS THIS FILE RUNS ON MUST ACTUALLY WORK (v1.7 gate, adversarial review F2).
-#
-# The banner above promises EVERYTHING HERE FAILS CLOSED, and jq was the only
-# dependency anyone checked. Measured: with grep broken, a merge of an unclosed
-# spec landed at rc=0 in silence, because the close verification's greps returned
-# nothing and "no evidence of a violation" read as "no violation". Broken awk,
-# sed and tr happened to still refuse, which is luck rather than design: each is
-# one refactor away from the same fail-open.
-#
-# Every probe RUNS its tool and checks the OUTPUT as well as the status, because
-# a tool that exits 0 and prints nothing disables these checks just as
-# thoroughly. The comparisons are shell builtins, so a probe never depends on the
-# thing it is probing.
+# HISTORY: ruling LIB-25 (plugin v1.7), in the framework source's private hook-rulings record: THE TOOLS THIS FILE RUNS ON MUST ACTUALLY WORK (v1.7 gate, adversarial review F2).
 slh_require_toolchain() { # slh_require_toolchain
   local probe
   probe="$(printf 'x\n' | awk '{ print }' 2>/dev/null)" || probe=""
@@ -929,17 +569,7 @@ slh_require_toolchain() { # slh_require_toolchain
     slh_refuse "SLH-NO-TOOLCHAIN" "grep is installed but does not work here, so the close verification cannot read the spec and would otherwise let this through unchecked. Run 'grep --version' to see the failure. Hooks fail closed by design."
     return 1
   fi
-  # jq, RUN and its OUTPUT compared (spec 0130, KL6's join). Until this probe
-  # existed the layer LOCATED jq and then read .claude/sdd.json with it, so a
-  # jq that failed refused under the config's code (SLH-UNREADABLE-CONFIG, with
-  # a message guessing that the toolchain was the likelier cause) and a jq that
-  # exited 0 printing nothing refused as a file that "declares" an empty trunk
-  # (SLH-TRUNK-INVALID). Fail-closed both times, and both pointing at a file
-  # that was fine; the 2.4.0 leg's F6 measured the second shape walking past a
-  # status-only probe at the advisory layer. An ABSENT jq keeps its own code at
-  # the readers (SLH-NO-JQ); this is the present-and-unusable case, which had
-  # none. Once this passes, a jq that then fails on the file points at the FILE,
-  # and the config readers below say so.
+  # HISTORY: ruling LIB-26 (plugin 2.4.0), in the framework source's private hook-rulings record: jq, RUN and its OUTPUT compared (spec 0130, KL6's join).
   if command -v jq >/dev/null 2>&1; then
     probe="$(printf '{"probe":"x"}\n' | jq -r '.probe' 2>/dev/null)" || probe=""
     if [ "$probe" != "x" ]; then
@@ -950,20 +580,7 @@ slh_require_toolchain() { # slh_require_toolchain
   return 0
 }
 
-# The trunk name. Mirrors close-gate.sh, including the refusal on a
-# present-but-invalid value: guessing "main" over a stated intention would
-# govern a branch nobody named.
-#
-# THIS COMMENT USED TO SAY "Mirrors close-gate.sh exactly" AND IT WAS FALSE, which
-# is how the v1.7 dogfood gate's BLOCKER shipped. close-gate.sh does two things
-# here and this function did only the first: it checks the value is a non-empty
-# string, AND it REDUCES the value to a local branch name, refusing if it cannot.
-# Without the second half, slh_on_trunk() compares "refs/remotes/origin/main"
-# against the "main" that `symbolic-ref --short HEAD` returns, the two can never
-# be equal, both hooks conclude they are not on the trunk, and every governed
-# operation is allowed in total silence. Five spellings reproduced it, and the
-# route is the SHIPPED UPGRADE PATH: `git symbolic-ref refs/remotes/origin/HEAD`
-# is what the upgrade skill tells the agent to use, and it returns a ref path.
+# HISTORY: ruling LIB-27 (plugin v1.7), in the framework source's private hook-rulings record: The trunk name. Mirrors close-gate.sh, including the refusal on a.
 slh_trunk() { # slh_trunk <proj>  -> prints the REDUCED trunk, or refuses
   local proj="$1" v full cand
   if ! command -v jq >/dev/null 2>&1; then
@@ -982,13 +599,7 @@ slh_trunk() { # slh_trunk <proj>  -> prints the REDUCED trunk, or refuses
     return 1
   fi
 
-  # THE VALUE MUST NAME A LOCAL BRANCH. Ported from close-gate.sh, and the
-  # REDUCTION IS DONE BY ASKING GIT rather than by stripping prefixes textually,
-  # which is the mistake the ref rewrite already made once: a spelling that
-  # resolves to a local branch becomes that branch, a remote-tracking spelling
-  # becomes the local branch it TRACKS if one exists, and anything still naming no
-  # local branch is REFUSED. Guessing "main" here would silently govern a branch
-  # the project never named, which is the same failure as not checking at all.
+  # HISTORY: ruling LIB-28 (undated), in the framework source's private hook-rulings record: THE VALUE MUST NAME A LOCAL BRANCH.
   if ! git -C "$proj" show-ref --verify --quiet "refs/heads/$v" 2>/dev/null; then
     # fail-open-ok: an unresolvable spelling leaves `full` empty, the case below
     # matches nothing, and the show-ref test then REFUSES. Empty routes to a
@@ -1016,11 +627,7 @@ slh_trunk() { # slh_trunk <proj>  -> prints the REDUCED trunk, or refuses
     fi
   fi
 
-  # AND THE CASE-VARIANT SPELLING, which is the same class one more time. On a
-  # case-insensitive filesystem refs/heads/main is ONE file, so a recorded trunk
-  # of "MAIN" resolves and every byte comparison against "main" fails. This is
-  # the reducer, so it reduces that too rather than leaving a fourth caller to
-  # remember: slh_canonical_branch returns git's STORED spelling.
+  # HISTORY: ruling LIB-29 (undated), in the framework source's private hook-rulings record: AND THE CASE-VARIANT SPELLING, which is the same class one more time.
   v="$(slh_canonical_branch "$proj" "$v")"
 
   printf '%s' "$v"
@@ -1030,17 +637,7 @@ slh_trunk() { # slh_trunk <proj>  -> prints the REDUCED trunk, or refuses
 # under these; docs, specs and journals do not.
 slh_role_paths() { # slh_role_paths <proj>
   local proj="$1"
-  # THE SHAPE, WHICH THIS READER ALONE DID NOT CHECK (1.1.0 final leg, F13).
-  #
-  # scope-hook.sh and trunk-audit.sh refuse a "roles" that is present and not an
-  # object; the GUARANTEE layer did not, so `{"roles": 123}`, `true` or a string
-  # made the extraction print nothing, carries_code stayed 0, and an unclosed
-  # spec branch merged onto the trunk in silence. The existing suite assertion
-  # compared only the jq EXTRACTION output, which is why this looked closed.
-  #
-  # jq's status is CARRIED rather than discarded here, for the same reason
-  # slh_trunk carries it: a jq that exists and fails yields an empty string
-  # indistinguishable from a legitimate absent key.
+  # HISTORY: ruling LIB-30 (plugin 1.1.0), in the framework source's private hook-rulings record: THE SHAPE, WHICH THIS READER ALONE DID NOT CHECK (1.1.0 final leg, F13).
   local shape
   if ! shape="$(jq -r 'if (.roles == null) then "absent" elif ((.roles | type) == "object") then "ok" else "bad" end' "$proj/.claude/sdd.json" 2>/dev/null)"; then
     slh_refuse "SLH-UNREADABLE-CONFIG" "jq ran and failed while reading the role paths from .claude/sdd.json. THE LIKELIER CAUSE IS THE FILE: jq was probed working before anything was read (a jq that fails refuses under SLH-JQ-BROKEN first), so run 'jq . .claude/sdd.json' to see the syntax error, and 'jq --version' only if that is clean. Refusing rather than treating an unreadable config as a project with no feature code."
@@ -1062,32 +659,7 @@ slh_role_paths() { # slh_role_paths <proj>
     | grep -v '^$' | grep -v '^\.$' || true
 }
 
-# A BRANCH NAME IS NOT A STRING, IT IS A REF (1.1.0 adversarial review, second run).
-#
-# On a case-insensitive filesystem (APFS by default, and NTFS) `refs/heads/main`
-# is one loose file, so `git checkout MAIN` succeeds, attaches HEAD to that same
-# ref, and `symbolic-ref --short HEAD` then answers "MAIN". Every layer here
-# compared that answer to the configured "main" as BYTES, concluded it was not
-# on the trunk, and allowed an unreviewed merge that really landed: measured, the
-# trunk moved, pre-merge-commit stayed silent where the canonical spelling gets
-# SLH-CLOSES-NO-SPEC, and the audit filed it under "chore merges (unverifiable)"
-# at exit 0 so pre-push passed it too. Four layers, none of them refused.
-#
-# This is the v1.7 gate's BLOCKER one spelling further out. That fix REDUCED the
-# configured side (refs/remotes/origin/main -> main) and left the OBSERVED side
-# raw, so the same comparison stayed wrong from the other end.
-#
-# The fix asks git what the branch is CALLED rather than trusting how it was
-# spelled. An exact hit in for-each-ref means the name is already canonical. No
-# exact hit plus a case-insensitive hit means this is a case variant of a stored
-# branch, which is the alias, so the stored spelling is used. On a genuinely
-# case-sensitive filesystem `MAIN` and `main` are two real branches, both appear
-# in the list, the exact hit fires, and nothing is rewritten: the repair cannot
-# turn a real feature branch into the trunk.
-#
-# Deliberately NOT done by comparing OIDs: a branch cut from the trunk points at
-# the same commit, so that test would call every fresh feature branch the trunk
-# and deny all work on it.
+# HISTORY: ruling LIB-31 (plugin v1.7), in the framework source's private hook-rulings record: A BRANCH NAME IS NOT A STRING, IT IS A REF (1.1.0 adversarial review, second run).
 slh_canonical_branch() { # slh_canonical_branch <proj> <name> -> stored spelling
   local proj="$1" name="$2" ci
   [ -n "$name" ] || return 0
@@ -1110,36 +682,11 @@ slh_on_trunk() { # slh_on_trunk <proj> <trunk>
   local head
   head="$(git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" # fail-open-ok: detached HEAD yields empty, handled above
   [ -n "$head" ] || return 1
-  # THE UPSTREAM DISCRIMINATOR IS REMOVED (2026-08-07).
-  #
-  # It was added on 2026-08-05 so a git-flow instance, working on `trunk` while
-  # a local `main` also exists, would still be governed when sdd.json recorded
-  # "main". It did that by treating any branch whose upstream basename equalled
-  # the recorded trunk as the trunk itself, and that is not a question this hook
-  # can answer: "this branch IS the trunk under another local name" and "this
-  # branch merely tracks origin/main" look identical from here.
-  #
-  # Measured by the 2026-08-07 leg: an ordinary spec branch whose upstream was
-  # origin/main got refused SLH-CLOSES-NO-SPEC for a merge the identical branch
-  # WITHOUT an upstream accepted, and a purely local `--set-upstream-to=main`
-  # made any branch the trunk to this hook. Those are false denials on ordinary
-  # work, which this project treats as costing more than the hole they close.
-  #
-  # So the rule is the recorded name again, and the git-flow shape is a
-  # documented limitation instead: record the branch you actually merge onto.
-  # The upgrade skill prescribes exactly that, and gets it right.
+  # HISTORY: ruling LIB-32 (2026-08-07), in the framework source's private hook-rulings record: THE UPSTREAM DISCRIMINATOR IS REMOVED (2026-08-07).
   [ "$(slh_canonical_branch "$1" "$head")" = "$(slh_canonical_branch "$1" "$2")" ]
 }
 
-# Files staged for this commit, relative to HEAD. On an unborn branch there is
-# no HEAD, so fall back to the whole index. The optional second argument is a
-# git --diff-filter value, added for the per-file ownership arm (2.4.0 leg F7):
-# a DELETED path cannot carry unspecced content to the trunk, which is the only
-# question that arm asks, so it reads with filter "d" while every other
-# consumer keeps the unfiltered list (a staged deletion still marks a close as
-# carrying code, exactly as it did before the arm existed). One reader, one
-# extra question it can answer; a sibling copy is how the last three blockers
-# happened.
+# HISTORY: ruling LIB-33 (plugin 2.4.0), in the framework source's private hook-rulings record: Files staged for this commit, relative to HEAD.
 slh_staged_files() { # slh_staged_files <proj> [diff-filter]
   local proj="$1" filt="${2:-}"
   if git -C "$proj" rev-parse -q --verify HEAD >/dev/null 2>&1; then
@@ -1170,11 +717,7 @@ slh_head_show() { # slh_head_show <proj> <path>
 # word anywhere in the row: an ACTIVE spec whose note mentions another spec's
 # closure satisfied the old whole-row grep (leg 5, F8).
 slh_row_closed() { # slh_row_closed <status-text> <num>
-  # GFM ESCAPED PIPE (round 11): a \| inside a Title cell renders as a literal
-  # pipe, but awk -F'|' splits on it, shifting CLOSED out of field 4 so a real
-  # close-flip reads as not closed and escapes the union check. It never appears
-  # in the number or status cell, so replacing it with a space before the split
-  # keeps the field count right without touching the fields this reads.
+  # HISTORY: ruling LIB-34 (undated), in the framework source's private hook-rulings record: GFM ESCAPED PIPE (round 11).
   printf '%s\n' "$1" | sed 's/\\|/ /g' | awk -F'|' -v num="$2" '
     function trim(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return x }
     NF >= 4 && trim($2) == num {
@@ -1185,12 +728,7 @@ slh_row_closed() { # slh_row_closed <status-text> <num>
   '
 }
 
-# Which chores does this change RECORD as completed? A CHORE-NNN whose archive
-# line is in the new STATUS.md and was not in the old one. The before-and-after is
-# the same shape the spec rule uses and it exists for the same reason: a chore that
-# was already archived closes nothing now, so re-merging beside a months-old
-# archive line is not a route onto the trunk. That is the laundering B6 closed for
-# specs, refused here before it can be found for chores.
+# HISTORY: ruling LIB-35 (undated), in the framework source's private hook-rulings record: Which chores does this change RECORD as completed? A CHORE-NNN whose archive.
 slh_chores_completed() { # slh_chores_completed <status-new> <status-old>
   local new old line num
   # LIVE TEXT ONLY (blocker F2): a fenced example, an HTML comment or an
@@ -1210,84 +748,20 @@ slh_chores_completed() { # slh_chores_completed <status-new> <status-old>
   done
 }
 
-# ===========================================================================
-# THE HEADLESS BUILD INTEGRITY CHAIN (KL3).
-#
-# WHAT THIS IS FOR, in one sentence, because every line below is downstream of
-# it: a signature proves a KEY WAS USED, it does not prove a PERSON DECIDED.
-# The threat is a headless session building against a spec edited after
-# approval. A key that session can reach lets it sign the drifted spec's own
-# hash and pass every check written here, and the chain then verifies while
-# proving only that the run had the key. That failure mode passes every test a
-# suite could write, because its tests check that signatures verify, and
-# signatures verify.
-#
-# So the mechanism does two things rather than one. It verifies, and it STATES
-# THE STRENGTH OF ITS OWN EVIDENCE: the declared custody is printed in every
-# verification this layer emits, INCLUDING the ones that pass. A gate that says
-# what its green means is the only defence against a claim nobody can test.
-#
-# WHERE IT REFUSES, and why it is not anywhere else. The session layer emits
-# permissionDecision "allow" as a literal in every gate since 2026-08-04, so it
-# cannot refuse anything and the refusal cannot live there. Deciding at the
-# moment of the WRITE would be a judgement about intent, which is the parser
-# treadmill in a new costume. So this refuses the unapproved build's OUTPUT:
-# it does not prevent an unapproved build from happening, it prevents one
-# becoming a commit and, at push, being shared.
-#
-# ONE VERIFIER, HERE. The advisory layer gets one honest sentence naming this
-# one and no reader of its own, which is the 2026-08-28 ruling that a
-# divergence closes by honesty rather than by coupling.
-# ===========================================================================
+# HISTORY: ruling LIB-36 (2026-08-28), in the framework source's private hook-rulings record: THE HEADLESS BUILD INTEGRITY CHAIN (KL3).
 
 # The namespace ssh-keygen signatures are bound to. A signature made for some
 # other purpose with the same key must not verify as an approval, and the
 # namespace is what makes that true rather than hoped.
 SLH_ATTEST_NS="setlist-attestation"
 
-# The custody models this layer knows. "forge" is custody C, BUILT in 2.6.0
-# from the ratified design (design-forge-check-kl5-2026-09-06.md, section 5):
-# the approval IS the ACTIVE flip landing on the protected trunk through a
-# required review, and the layer that verifies it is the stamped forge check
-# (.claude/hooks/forge-check.sh), run by the forge as a required status check.
-# This LOCAL layer cannot ask the forge (a declared command string would be
-# configuration deciding what this hook executes, which is the lesson
-# SLH-SCAN-EXCLUSION-INVALID was written for, and answering from local refs is
-# the identity-by-history question this project has paid for three times), so
-# under "forge" it verifies the document's bytes against the spec and DEFERS the
-# authority question BY NAME to the check, allowing with a sentence that says it
-# is not an approval, and only when the check is in the tree under review. A
-# tree without the check keeps the refusal: the claim travels with the claim.
+# HISTORY: ruling LIB-37 (2026-09-06), in the framework source's private hook-rulings record: The custody models this layer knows.
 SLH_ATTEST_CUSTODIES="signer ci-secret forge"
 
 SLH_ATTEST_STATE=""       # "" unread, off, on, bad
 SLH_ATTEST_CUSTODY=""
 SLH_ATTEST_VERIFY_WITH=""
-# ===========================================================================
-# T1: THE CODEOWNERS BRIDGE (spec 0132, from the ratified design's section 7;
-# the 2.6.0 strategy's ruling 4). A close may declare only files its closer
-# owns under the repository's own ownership file. The reader accepts the CORE
-# grammar the forges share (blank lines and comments; a gitignore-style path
-# pattern with /-anchoring, a trailing / for directories, * within a segment and
-# ** across; owners as @login, @org/team or an email; the LAST matching pattern
-# wins; a pattern with no owners means no owner) and REFUSES the edges by name
-# under SLH-CODEOWNERS-UNREADABLE (section headers, negated patterns, escaped
-# spaces, character classes and ? wildcards, an owner outside the three forms):
-# a reader that guesses at a syntax it does not implement is a false-denial
-# factory and one that silently skips a line it cannot parse is the fail-open
-# class. The file is read from .github/CODEOWNERS, CODEOWNERS, docs/CODEOWNERS
-# in that order, the first found. The reader runs only when a declaring close
-# is being verified, so a team with an exotic file and no declaring closes is
-# never refused for a file this layer never needed.
-#
-# THREE VERDICTS BY LAYER (ruling 4; ratification decision 5), because the
-# identity each layer can read differs: the forge check refuses on the pull
-# request's author as the forge reports it (handles and teams resolved at the
-# forge); pre-push's audit refuses on an EMAIL owner that does not match the
-# closing commit's author email and REPORTS (SLH-OWNS-CODEOWNERS-UNRESOLVED)
-# owners it cannot resolve locally, because refusing on an identity it cannot
-# read is a false denial by construction; pre-merge-commit ADVISES on the
-# merging clone's git identity, which is a claim.
+# HISTORY: ruling LIB-38 (plugin 2.6.0), in the framework source's private hook-rulings record: T1: THE CODEOWNERS BRIDGE (spec 0132, from the ratified design's section 7.
 #
 # LOCKSTEP: SLH_CODEOWNERS_AWK is byte-identical to scripts/trunk-audit.sh's
 # copy (the audit ships on its own and sources nothing), asserted by the suite.
@@ -1391,12 +865,7 @@ slh_codeowners_owners_of() { # slh_codeowners_owners_of <file> -> the owners of 
   [ "$SLH_CODEOWNERS_STATE" = "ok" ] || return 0
   printf '%s\n' "$SLH_CODEOWNERS_TEXT" | awk -v mode=owners -v file="$1" "$SLH_CODEOWNERS_AWK"
 }
-# slh_owns_codeowners_check <what> <verdict-mode> <identity-kind> <identity> <file...>
-#   verdict-mode: refuse | advise      identity-kind: email | login
-#   -> prints nothing; records a refusal (refuse mode) or an advisory line (advise mode) per
-#      mismatch; prints SLH-OWNS-CODEOWNERS-UNRESOLVED as a report when the identity cannot be
-#      matched against handle or team owners locally. Under "login" the caller supplies
-#      SLH_CODEOWNERS_RESOLVER, a function <owner> <login> -> yes|no|unknown, for emails and teams.
+# HISTORY: ruling LIB-39 (undated), in the framework source's private hook-rulings record: slh_owns_codeowners_check <what> <verdict-mode> <identity-kind> <identity> <file...>.
 SLH_CODEOWNERS_RESOLVER=""
 slh_owns_codeowners_check() {
   local what="$1" mode="$2" kind="$3" ident="$4"; shift 4
@@ -1444,21 +913,11 @@ slh_owns_codeowners_check() {
   return 0
 }
 
-# What slh_verify_close last declared, for the forge check's step 9 (the login
-# identity is the check's, not this layer's); empty when the close declared
-# nothing. SLH_CODEOWNERS_MODE is the verdict mode slh_verify_close uses for its
-# own CODEOWNERS pass: "advise" under the git hooks (the default), "" to skip
-# it, which the forge check sets because it runs the arm itself with the
-# forge's identity.
+# HISTORY: ruling LIB-40 (undated), in the framework source's private hook-rulings record: What slh_verify_close last declared, for the forge check's step 9 (the login.
 SLH_OWNS_DECLARED=""
 SLH_CODEOWNERS_MODE="advise"
 
-# THE FORGE CHECK REGISTERS ITSELF HERE, and nothing else does. When the check
-# runs the walk it sets this to the name of its own verifier function, and the
-# DEFERRED-TO-FORGE arm below then asks the forge through it instead of
-# deferring. It is reset at load so the environment cannot supply one: the git
-# hooks source this file fresh and never set it, so under the hooks the arm
-# always defers, and a value set by the caller is a function the caller wrote.
+# HISTORY: ruling LIB-41 (undated), in the framework source's private hook-rulings record: THE FORGE CHECK REGISTERS ITSELF HERE, and nothing else does.
 SLH_ATTEST_FORGE_VERIFIER=""
 
 # slh_attest_load <proj> -> 0 with the three globals set, 1 after refusing.
@@ -1490,11 +949,7 @@ slh_attest_load() { # slh_attest_load <proj>
     slh_refuse "SLH-ATTEST-UNVERIFIABLE" "jq is required to read the attestation declaration from .claude/sdd.json and is not installed, so whether this project requires an approval attestation could not be determined. That is not the same as 'not required'. Install jq, or set \"attestation\": {\"required\": false} if this project does not use the integrity chain."
     return 1
   fi
-  # jq's STATUS is carried rather than discarded, for the reason slh_trunk and
-  # slh_scan_exclusions_load both carry it: a jq that EXISTS and fails yields an
-  # empty string indistinguishable from an absent key, and here that empty
-  # string would read as "attestation not required" while the truth is "the
-  # configuration was not read". Those are different facts.
+  # HISTORY: ruling LIB-42 (undated), in the framework source's private hook-rulings record: jq's STATUS is carried rather than discarded, for the reason slh_trunk and.
   if ! raw="$(jq -r '
         (.attestation // null) as $a
         | if ($a == null) then "off"
@@ -1527,10 +982,7 @@ slh_attest_load() { # slh_attest_load <proj>
       ;;
     on) ;;
     *)
-      # An empty or unrecognised verdict means the reader did not read. A
-      # refusal by construction, never a default: this is exactly the place
-      # where "no evidence a chain is required" and "no chain is required"
-      # must not be conflated.
+      # HISTORY: ruling LIB-43 (undated), in the framework source's private hook-rulings record: An empty or unrecognised verdict means the reader did not read.
       SLH_ATTEST_STATE="bad"
       slh_refuse "SLH-ATTEST-UNVERIFIABLE" "the attestation declaration in .claude/sdd.json could not be read (the reader returned no verdict), so whether an approval is required here is not established. Refusing rather than proceeding on an unread configuration."
       return 1
@@ -1552,16 +1004,7 @@ slh_attest_load() { # slh_attest_load <proj>
   return 0
 }
 
-# slh_attest_spec_hash <spec-file> -> the BL-005 digest, or nothing.
-#
-# THE THIRD IMPLEMENTATION OF ONE RECIPE, and it is bought deliberately rather
-# than arrived at. scripts/spec-hash.sh serves checkpoint, which can reach the
-# plugin tree; templates/hooks/regrounding-hook.sh has an inline copy, because
-# a stamped hook cannot depend on the plugin tree being reachable; this is the
-# third, for the same reason as the second. Both cheaper routes are closed: a
-# shared recipe file sourced by both trees is the cross-tree dependency the
-# 2026-08-28 ruling refused, and shelling out to scripts/spec-hash.sh breaks
-# the stamped-hook independence the inline copy exists to preserve.
+# HISTORY: ruling LIB-44 (2026-08-28), in the framework source's private hook-rulings record: slh_attest_spec_hash <spec-file> -> the BL-005 digest, or nothing.
 #
 # So the suite drives ALL THREE over a corpus and asserts identical OUTPUT, and
 # pins the count at three, so a fourth cannot arrive unasserted. That lockstep
@@ -1573,32 +1016,17 @@ slh_attest_hash_stdin() { # slh_attest_hash_stdin  <spec bytes on stdin>
   elif command -v shasum >/dev/null 2>&1; then
     out="$(awk 'BEGIN{keep=1} /^##[[:space:]]*Closing report/{keep=0} keep' | grep -v '^[-*+[:space:]]*Spec-hash:' | shasum -a 256 | cut -d' ' -f1)"
   fi
-  # PRESENT IS NOT WORKING. A hasher that exists and exits nonzero prints
-  # nothing, and an empty digest compared against a recorded one is not "no
-  # drift", it is no answer. The caller reads empty as UNVERIFIABLE-NO-TOOL,
-  # never as a match and never as a mismatch.
+  # HISTORY: ruling LIB-45 (undated), in the framework source's private hook-rulings record: PRESENT IS NOT WORKING. A hasher that exists and exits nonzero prints.
   printf '%s' "$out"
 }
 
-# THE RECIPE TAKES STDIN AND THIS IS ITS ONLY FILE WRAPPER, which is the whole
-# reason the two are split. pre-commit hashes a spec on disk; pre-push hashes a
-# spec that exists ONLY inside a pushed tree and was never checked out here. Two
-# call shapes, and giving each its own copy of the recipe would make FOUR
-# implementations of a rule the suite pins at three. One recipe, one place, two
-# ways in.
+# HISTORY: ruling LIB-46 (undated), in the framework source's private hook-rulings record: THE RECIPE TAKES STDIN AND THIS IS ITS ONLY FILE WRAPPER, which is the whole.
 slh_attest_spec_hash() { # slh_attest_spec_hash <spec-file>
   [ -f "$1" ] || return 0
   slh_attest_hash_stdin < "$1"
 }
 
-# READING A PATH FROM EITHER SOURCE, so the verifier below has exactly one body.
-#
-# An empty <rev> means the working tree, which is what pre-commit and the close
-# judge. A non-empty <rev> means a commit-ish, which is what pre-push judges:
-# the content this push would PUBLISH, which may not exist on disk at all
-# (a branch pushed from a different worktree, a range whose tip is not HEAD).
-# Asking git rather than the filesystem is the same move the close gate made
-# when it stopped reading command text and started reading the index.
+# HISTORY: ruling LIB-47 (undated), in the framework source's private hook-rulings record: READING A PATH FROM EITHER SOURCE, so the verifier below has exactly one body.
 slh_attest_exists() { # slh_attest_exists <proj> <rev> <path>
   if [ -z "$2" ]; then
     [ -f "$1/$3" ]
@@ -1615,27 +1043,7 @@ slh_attest_cat() { # slh_attest_cat <proj> <rev> <path>
   fi
 }
 
-# slh_attest_verify <proj> <spec-path> -> ONE TOKEN on stdout.
-#
-#   VERIFIED | NO-ATTESTATION | MALFORMED | SIGNATURE-FAILED
-#            | SUBJECT-MISMATCH | HASH-MISMATCH
-#            | UNVERIFIABLE-NO-TOOL | UNVERIFIABLE-CUSTODY
-#
-# THE CALLING CONVENTION IS THE MECHANISM, not a style choice. The caller
-# refuses anything that is not exactly VERIFIED, so an empty result is a
-# refusal BY CONSTRUCTION rather than by a branch somebody remembered to write.
-# A crashed verifier, a missing verifier, a verifier whose output was eaten by
-# a broken pipe: all of them print something that is not VERIFIED, including
-# nothing at all.
-#
-# The natural spelling, `if verifier_says_bad; then refuse; fi`, is precisely
-# F3-2026's empty-result-as-verdict class: every failure OF THE VERIFIER lands
-# in the allow branch. This is that lesson expressed as a convention instead of
-# as vigilance.
-# slh_attest_say <tmp> <token>: print the verdict and release the workspace.
-# EVERY exit from the verifier goes through here, which is not tidiness: the
-# function has eleven of them and a temporary directory, and "remember to clean
-# up on this branch too" is the shape that leaves one behind. One exit door.
+# HISTORY: ruling LIB-48 (undated), in the framework source's private hook-rulings record: slh_attest_verify <proj> <spec-path> -> ONE TOKEN on stdout.
 slh_attest_say() { # slh_attest_say <tmp> <token>
   [ -n "$1" ] && rm -rf "$1"
   printf '%s' "$2"
@@ -1653,19 +1061,11 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
   if ! command -v jq >/dev/null 2>&1; then printf 'UNVERIFIABLE-NO-TOOL'; return 0; fi
   # Nothing is materialised above this line, so these two exits need no cleanup.
 
-  # THE DOCUMENT IS MATERIALISED ONCE, and only when the source is a tree.
-  # jq and ssh-keygen both want a file, and reading the same blob twice out of
-  # git would be two chances to disagree about what is being verified. On the
-  # working-tree path there is nothing to materialise and no temporary file is
-  # created at all, so the ordinary commit keeps the cheaper shape.
+  # HISTORY: ruling LIB-49 (undated), in the framework source's private hook-rulings record: THE DOCUMENT IS MATERIALISED ONCE, and only when the source is a tree.
   tmp=""
   if [ -n "$rev" ]; then
     tmp="$(mktemp -d 2>/dev/null)" || tmp=""
-    # A verifier that cannot obtain a workspace has not verified. It says so
-    # rather than falling back to the working tree, which would answer a
-    # question about the PUSHED bytes using the bytes on disk: a different
-    # question with the same shape, which is how a check quietly stops being
-    # about what it claims.
+    # HISTORY: ruling LIB-50 (undated), in the framework source's private hook-rulings record: A verifier that cannot obtain a workspace has not verified.
     [ -n "$tmp" ] || { printf 'UNVERIFIABLE-NO-TOOL'; return 0; }
     slh_attest_cat "$proj" "$rev" "$docp" > "$tmp/doc" 2>/dev/null
     slh_attest_cat "$proj" "$rev" "$sigp" > "$tmp/sig" 2>/dev/null
@@ -1690,12 +1090,7 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
       else "yes" end' "$doc" 2>/dev/null)" || json_ok=""
   [ "$json_ok" = "yes" ] || { slh_attest_say "$tmp" MALFORMED; return 0; }
 
-  # THE SUBJECT IS CHECKED, AND THIS ROW EXISTS BECAUSE CO1 TAUGHT IT. CO1 is
-  # the publish gate's replay-coverage criterion accepting a record that
-  # references a leg from a DIFFERENT release, satisfying coverage over the
-  # wrong finding list. The same shape here is an attestation that is perfectly
-  # valid, perfectly signed, and about another spec. A mechanism that checks a
-  # claim without checking its SUBJECT is checking nothing.
+  # HISTORY: ruling LIB-51 (undated), in the framework source's private hook-rulings record: THE SUBJECT IS CHECKED, AND THIS ROW EXISTS BECAUSE CO1 TAUGHT IT.
   claimed_spec="$(jq -r '.spec' "$doc" 2>/dev/null)" || claimed_spec=""
   claimed_num="$(jq -r '.spec_number' "$doc" 2>/dev/null)" || claimed_num=""
   if [ "$claimed_spec" != "${spec#"$proj"/}" ] && [ "$claimed_spec" != "$spec" ]; then
@@ -1703,17 +1098,7 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
   fi
   [ "$claimed_num" = "$num" ] || { slh_attest_say "$tmp" SUBJECT-MISMATCH; return 0; }
 
-  # WHAT BINDS IS THE BYTES, not a commit sha. A spec's bytes can change
-  # without a new commit, and the working tree is what a headless Builder
-  # reads, so an attestation over a commit would verify while the file on disk
-  # said something else.
-  #
-  # AND IT IS HASHED FROM THE SAME SOURCE THE DOCUMENT CAME FROM. On the
-  # working-tree path that is the file on disk; on the pushed-range path it is
-  # the spec as it exists IN THE TREE BEING PUBLISHED. Hashing the disk copy
-  # while verifying a pushed tree would answer a question about bytes nobody is
-  # publishing, and it would pass for a push whose spec drifted only in the
-  # commit being pushed, which is the case this layer exists to catch.
+  # HISTORY: ruling LIB-52 (undated), in the framework source's private hook-rulings record: WHAT BINDS IS THE BYTES, not a commit sha.
   claimed_hash="$(jq -r '.spec_hash' "$doc" 2>/dev/null)" || claimed_hash=""
   actual="$(slh_attest_cat "$proj" "$rev" "${spec#"$proj"/}" | slh_attest_hash_stdin)"
   [ -n "$actual" ] || { slh_attest_say "$tmp" UNVERIFIABLE-NO-TOOL; return 0; }
@@ -1722,10 +1107,7 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
   case "$SLH_ATTEST_CUSTODY" in
     signer|ci-secret)
       [ -f "$sig" ] || { slh_attest_say "$tmp" SIGNATURE-FAILED; return 0; }
-      # THE ALLOWED-SIGNERS FILE COMES FROM THE SAME SOURCE TOO. Enrolment is a
-      # commit, so a push whose range enrols a key must be judged against the
-      # keys THAT PUSH publishes, not against whatever this clone happens to
-      # have checked out.
+      # HISTORY: ruling LIB-53 (undated), in the framework source's private hook-rulings record: THE ALLOWED-SIGNERS FILE COMES FROM THE SAME SOURCE TOO.
       if [ -n "$rev" ]; then
         slh_attest_exists "$proj" "$rev" "$SLH_ATTEST_VERIFY_WITH" \
           || { slh_attest_say "$tmp" UNVERIFIABLE-CUSTODY; return 0; }
@@ -1745,14 +1127,7 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
       slh_attest_say "$tmp" SIGNATURE-FAILED; return 0
       ;;
     forge)
-      # CUSTODY C (built 2.6.0, ratification decision 2 with its condition
-      # fixed): structure, subject and hash are verified above as under every
-      # custody; the AUTHORITY question is the forge check's, and this layer
-      # defers to it BY NAME only when the stamped check exists at the rev
-      # under review (the forge-agnostic artifact, not one forge's workflow
-      # file). A tree without the check prints UNVERIFIABLE-CUSTODY exactly as
-      # it did while the check was designed and not built: the deferral names a
-      # layer, and a layer that is not there cannot be named.
+      # HISTORY: ruling LIB-54 (plugin 2.6.0), in the framework source's private hook-rulings record: CUSTODY C (built 2.6.0, ratification decision 2 with its condition.
       if slh_attest_exists "$proj" "$rev" ".claude/hooks/forge-check.sh"; then
         slh_attest_say "$tmp" DEFERRED-TO-FORGE; return 0
       fi
@@ -1762,14 +1137,7 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
   slh_attest_say "$tmp" UNVERIFIABLE-CUSTODY
 }
 
-# slh_attest_require <proj> <spec-path> <where> -> 0 allowed, 1 refused.
-#
-# THE CUSTODY IS NAMED ON THE PASS AS WELL AS ON THE FAILURE. That is not
-# decoration and it is not logging: it is the entire answer to a mechanism
-# whose strength no test can measure. A passing verification under a key the
-# build can reach must say so at the moment it passes, or an instance installs
-# this, watches its checks go green, and believes it has an integrity chain
-# whose actual strength nobody ever established.
+# HISTORY: ruling LIB-55 (undated), in the framework source's private hook-rulings record: slh_attest_require <proj> <spec-path> <where> -> 0 allowed, 1 refused.
 slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
   local proj="$1" spec="$2" where="$3" rev="${4:-}" tok strength __forge_no_check
   slh_attest_load "$proj" || return 1
@@ -1794,14 +1162,7 @@ slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
       return 0
       ;;
     DEFERRED-TO-FORGE)
-      # THE BYTES HALF HAS BEEN VERIFIED; THE AUTHORITY HALF IS NAMED AS
-      # UNVERIFIED AND DEFERRED TO THE LAYER THAT CAN (ratification decision
-      # 2). At the forge check itself that layer is THIS process: the check
-      # registers its verifier and the question is asked here, of the forge,
-      # and refused on anything but VERIFIED. Under the git hooks nothing is
-      # registered, the sentence below prints verbatim, and the commit is
-      # allowed: this is not the offline PASS the 2026-08-29 amendment refused,
-      # because it is called, in its own words, NOT an approval.
+      # HISTORY: ruling LIB-56 (2026-08-29), in the framework source's private hook-rulings record: THE BYTES HALF HAS BEEN VERIFIED; THE AUTHORITY HALF IS NAMED AS.
       if [ -n "$SLH_ATTEST_FORGE_VERIFIER" ]; then
         local ftok num
         num="${spec##*/}"; num="${num%%-*}"
@@ -1847,45 +1208,14 @@ slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
   return 1
 }
 
-# slh_attest_walk <proj> <what> <tip> <rev-list-arg...> -> 0 allowed, 1 refused.
-#
-# THE PUSH LAYER'S ARM, and it asks the same question at a different scope. The
-# enforcement boundary puts the GUARANTEE in the push-time audit specifically,
-# and the reason applies here unchanged: a commit that got in through
-# --no-verify, through an unset core.hooksPath, or through a per-clone gap has
-# never met pre-commit, and this is the last layer before the work is SHARED.
-#
-# THE PREDICATE, stated exactly, because "the same check at push" hides a
-# choice. If the range this push publishes introduces role-path content, then
-# at the TIP THIS PUSH WOULD PUBLISH, every ACTIVE spec must be covered by a
-# valid attestation over ITS BYTES IN THAT TREE. Every term is read from git
-# rather than from the filesystem: the tip may not be HEAD, the branch may have
-# been built in another worktree, and the spec may not exist on disk here at
-# all. Judging a push by what happens to be checked out is a different question
-# wearing the same words.
-#
-# WHY THE TIP AND NOT EVERY COMMIT. A range is a sequence of intermediate
-# states, and an ordinary spec branch passes through many where the attestation
-# does not yet cover the spec (the approval commit lands after the first build
-# commit, a REVISED spec is re-approved on the way back). Requiring every
-# intermediate commit to verify would refuse the ordinary lifecycle, which is
-# the false-denial direction this repository treats as the more dangerous one.
-# What is being published is the TIP, and the tip is what a reader of the remote
-# gets. The content scan walks every commit because a secret in an intermediate
-# commit IS published; an approval is a property of the state, not of each step
-# toward it.
+# HISTORY: ruling LIB-57 (undated), in the framework source's private hook-rulings record: slh_attest_walk <proj> <what> <tip> <rev-list-arg...> -> 0 allowed, 1 refused.
 slh_attest_walk() { # slh_attest_walk <proj> <what> <tip> <rev-list-arg...>
   local proj="$1" what="$2" tip="$3"; shift 3
   local revs rc c touched roles rp num sf status_text hits n
   slh_attest_load "$proj" || return 1
   [ "$SLH_ATTEST_STATE" = "on" ] || return 0
 
-  # THE DIFFERENCE BETWEEN "READ NOTHING" AND "THERE WAS NOTHING", which
-  # slh_scan_walk states for the scan and which is not inherited by being
-  # written underneath it. rev-list FAILING means the range could not be read,
-  # and a check that could not run has not passed. rev-list SUCCEEDING with no
-  # output means the remote already has every commit this ref would publish,
-  # which is the ordinary re-push and correctly checks nothing.
+  # HISTORY: ruling LIB-58 (undated), in the framework source's private hook-rulings record: THE DIFFERENCE BETWEEN "READ NOTHING" AND "THERE WAS NOTHING", which.
   revs="$(git -C "$proj" rev-list "$@" 2>/dev/null)" && rc=0 || rc=$?
   if [ "$rc" != "0" ]; then
     slh_refuse "SLH-ATTEST-UNVERIFIABLE" "the push-time approval check could not enumerate the commits for $what, so it read nothing and has established nothing about whether this work was approved. A check that could not run has not passed."
@@ -1925,10 +1255,7 @@ $revs
 EOF
   [ "$touched" = "1" ] || return 0
 
-  # THE STATE THIS PUSH PUBLISHES, read from the tip's tree. An unreadable
-  # STATUS.md at the tip is a refusal and not an empty ACTIVE set: "no evidence
-  # of an active spec" and "no active spec" are the two facts this file spends
-  # its length refusing to conflate.
+  # HISTORY: ruling LIB-59 (undated), in the framework source's private hook-rulings record: THE STATE THIS PUSH PUBLISHES, read from the tip's tree.
   #
   # THE RECORD, OR THE PAGE (RP1): a tip carrying .claude/status.json answers
   # the ACTIVE question from the record; malformed refuses through the same
@@ -1966,11 +1293,7 @@ EOF
   return 0
 }
 
-# Which specs are ACTIVE according to a STATUS.md text? The attestation
-# predicate is about the spec being BUILT, and ACTIVE is what "being built"
-# is spelled as. Read through the live-text lexer for the reason every other
-# reader of this file uses it: a fenced example or an indented illustration is
-# content, not an inventory row.
+# HISTORY: ruling LIB-60 (undated), in the framework source's private hook-rulings record: Which specs are ACTIVE according to a STATUS.md text? The attestation.
 slh_attest_active_specs() { # slh_attest_active_specs <status-text>
   printf '%s\n' "$1" | sed 's/\\|/ /g' | awk -F'|' '
     function trim(x) { gsub(/^[[:space:]]+|[[:space:]]+$/, "", x); return x }
@@ -1978,14 +1301,7 @@ slh_attest_active_specs() { # slh_attest_active_specs <status-text>
   '
 }
 
-# THE CLOSE VERIFICATION, over the index.
-#
-# It identifies what is being closed by CONTENT rather than by ref name, and
-# that is not a convenience. Measured on git 2.x: during pre-merge-commit of a
-# clean automatic merge, MERGE_HEAD does not exist (only AUTO_MERGE and
-# ORIG_HEAD), so there is no merged ref name to read. Asking "which specs does
-# this change close" is answerable from the index alone, and it is the same
-# question scripts/trunk-audit.sh asks of history.
+# HISTORY: ruling LIB-61 (undated), in the framework source's private hook-rulings record: THE CLOSE VERIFICATION, over the index.
 slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
   local proj="$1" trunk="$2" what="$3"
   local staged spec_files role_paths closing_specs f num status_new status_old text
@@ -1999,13 +1315,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
   # fail-open-ok: no staged spec files leaves the closing set empty, so feature
   # code arriving with it triggers SLH-CLOSES-NO-SPEC. Empty accuses, not excuses.
   spec_files="$(printf '%s\n' "$staged" | grep -E '^specs/[0-9]+[a-z]*-[^/]*\.md$' || true)"
-  # THE STATUS IS CARRIED ACROSS THE SUBSHELL, and it was not.
-  #
-  # `x="$(f)"` runs f in a SUBSHELL, so a refusal recorded by slh_refuse inside
-  # it sets SLH_REFUSED in a process that then exits. The reason reached stderr
-  # and the decision reached nobody: a bad "roles" shape printed SLH-ROLES-SHAPE
-  # and the merge landed anyway. Found while asserting the role class by outcome
-  # rather than by message, which is the whole argument for outcome assertions.
+  # HISTORY: ruling LIB-62 (undated), in the framework source's private hook-rulings record: THE STATUS IS CARRIED ACROSS THE SUBSHELL, and it was not.
   if ! role_paths="$(slh_role_paths "$proj")"; then
     SLH_REFUSED=1
     return 1
@@ -2018,13 +1328,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
   # existed. A record present at either end and malformed is a refusal here and
   # now, because every set computed below would be a guess.
   #
-  # THE ADOPTION COMMIT CLOSES NOTHING, by construction: when the record is in
-  # the index and absent from HEAD, this commit is the instance opting in (the
-  # human-confirmed transcription), and entries arriving already-closed are
-  # transcription, not closes. Demanding close facts of them would refuse every
-  # opt-in whose history predates the record; granting them the close exemption
-  # would let an adoption commit buy what a close must earn. So the newly-closed
-  # set is EMPTY: nothing demanded, nothing granted, both directions safe.
+  # HISTORY: ruling LIB-63 (undated), in the framework source's private hook-rulings record: THE ADOPTION COMMIT CLOSES NOTHING, by construction.
   local structured=0 record_new="" record_old="" newly_closed=""
   if slh_record_present "$proj" ""; then
     structured=1
@@ -2057,52 +1361,16 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
       done
     fi
   else
-    # LIVE TEXT AT THE SOURCE (2026-08 consolidation, the F2 class made a rule).
-    # Every reader below this point, the row readers included, judges STATUS.md
-    # by what a human sees in the rendered file: a fenced example row, a
-    # commented-out row or an indented illustration is not an inventory row. The
-    # strip happens ONCE, here, so a reader added later cannot be blind by
-    # default the way slh_chores_completed was. Both directions matter: a hidden
-    # row in the NEW text could excuse a close the visible file never recorded,
-    # and a fenced example in the OLD text made an honest close read as not new
-    # (measured: SLH-CLOSES-NO-SPEC refused a fully compliant close because a
-    # how-to illustration mentioned its row).
+    # HISTORY: ruling LIB-64 (undated), in the framework source's private hook-rulings record: LIVE TEXT AT THE SOURCE (2026-08 consolidation, the F2 class made a rule).
     status_new="$(slh_index_show "$proj" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"
     status_old="$(slh_head_show "$proj" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"
     newly_closed="$(slh_rows_newly_closed "$status_new" "$status_old")"
   fi
 
-  # Which specs does this change CLOSE? A spec whose record entry (or, on the
-  # page path, whose row) reads closed now and did not before. A spec that was
-  # already closed closes nothing, which is the laundering route B6 closed in
-  # the audit and which this mirrors.
-  # THE UNION, NOT THE INTERSECTION (v1.7 claims audit, R3-2).
-  #
-  # This loop used to iterate over $spec_files, the STAGED spec files, so the
-  # closing set was the intersection of "row flipped to CLOSED" and "spec file
-  # touched by this change". A row flipped to CLOSED in specs/STATUS.md WITHOUT
-  # editing the spec file was therefore never examined: it satisfied nothing and
-  # was checked by nothing. Measured before this fix: a branch that properly
-  # closes one spec and flips a second spec's row to CLOSED in the same
-  # STATUS.md merged at rc=0, and the trunk carried that second spec as CLOSED
-  # with no Closing report, no QA verdict and no diagram field, while the audit
-  # reported the merge clean.
-  #
-  # The documentation said "the specs whose inventory row flips to CLOSED in
-  # this same change", which is the right rule and was not the implemented one.
-  # The rule is the row flip. Where the spec FILE lives is a separate question,
-  # answered per spec below.
+  # HISTORY: ruling LIB-65 (plugin v1.7), in the framework source's private hook-rulings record: Which specs does this change CLOSE? A spec whose record entry (or, on the.
   closing_specs=""
   for num in $newly_closed; do
-    # SORT ORDER IS NOT A CHOICE OF SPEC (leg F6). This read
-    # `grep -E "^specs/${num}[a-z]*-" | head -n1`, and both git commands that
-    # feed it emit SORTED paths, so specs/0002-other-design.md beat
-    # specs/0002-other.md ('-' is 0x2d, '.' is 0x2e) and a companion document
-    # decided the close. Measured both ways: a non-compliant spec merged clean
-    # once a companion existed, and a fully compliant close was refused with a
-    # message that was false about the file it named. The advisory gate has
-    # counted the matches and refused CG-SPEC-DUPLICATE since 1.0.x; the layer
-    # carrying the guarantee never got it.
+    # HISTORY: ruling LIB-66 (undated), in the framework source's private hook-rulings record: SORT ORDER IS NOT A CHOICE OF SPEC (leg F6).
     f="$(printf '%s\n' "$spec_files" | grep -E "^specs/${num}-[^/]*\.md$" || true)" # fail-open-ok: no match leaves f empty and the index fallback below runs
     if [ -n "$f" ] && [ "$(printf '%s\n' "$f" | grep -c .)" -ne 1 ]; then
       slh_refuse "SLH-SPEC-DUPLICATE" "$(printf '%s\n' "$f" | grep -c .) files match specs/${num}-*.md in this change, so which one carries spec $num's Closing report is a guess: $(printf '%s' "$f" | tr '\n' ' '). Spec numbers must be unique. Rename the companion out of the specs/<number>-*.md namespace, or give it its own number."
@@ -2121,14 +1389,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
     closing_specs="$closing_specs $num:$f"
   done
 
-  # Is feature code arriving? Any staged path under a declared role.
-  # NORMALISED, not used raw. A role recorded as "./src" or "/src" makes this
-  # anchor `^./src/` or `^//src/`, which matches no staged path, so carries_code
-  # stays 0 and the closes-no-spec refusal cannot fire: the guarantee layer goes
-  # blind on a value nothing rejects (1.1.0 adversarial review, second run). The same
-  # normalisation is applied in scope-hook.sh and trunk-audit.sh, which is the
-  # point: a role path has to mean the same thing in all three or the layers
-  # stop covering each other.
+  # HISTORY: ruling LIB-67 (plugin 1.1.0), in the framework source's private hook-rulings record: Is feature code arriving? Any staged path under a declared role.
   local carries_code=0 rp
   if [ -n "$role_paths" ]; then
     for rp in $role_paths; do
@@ -2137,30 +1398,12 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
       rp="${rp#/}"
       rp="${rp%/}"
       [ -n "$rp" ] && [ "$rp" != "." ] || continue
-      # A ROLE MAY NAME A FILE, not only a directory (1.1.0 final leg, F5). This
-      # required a trailing slash, so a flat-root instance whose role is
-      # "app.js" could never set carries_code and SLH-CLOSES-NO-SPEC never
-      # fired: unreviewed code merged onto the trunk and pushed. Both siblings
-      # already matched `<role>` OR `<role>/`; the guarantee layer alone did not.
+      # HISTORY: ruling LIB-68 (plugin 1.1.0), in the framework source's private hook-rulings record: A ROLE MAY NAME A FILE, not only a directory (1.1.0 final leg, F5).
       if printf '%s\n' "$staged" | grep -qE "^${rp}(/|$)"; then carries_code=1; break; fi
     done
   fi
 
-  # THE CHORE ROUTE (v1.7 gate, F30). Part 5b has always prescribed a
-  # `chore/<slug>` branch merged --no-ff for maintenance that touches role paths,
-  # and this check refused exactly that, then advised the operator to "route it as
-  # a chore branch" while they were standing on one. The route was real and the
-  # enforcement had nothing to read, because the edition described the archive line
-  # without ever saying what one looked like. Part 5b now defines the form and this
-  # reads it.
-  #
-  # Identity is by CONTENT, like everything else here, and that is forced rather
-  # than chosen: MERGE_HEAD, MERGE_MSG and SQUASH_MSG are all absent at
-  # pre-merge-commit time (measured 2026-08-02), so the branch NAME is genuinely
-  # unavailable and a rule keyed on `chore/` could not be written even if it were
-  # wanted. A chore is recognised by the completion it RECORDS, which is also why
-  # a branch that records nothing is refused exactly like an unspecced feature: it
-  # is indistinguishable from one, and the edition now says so.
+  # HISTORY: ruling LIB-69 (2026-08-02), in the framework source's private hook-rulings record: THE CHORE ROUTE (v1.7 gate, F30).
   local closing_chores
   if [ "$structured" = "1" ]; then
     # The record's chore map, same before-and-after rule: a chore whose entry
@@ -2214,12 +1457,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
     # caller, so a non-zero return must not skip the four checks below.
     slh_attest_require "$proj" "$f" "$what" || true
 
-    # THE CLOSE FACTS COME FROM THE RECORD on the structured path (RP1): the
-    # qa_pass_1 and diagram tokens checkpoint wrote at the close ARE the record
-    # of a completed close, and the prose Closing report stays a human artifact
-    # this layer no longer parses. The four page checks below are the LEGACY
-    # path only; running both would be two readers per fact, the A9 violation
-    # the record exists to end.
+    # HISTORY: ruling LIB-70 (undated), in the framework source's private hook-rulings record: THE CLOSE FACTS COME FROM THE RECORD on the structured path (RP1).
     if [ "$structured" = "1" ]; then
       local __facts __owns_out
       if ! __facts="$(slh_record_facts "$record_new" "$num")"; then
@@ -2229,19 +1467,9 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
       if [ "$__facts" != "ok" ]; then
         slh_refuse "SLH-RECORD-NO-CLOSE" "spec $num is newly closed in .claude/status.json without its close facts: the entry must carry status closed, qa_pass_1 ok, and diagram updated or no-impact, written by /setlist:checkpoint at the close. Run the close through checkpoint rather than editing the record by hand."
       fi
-      # The ownership declaration, gathered here and consumed after the loop
-      # when this landing is single-parent (design 8.2). A malformed
-      # declaration refuses at the arm that would consume it; a spec
-      # declaring nothing keeps the whole-commit exemption exactly.
+      # HISTORY: ruling LIB-71 (undated), in the framework source's private hook-rulings record: The ownership declaration, gathered here and consumed after the loop.
       __owns_out="$(slh_index_show "$proj" "$f" | awk "$SLH_OWNS_AWK")" || __owns_out="!read-failed"
-      # THE LITE TIER'S CAP (edition v1.14, P1, the owner's ruling 3 of
-      # 2026-09-06): a spec whose header reads `Tier: lite` inside the hashed
-      # range declares at most five files. The reader above counts what it
-      # prints and appends the token when the tier's claim is not met; it is
-      # refused at EVERY close (a merge or a single-parent landing alike),
-      # because the tier is a claim about the spec and not about the route,
-      # and the token is stripped so the declared set is still judged below.
-      # A spec without the line is judged exactly as before this edition.
+      # HISTORY: ruling LIB-72 (2026-09-06), in the framework source's private hook-rulings record: THE LITE TIER'S CAP (edition v1.14, P1, the owner's ruling 3 of.
       if printf '%s\n' "$__owns_out" | grep -q '^!lite-oversized$'; then
         slh_refuse "SLH-LITE-OVERSIZED" "spec $num is declared Tier: lite and declares more than five files under Owns:. A lite spec is at most five files (Part 3 of the edition); the two honest exits are to drop the tier line (a full spec, judged exactly as before) or to split the work, both through /setlist:checkpoint. The tier is a claim about size, and a claim the close cannot honour is refused rather than reread."
         __owns_out="$(printf '%s\n' "$__owns_out" | grep -v '^!lite-oversized$')"
@@ -2261,25 +1489,7 @@ $__owns_out"
       continue
     fi
 
-    # A FENCED EXAMPLE IS NOT A CLOSING REPORT. Ported from close-gate.sh, which
-    # learned it as leg 5's F7; this layer never got it, so a spec whose entire
-    # Closing report was a quoted ```markdown example satisfied all four checks
-    # below at once and really merged (v1.7 gate, adversarial review F9).
-    #
-    # Not a contrived input: the template ships in setlist.md as a fenced block
-    # carrying exactly these markers, it is stamped to specs/TEMPLATE.md, and the
-    # spec-authoring skill tells authors to copy it. A spec that quotes its own
-    # template is ordinary authoring.
-    #
-    # Stripped ONCE here rather than inside each check, so the four cannot drift
-    # apart the way the report checker's readers did.
-    #
-    # NARROWED for the 1.1.0 adversarial review F6: dropping EVERY fenced span also
-    # dropped a QA Pass 1 report pasted inside a fence, which is what Appendix
-    # C's "(pasted verbatim)" means for tool output. This layer is the guarantee
-    # rather than the advisory one, so it was the layer refusing compliant work
-    # with SLH-NO-QA-VERDICT. A block is a TEMPLATE QUOTE exactly when its own
-    # body carries a Closing-report heading; anything else in a fence is content.
+    # HISTORY: ruling LIB-73 (plugin 1.1.0), in the framework source's private hook-rulings record: A FENCED EXAMPLE IS NOT A CLOSING REPORT.
     #
     # LOCKSTEP: byte-identical to close-gate.sh and trunk-audit.sh, asserted.
     # The value is defined once at the top of this file, because the lifecycle
@@ -2296,28 +1506,13 @@ $__owns_out"
     fi
 
     local diag answer
-    # A FIELD, NOT A SUBSTRING (1.1.0 adversarial review, F8). Anchored past any list
-    # bullet so ordinary prose repeating the label cannot decide the check, which
-    # it did in both directions. `head -n1` takes the FIRST field (KL1, ruled
-    # 2026-08-29): the field answers a question once, a later line discussing it
-    # is commentary, and a revision edits the field in place. The answer itself
-    # is anchored to the START of the value (F6-2026), so a line that merely
-    # CONTAINS or CONTRADICTS an answer does not satisfy it. Same change as
-    # close-gate.sh and trunk-audit.sh, which carry the same two rules.
+    # HISTORY: ruling LIB-74 (2026-08-29), in the framework source's private hook-rulings record: A FIELD, NOT A SUBSTRING (1.1.0 adversarial review, F8).
     diag="$(printf '%s\n' "$text" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | head -n1)"
     if [ -z "$diag" ]; then
       slh_refuse "SLH-NO-DIAGRAM-FIELD" "spec $num is missing the mandatory field 'Architecture diagram: updated in this commit | no impact'."
     else
       answer="${diag#*Architecture diagram:}"
-      # PLACEHOLDER SHAPE, NOT THE CHARACTER '<' (leg F11). This blanked the answer
-      # on any '<', which was written for the template's own
-      # `<updated in this commit | no impact>` and fired on ordinary prose: a
-      # comparison, a generic, an HTML comment. Measured:
-      # `updated in this commit (added <auth> box)` was refused.
-      # Stripping <...> spans and THEN requiring the answer settles both directions,
-      # because the genuine unfilled template strips to nothing and stays refused.
-      # Asserted across the value space rather than at a spelling: this field has
-      # been corrected three times, twice by repairing only the case reported.
+      # HISTORY: ruling LIB-75 (undated), in the framework source's private hook-rulings record: PLACEHOLDER SHAPE, NOT THE CHARACTER '<' (leg F11).
       answer="$(printf '%s' "$answer" | sed 's/<[^>]*>//g')"
       if ! printf '%s' "$answer" | sed 's/^[[:space:]]*//' | grep -qE '^(updated in this commit|no impact)([^A-Za-z]|$)'; then
         slh_refuse "SLH-DIAGRAM-UNANSWERED" "spec $num's architecture-diagram field is unanswered; answer it 'updated in this commit' or 'no impact'."
@@ -2325,21 +1520,12 @@ $__owns_out"
     fi
   done
 
-  # THE PER-FILE OWNERSHIP QUESTION AT THE SINGLE-PARENT LANDING (design 8.2),
-  # the refusing layer's early copy of the audit's NPAR<2 arm: a squash close
-  # of a DECLARING spec (or a chore flip) is checked file by file against the
-  # declared set, so the whole commit can no longer be exempted by one record
-  # flip. A blockless close keeps today's whole-commit exemption exactly; a
-  # true merge landing never enters (the merge arm asks provenance instead).
+  # HISTORY: ruling LIB-76 (undated), in the framework source's private hook-rulings record: THE PER-FILE OWNERSHIP QUESTION AT THE SINGLE-PARENT LANDING (design 8.2).
   if [ "$structured" = "1" ] && [ "$SLH_CLOSE_SINGLE_PARENT" = "1" ] && \
      [ "$__owns_blockless" = "0" ] && [ "$__owns_shape_bad" = "0" ] && \
      { [ "$__owns_declaring" = "1" ] || [ -n "$closing_chores" ]; }; then
     local __ch __cf __sf __owns_staged
-    # The arm asks what ARRIVES on the trunk, so deletions are out of scope
-    # (2.4.0 leg F7): `git rm src/old.txt` is not smuggling src/old.txt, and
-    # before this filter the same retirement passed as `git mv` and refused as
-    # `git rm`. The unfiltered $staged above is untouched: a staged deletion
-    # still marks the close as carrying code, exactly as before this arm existed.
+    # HISTORY: ruling LIB-77 (plugin 2.4.0), in the framework source's private hook-rulings record: The arm asks what ARRIVES on the trunk, so deletions are out of scope.
     __owns_staged="$(slh_staged_files "$proj" d)"
     for __ch in $closing_chores; do
       __cf="$(printf '%s' "$record_new" | jq -r --arg id "$__ch" "$SLH_RECORD_CHORE_FILES_JQ" 2>/dev/null || true)" # fail-open-ok: no files declared covers nothing, it cannot widen
@@ -2368,13 +1554,7 @@ $__owns_staged
 EOF
   fi
 
-  # T1 at THIS layer, at BOTH landings (a true merge and a single-parent
-  # completion): the declared set against the ownership file, ADVISORY (ruling
-  # 4), on the merging clone's git identity, which is a claim; the push-time
-  # audit and the forge check refuse on theirs. The declared set is exposed for
-  # the forge check, which runs the pass itself with the forge's identity and
-  # switches this one off (SLH_CODEOWNERS_MODE empty). A blockless close or a
-  # malformed declaration declares nothing here, exactly as in the arm above.
+  # HISTORY: ruling LIB-78 (undated), in the framework source's private hook-rulings record: T1 at THIS layer, at BOTH landings (a true merge and a single-parent.
   SLH_OWNS_DECLARED=""
   if [ "$structured" = "1" ] && [ "$__owns_declaring" = "1" ] && [ "$__owns_shape_bad" = "0" ]; then
     SLH_OWNS_DECLARED="$(printf '%s\n' "$__owns_list" | grep . | tr '\n' ' ' | sed 's/ $//')" # fail-open-ok: an empty declared set is "nothing to compare", the design's own reading
@@ -2389,25 +1569,7 @@ EOF
   [ "$SLH_REFUSED" = "0" ]
 }
 
-# The project's own gate command. This is THE expensive check, and the reason
-# the close verification belongs at merge time rather than on every commit: it
-# can be the full project suite. A gate_command that is absent means the project
-# declared none; a gate_command that FAILS refuses the merge.
-# THE GATES BLOCK, READ BY ONE FUNCTION (design section 8, spec 0132; P2).
-#
-# Three tiers, `commit`, `close` and `push`, declared in a `gates` block that
-# appends after `release` in .claude/sdd.json. ABSENT READS AS TODAY, byte for
-# byte: `close` and `push` take the single gate_command (the forge check runs
-# `push`, and the full suite is what that one command has always been declared
-# to be), `commit` reads empty (pre-commit runs a gate only in the merge-
-# completion case, which is a close). PRESENT, each tier reads its own string;
-# an empty `close` or `push` under a scaffolded instance refuses at the caller
-# on the existing rule that an empty gate command is the stamped default and
-# not a declaration, and an empty `commit` means no commit-time gate, the
-# ordinary case. A block that is not an object, or a tier that is not a
-# string, refuses SLH-GATES-SHAPE: an unreadable declaration is worse than
-# none (SLH-ATTEST-UNVERIFIABLE's "shape" precedent). One reader, so the three
-# callers and the check cannot disagree about what the block means (A9).
+# HISTORY: ruling LIB-79 (undated), in the framework source's private hook-rulings record: The project's own gate command.
 slh_gate_command_for() { # slh_gate_command_for <proj> <commit|close|push> -> prints the command (maybe empty); 1 after refusing
   local proj="$1" tier="$2" raw
   case "$tier" in commit|close|push) ;; *) slh_refuse "SLH-GATES-SHAPE" "an unknown gate tier \"$tier\" was asked for; the tiers are commit, close and push."; return 1 ;; esac
@@ -2435,18 +1597,7 @@ slh_gate_command_for() { # slh_gate_command_for <proj> <commit|close|push> -> pr
 
 slh_run_gate_command() { # slh_run_gate_command <proj> [commit|close|push]
   local proj="$1" tier="${2:-close}" cmd out rc last
-  # AN EMPTY gate_command IS THE STAMPED DEFAULT, SO SKIPPING IT SILENTLY WAS A
-  # FAIL-OPEN IN THE DEFAULT STATE (v1.7 claims round 6, finding 3).
-  #
-  # This used to read "an absent gate_command means the project declared none,
-  # and skipping it is then correct". That is true before /scaffold and false
-  # after it: templates/claude/sdd.json.tmpl ships gate_command empty, /scaffold
-  # is what records it, and `scaffolded: true` is the flag that says the project
-  # has been through that step. A scaffolded instance with no gate_command is
-  # therefore not a project that declared none, it is a project whose suite
-  # nobody wired, and every close merged with no suite run, no code and nothing
-  # on stderr. Measured: identical merge refused SLH-GATE-COMMAND-FAILED with
-  # gate_command "false", accepted silently with gate_command "".
+  # HISTORY: ruling LIB-80 (plugin v1.7), in the framework source's private hook-rulings record: AN EMPTY gate_command IS THE STAMPED DEFAULT, SO SKIPPING IT SILENTLY WAS A.
   #
   # Permissive on MISSING EVIDENCE was the one such path left in this file, and
   # it is the class the banner above says was removed. Before scaffolding the
@@ -2486,11 +1637,7 @@ slh_run_gate_command() { # slh_run_gate_command <proj> [commit|close|push]
   out="$( ( cd "$proj" && eval "$cmd" ) 2>&1 )" && rc=0 || rc=$?
   [ "$rc" = "0" ] && return 0
   last="$(printf '%s\n' "$out" | tail -3)"
-  # 127 is "a command in the gate was not found", which is a DIFFERENT fact from
-  # "the suite failed": it means the gate did not run and so proves nothing
-  # either way. Hooks run in a bare shell, so a gate command that relies on an
-  # activated virtualenv or a version-manager shim hits this while the operator's
-  # own shell runs it green.
+  # HISTORY: ruling LIB-81 (undated), in the framework source's private hook-rulings record: 127 is "a command in the gate was not found", which is a DIFFERENT fact from.
   if [ "$rc" = "127" ]; then
     slh_refuse "SLH-GATE-COMMAND-FAILED" "the project gate command ($cmd) could not RUN here (exit 127, a command was not found), so it proves nothing about this work. Hooks run it in a bare shell: if your toolchain lives in a virtualenv or a version-manager shim, put the activation inside gate_command itself. Last output: $last"
   else

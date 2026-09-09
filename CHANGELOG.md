@@ -9,6 +9,60 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.6.1
+
+**Edition v1.14 (the team edition), unchanged.** A docs patch and a no-behaviour-change
+chore, published together. No command changes, no gate asks a new question, and every
+hook's executable lines are identical to 2.6.0's. Outside the hooks, two files carry
+executable changes: the delivery library's pin list names the two moved git-hook files'
+new blobs, and the test suite gains four lines that read `LIMITATIONS.md` for a bullet it
+checks.
+
+**The README says what a team gets.** 2.6.0 added six team capabilities, the README's
+list gained their boundary bullets, and the prose above the list stood still for a
+release. The Teams section landed in `README.md`, above Known limitations: the forge
+check with the required check's name and the two trunk settings that belong beside it,
+`forge` custody, the CODEOWNERS bridge, the three gate tiers, the lite tier and the Stop
+hook, each pointing at its boundary bullet by title. The intro reads for one developer
+or a team and counts the eight stamped hooks.
+
+**The Known-limitations list in two layers, nothing deleted.** The README's section is
+the short form (8,683 words to 1,816: each bullet its title and one sentence, with a
+link to the full text), and `LIMITATIONS.md`, a new public file, carries the full text
+(9,846 words: each bullet's claim, what to do, its status and its history). The 37
+titles are identical on both layers; every sentence of the old section (207 bullet
+sentences and 35 prose sentences) is present in the full text by a per-sentence check;
+the export refuses the two layers disagreeing on a title.
+
+**The hooks' comment history moves to a private record.** The relocation landed in
+`templates/hooks/close-gate.sh`, `templates/hooks/commit-gate.sh`,
+`templates/hooks/scope-hook.sh`, `templates/git-hooks/pre-push` and
+`templates/git-hooks/setlist-hook-lib.sh`: the five files lose 2,875 lines of rule
+history, their comment density falling from between 52 and 67 percent to between 27
+and 40, and each block keeps one pointer line naming its ruling and date. The split
+suite landed as a driver (`test/run-tests.sh`) plus sixteen shards under
+`test/suite/`, cut at its banners in file order. The proof is a
+two-view equivalence check (comments and blank lines stripped; a parser's minified
+form): every executable line of the five files identical to the previous release, the
+suite identical outside a sourcing seam of five removed and seven added lines printed
+in full and the four lines named above, the check watched refusing a one-character
+executable change before the real diff was accepted. Nothing a hook decides changes.
+
+**The rule this release adds to itself.** The README's capability prose is derived
+from the changelog and moves in the same cycle as the capability: the export refuses
+while the newest entry names a capability the README body above Known limitations
+does not say. That is the reason this README will not lag a release again.
+
+**The Known-limitations list as it leaves this release: 33 design boundaries, 2 open
+limitations, 2 upstream conditions.** Unchanged from 2.6.0, title for title.
+
+**How this release is attested.** No adversarial review read these bytes and none was
+owed: the executable lines of every hook and script are identical to the previous
+release, which its own review and fix rounds attested. The mechanical evidence set ran
+in full against this release, and the attestation chains through the previous
+release's verified record under a bound written before the walk; the notes name the
+two digests.
+
 ## 2.6.0
 
 **Edition v1.14 (the team edition).** The team release. This entry is capped under 600 words by a standing rule

@@ -81,11 +81,7 @@ fi
 REPO="$(git rev-parse --show-toplevel 2>/dev/null || printf '.')"
 [[ -f "$REPO/.claude/sdd.json" ]] || exit 0   # not a framework instance
 
-# The audit ships with the plugin. Resolve it from the plugin root when the
-# environment names one, else from a copy the project vendored next to its
-# hooks. If neither is present the hook says so and REFUSES, rather than
-# passing silently: a pre-push check that cannot find its own tool and exits 0
-# is the fail-open class this whole mechanism exists to remove.
+# HISTORY: ruling PP-01 (undated), in the framework source's private hook-rulings record: The audit ships with the plugin.
 AUDIT=""
 for cand in \
   "${CLAUDE_PLUGIN_ROOT:-}/scripts/trunk-audit.sh" \
@@ -99,53 +95,7 @@ if [[ -z "$AUDIT" ]]; then
   exit 1
 fi
 
-# THE STATUS IS CAPTURED FROM THE AUDIT, NOT FROM THE IF-COMPOUND.
-#
-# This was `if bash "$AUDIT" "$REPO"; then exit 0; fi` followed by `RC=$?`, and
-# the status of an if-compound whose condition failed with no else branch is 0,
-# not the condition's status. RC was therefore always 0, the RC==2 test below was
-# dead code, and an audit that could not run AT ALL was reported to the operator
-# as a dirty trunk: a claim about their history that nothing had checked
-# (v1.7 gate, adversarial review F11). Both branches refuse, so this was never a bypass,
-# only a confidently wrong diagnostic.
-# WHAT IS ACTUALLY BEING PUSHED, rather than what the local trunk happens to be
-# (1.1.0 leg, fourth run, F17).
-#
-# This hook ignored its stdin entirely and audited the LOCAL trunk. git hands
-# pre-push one line per ref being pushed:
-#
-#     <local ref> <local oid> <remote ref> <remote oid>
-#
-# so a REFSPEC that pushes some other local ref ONTO the remote trunk was never
-# examined: `git push origin spec/0001-thing:refs/heads/main` landed unclosed
-# feature code on the remote trunk while this hook audited local main, printed
-# "0 violations" and exited 0. The trunk audit is the documented backstop for
-# every sideways route, and the sideways route went around the backstop.
-#
-# So the refspec lines are read and every LOCAL OID that would become the remote
-# trunk is audited. The local trunk is still audited when it is among them, which
-# is the ordinary `git push` case and the only one this hook used to handle.
-#
-# Reading stdin makes this hook consume it, which is correct: git expects
-# pre-push to read those lines, and nothing downstream of here needs them.
-# THE ONE REDUCER, and this hook had none (1.1.0 final leg, F2/F3/F4, three
-# finders on one cause).
-#
-# This block used to read .trunk with its own jq and compare it RAW. The shared
-# library REDUCES the recorded value: a ref path becomes the local branch it
-# names, a remote-tracking spelling becomes the branch it tracks, an
-# unresolvable one is REFUSED, and a case variant becomes git's stored spelling.
-# So for a trunk recorded as `refs/remotes/origin/main`, which is exactly what
-# the upgrade skill's own detection command returns, the refspec audit added
-# earlier the same day was DEAD CODE: the comparison below could never match,
-# and `git push origin spec/0001-x:refs/heads/main` put unreviewed work on the
-# remote trunk at rc=0 while the audit reported the local one clean.
-#
-# That is the third time in this cycle that one side of a comparison was
-# normalised and the other was not, and the second written while fixing the
-# previous instance. The repair is therefore the CLASS and not the case: every
-# reader of the trunk identity binds to this reducer, and the suite asserts they
-# agree BY OUTPUT over a corpus of ref spellings rather than by looking alike.
+# HISTORY: ruling PP-02 (plugin 1.1.0), in the framework source's private hook-rulings record: THE STATUS IS CAPTURED FROM THE AUDIT, NOT FROM THE IF-COMPOUND.
 LIB=""
 for cand in "$(dirname "$0")/setlist-hook-lib.sh" "$REPO/.githooks/setlist-hook-lib.sh"; do
   [[ -f "$cand" ]] && { LIB="$cand"; break; }
@@ -159,24 +109,7 @@ fi
 # shellcheck source=/dev/null
 . "$LIB"
 
-# THE TOOLCHAIN PROBE, WHICH THIS HOOK DID NOT RUN (v1.7 claims audit, R2-3).
-#
-# pre-commit and pre-merge-commit both call this before reading anything, and
-# refuse SLH-NO-TOOLCHAIN when awk, sed, tr or grep are present but broken.
-# pre-push did not, and its content scan is pure grep: a grep that exits
-# non-zero with no output is indistinguishable from "nothing matched", so the
-# scan reported clean and the push succeeded. Measured on the shipped bytes
-# before this line existed: with a grep that exits 1, the same content is
-# REFUSED at commit time with SLH-NO-TOOLCHAIN and PUSHED at exit 0, with the
-# secret landing on the remote.
-#
-# That is the fail-open the library banner exists to say was removed, in the one
-# layer the release calls its guarantee. It is fixed here rather than documented
-# because a scan that cannot run must refuse, which is the same rule the missing
-# trunk-audit.sh refusal in this file already follows.
-#
-# This changes NO coverage. The scan still reads exactly what it read; it stops
-# reporting clean when it is not in a position to report anything.
+# HISTORY: ruling PP-03 (plugin v1.7), in the framework source's private hook-rulings record: THE TOOLCHAIN PROBE, WHICH THIS HOOK DID NOT RUN (v1.7 claims audit, R2-3).
 slh_require_toolchain || {
   printf '\nsetlist pre-push: the push-time scan cannot run (see above).\n' >&2
   printf 'Refusing the push rather than reporting a clean scan it did not perform.\n' >&2
@@ -190,50 +123,7 @@ TRUNK_NAME="$(slh_trunk "$REPO")" || {
 }
 [[ -n "$TRUNK_NAME" ]] || { printf 'setlist pre-push: the reduced trunk is empty; refusing.\n' >&2; exit 1; }
 
-# THE REMOTE'S TRUNK MAY NOT SHARE THE LOCAL NAME (F11). Matching only the local
-# name meant `refs/heads/spec/0004-bad -> refs/heads/master` was never audited.
-# Widening to "audit every pushed ref" would refuse the ordinary push of a spec
-# branch to its own remote name, which is the false-denial direction this repo
-# treats as the more dangerous one, so the remote's own default branch is
-# resolved and treated as a trunk ref alongside the local name.
-# AND IT MUST NOT BE READ FROM A CACHED CONVENIENCE REF (F7, 2026-08-07 leg).
-#
-# This resolved the remote trunk ONLY through refs/remotes/$1/HEAD. git passes
-# $1 as the literal URL when a push names a URL, so no such ref exists, and
-# `git remote set-head origin -d` removes it for the by-name spelling. Either
-# way REMOTE_TRUNK went empty, no pushed ref matched a trunk name, PUSH_REFS
-# stayed empty, and control fell through to the branch that audits the LOCAL
-# trunk. Measured: unclosed feature code reached the REMOTE trunk at rc=0 while
-# this hook printed "audited 0 commits on main ... 0 violations", which is a
-# true statement about a ref the push never touched.
-#
-# So the remote is ASKED, rather than the local cache consulted. ls-remote
-# resolves the default branch for a URL and for a remote name alike, which is
-# the point: the two spellings stop diverging.
-#
-# The unresolvable case is decided by WHY it is unresolvable, because the three
-# reasons want different answers:
-#   unreachable (ls-remote fails)  -> refuse: the trunk cannot be identified,
-#                                     so nothing about this push is auditable
-#   reachable, has refs, no HEAD   -> the remote has no default branch, so no
-#     symref                          pushed ref can BE the remote trunk and
-#                                     the local-name test is already complete
-#   reachable, NO refs yet (empty) -> every pushed refs/heads/* ref is about to
-#                                     BECOME a candidate remote trunk (git hosts
-#                                     adopt the first pushed branch as the
-#                                     default), so audit them all as trunk. This
-#                                     is F1 of the plugin-2.0.0 adversarial review: a
-#                                     differently-named branch pushed first to an
-#                                     empty remote used to fall through to
-#                                     auditing LOCAL main and ALLOW unclosed
-#                                     feature code onto the new remote default,
-#                                     the exact fail-open (audit a ref the push
-#                                     never touched) this whole block exists to
-#                                     close, reintroduced for the empty sub-case.
-# Conflating them would either break offline work or reinstate a hole.
-# The remote name (or URL) git passed this hook, captured ONCE: the scan builds
-# argument lists further down and the positional parameters must stay what git
-# set them to.
+# HISTORY: ruling PP-04 (2026-08-07), in the framework source's private hook-rulings record: THE REMOTE'S TRUNK MAY NOT SHARE THE LOCAL NAME (F11).
 REMOTE_ARG="${1:-}"
 
 REMOTE_TRUNK=""
@@ -245,12 +135,7 @@ if [[ -n "${1:-}" ]]; then
   if [[ -z "$REMOTE_TRUNK" ]]; then
     if SYMREF_OUT="$(git -C "$REPO" ls-remote --symref "$1" HEAD 2>/dev/null)"; then
       REMOTE_TRUNK="$(printf '%s\n' "$SYMREF_OUT" | awk '$1 == "ref:" { sub(/^refs\/heads\//, "", $2); print $2; exit }')"
-      # No HEAD symref AND no branch refs at all is an EMPTY remote: this push
-      # creates its first branch(es). `ls-remote --heads` printing nothing
-      # identifies it; a remote that HAS refs but no HEAD is not empty and keeps
-      # the "no pushed ref can be the trunk" reading above. A transient failure
-      # of this second query yields empty output too, which sets REMOTE_EMPTY and
-      # audits every pushed ref as trunk: fail-CLOSED (over-strict), never open.
+      # HISTORY: ruling PP-05 (undated), in the framework source's private hook-rulings record: No HEAD symref AND no branch refs at all is an EMPTY remote.
       if [[ -z "$REMOTE_TRUNK" && -z "$(git -C "$REPO" ls-remote --heads "$1" 2>/dev/null)" ]]; then
         REMOTE_EMPTY=1
       fi
@@ -262,32 +147,9 @@ fi
 
 PUSH_REFS=""
 
-# THE SCAN WALKS THE RANGE PER COMMIT, and the walk lives in the library since
-# 2.6.0 (slh_scan_walk, with its history: SC sub-holes 3, 4 and 6, RC2-2026),
-# because the forge check runs the same bytes over a pull request's range.
-# This hook calls it with its own repository and its own ranges, unchanged.
+# HISTORY: ruling PP-06 (plugin 2.6.0), in the framework source's private hook-rulings record: THE SCAN WALKS THE RANGE PER COMMIT, and the walk lives in the library since.
 
-# ===========================================================================
-# TWO CHECKS, TWO SCOPES, AND THEY ARE NOT THE SAME SCOPE (F2, verdict leg).
-#
-# This loop used to apply the trunk-name filter FIRST and then do both jobs
-# inside it, so the content scan inherited the audit's scope. The audit's scope
-# is right: it reads trunk history and only the trunk has that rule. The scan's
-# scope was wrong, and wrong in the direction that publishes: the ordinary push
-# of a spec branch, which is what every contributor does every day, skipped the
-# scan entirely and put cherry-picked, rebased and am-applied secrets on the
-# remote. The hook RAN, printed its audit, and scanned nothing.
-#
-# That also falsified what this release had already written down. Fix round 2's
-# Known-limitations bullet said a local history could carry an unscanned secret
-# and a pushed one could not. The assertion behind it was real and exercised the
-# trunk path, so the claim outran the mechanism by exactly one ref name.
-#
-# So the halves are separated rather than reordered, because "reorder these two
-# statements" is a patch and "these two checks answer different questions about
-# different sets of refs" is the shape. Each now states its own scope where it
-# runs, and neither can inherit the other's by being written underneath it.
-# ===========================================================================
+# HISTORY: ruling PP-07 (undated), in the framework source's private hook-rulings record: TWO CHECKS, TWO SCOPES, AND THEY ARE NOT THE SAME SCOPE (F2, verdict leg).
 while read -r _lref _loid rref _roid; do
   [[ -n "${rref:-}" ]] || continue
 
@@ -295,15 +157,7 @@ while read -r _lref _loid rref _roid; do
   # history is arriving, so there is nothing to scan and nothing to audit.
   case "$_loid" in *[!0]*) ;; *) continue ;; esac
 
-  # A TAG PUSH CARRIES HISTORY AND WAS NOT SCANNED AT ALL (SC sub-hole 5).
-  #
-  # This loop skipped every ref that was not refs/heads/*, so `git push origin
-  # v1.0.0` published whatever that tag reaches with no scan. A tag can name a
-  # commit no branch reaches, which makes it the one push shape where the
-  # content is genuinely reachable ONLY through the ref being pushed. The range
-  # it introduces is what it carries that the trunk does not; where that cannot
-  # be derived, the push is REFUSED with a named code rather than skipped, for
-  # the same reason an unfindable trunk-audit.sh refuses.
+  # HISTORY: ruling PP-08 (plugin v1.0.0), in the framework source's private hook-rulings record: A TAG PUSH CARRIES HISTORY AND WAS NOT SCANNED AT ALL (SC sub-hole 5).
   case "$rref" in
     refs/tags/*)
       tname="${rref#refs/tags/}"
@@ -328,39 +182,7 @@ while read -r _lref _loid rref _roid; do
   esac
   rname="${rref#refs/heads/}"
 
-  # --- half one: THE CONTENT SCAN, over EVERY pushed ref -------------------
-  #
-  # Scope: every branch this push would create or advance on the remote. Git
-  # fires no hook for cherry-pick, for rebase's intermediate commits, or for the
-  # apply step of `git am`, so those commits reach a remote unscanned unless
-  # they are read here. Nothing about that reasoning is specific to the trunk:
-  # a secret published on a spec branch is published.
-  #
-  # The range is what this push ADDS. An existing remote branch gives its own
-  # oid; a new branch pushes the all-zero remote oid and has no range, so the
-  # merge-base with the local trunk is used, which is the set of commits the
-  # branch carries that the trunk does not.
-  #
-  # A RANGE THAT CANNOT BE EMPTY ON A FIRST PUSH (SC sub-hole 4). The old
-  # merge-base arm left SCAN_RANGE empty and SKIPPED the scan in silence, and the
-  # case that reaches it is not exotic: the FIRST push of a trunk to a new remote
-  # has no remote oid, and merge-base(trunk, tip) for the trunk itself IS the
-  # tip, so the push that ESTABLISHES a repository was the one push nothing
-  # scanned.
-  #
-  # The derivation is now "what this ref publishes that the REMOTE does not
-  # already have", which is the question the scan was always trying to ask:
-  #   - an existing remote branch names its own oid, so the range is exact;
-  #   - a NEW remote ref is read against every ref already known for this remote,
-  #     and where no such refs exist (an empty remote, or a push by URL) that
-  #     reduces to the ref's WHOLE history. That is the root-commit fallback, and
-  #     it reads more than a range rather than less.
-  # An empty result then genuinely means the remote already has these objects,
-  # which is the ordinary re-push and correctly scans nothing.
-  #
-  # An ARRAY rather than `set --`: the positional parameters hold the remote name
-  # git passed this hook, which the block above and the refusal below both read,
-  # and rebuilding them here would silently retarget both.
+  # HISTORY: ruling PP-09 (undated), in the framework source's private hook-rulings record: --- half one: THE CONTENT SCAN, over EVERY pushed ref -------------------.
   case "$_roid" in
     *[!0]*) SCAN_ARGV=("$_roid..$_loid") ;;
     *)      if [[ -n "$REMOTE_ARG" && -n "$(git -C "$REPO" for-each-ref --count=1 "refs/remotes/$REMOTE_ARG" 2>/dev/null)" ]]; then
@@ -371,49 +193,19 @@ while read -r _lref _loid rref _roid; do
   esac
   if git -C "$REPO" rev-parse --quiet --verify "${_loid}^{commit}" >/dev/null 2>&1; then
     slh_scan_walk "$REPO" "the history this push adds to $rname" "${SCAN_ARGV[@]}" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below, so a non-zero return must not abort before every ref is read
-    # --- half one-b: THE APPROVAL CHECK, over the same refs and the same range.
-    #
-    # It sits BESIDE the content scan and not inside it, because the two answer
-    # different questions about the same bytes: the scan asks whether the
-    # content is publishable, this asks whether the work was approved. Sharing
-    # a scope is a fact about these two, not a rule, and writing one underneath
-    # the other is how the scan inherited the audit's trunk-only scope and went
-    # blind on every spec-branch push (F2).
-    #
-    # WHY IT IS HERE AT ALL, given pre-commit already refuses: this is the layer
-    # that catches a commit which never met pre-commit. --no-verify, an unset
-    # core.hooksPath and the per-clone gap are all documented holes at commit
-    # time, and the enforcement boundary puts the guarantee in the push-time
-    # audit precisely because of them. An unapproved build stopped here has not
-    # been shared, which is the whole of what this mechanism claims.
+    # HISTORY: ruling PP-10 (undated), in the framework source's private hook-rulings record: --- half one-b: THE APPROVAL CHECK, over the same refs and the same range.
     slh_attest_walk "$REPO" "the history this push adds to $rname" "$_loid" "${SCAN_ARGV[@]}" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below, so a non-zero return must not abort before every ref is read
   else
     slh_refuse "SLH-SCAN-UNRESOLVED-TIP" "the tip this push would put on $rname ($_loid) does not resolve to a commit here, so what it publishes cannot be read. Refusing rather than reporting a scan that did not run."
   fi
 
-  # --- half two: THE TRUNK AUDIT, over trunk refs only ---------------------
-  #
-  # Scope: refs that ARE the trunk, locally named or the remote's default. The
-  # audit reads whether work reached the trunk through a closed spec, which is a
-  # question only the trunk has. Widening it to every pushed ref would refuse
-  # the ordinary push of a spec branch, which is the false-denial direction this
-  # repository treats as the more dangerous one -- EXCEPT on an empty remote,
-  # where there is no established default yet and every pushed ref is a
-  # candidate to become it (F1). There the wider scope is correct: a feature
-  # branch pushed first to an empty remote would otherwise become its unaudited
-  # default. The cost is that a spec branch pushed ALONGSIDE the trunk to a
-  # brand-new remote is also audited and refused; that is fail-closed, rare, and
-  # escapable with SETLIST_SKIP_TRUNK_AUDIT=1, and the common bootstrap (push the
-  # clean trunk, which audits clean) is unaffected.
+  # HISTORY: ruling PP-11 (undated), in the framework source's private hook-rulings record: --- half two: THE TRUNK AUDIT, over trunk refs only ---------------------.
   if [[ "$rname" == "$TRUNK_NAME" || ( -n "$REMOTE_TRUNK" && "$rname" == "$REMOTE_TRUNK" ) || "$REMOTE_EMPTY" -eq 1 ]]; then
     PUSH_REFS="$PUSH_REFS $_loid"
   fi
 done
 
-# slh_refuse RECORDS a refusal, it does not exit, so the scan above is only a
-# guarantee if this reads it. Checked here rather than inside the loop so every
-# pushed ref is scanned and the operator sees all the reasons at once instead of
-# fixing them one push at a time.
+# HISTORY: ruling PP-12 (undated), in the framework source's private hook-rulings record: slh_refuse RECORDS a refusal, it does not exit, so the scan above is only a.
 if [[ "${SLH_REFUSED:-0}" -ne 0 ]]; then
   printf '\nsetlist pre-push: the history being pushed carries content the commit-time\n' >&2
   printf 'scans never saw (cherry-pick, rebase and am create commits without firing\n' >&2
@@ -437,33 +229,13 @@ if [[ -n "$PUSH_REFS" ]]; then
     [[ "$RC" -eq 0 ]] || break
   done
 elif [[ "$REMOTE_UNREACHABLE" -eq 1 ]]; then
-  # The remote could not be reached, so which of its refs is the trunk is
-  # unknown, and auditing the local trunk instead would report on a ref this
-  # push may not touch.
-  #
-  # The first draft of this comment said refusing costs nothing because the push
-  # would fail anyway. MEASURED, and that is wrong: git rejects a plainly
-  # unreachable remote before this hook ever runs, and the cached remote HEAD is
-  # consulted first, so the case that actually arrives here is narrow: no cached
-  # refs/remotes/<name>/HEAD, AND a fetch url that cannot be reached, AND a push
-  # url that can (`git remote set-url --push`). There the push would have
-  # succeeded, so
-  # this refusal is a real cost, taken deliberately because the alternative is
-  # the fail-open F7 measured: unclosed code on the remote trunk under a printed
-  # "0 violations". An ordinary split fetch/push setup with both urls working
-  # resolves fine and never reaches here. The escape is documented in this
-  # file's header and nowhere in the message (ER1, 2.6.0: refusal text that
-  # coaches the bypass lowers its cost for the reader, who in a session is
-  # the model).
+  # HISTORY: ruling PP-13 (plugin 2.6.0), in the framework source's private hook-rulings record: The remote could not be reached, so which of its refs is the trunk is.
   printf 'setlist pre-push [SLH-REMOTE-UNRESOLVED]: cannot reach %s to ask which branch\n' "${1:-the remote}" >&2
   printf 'is its trunk, so this push cannot be audited. A check that cannot run has not\n' >&2
   printf 'passed. Fix connectivity.\n' >&2
   RC=1
 else
-  # No line named the trunk, or stdin was empty because a caller invoked this
-  # hook by hand. Auditing the local trunk is the conservative reading: it is
-  # what this hook has always done, and skipping the check because a refspec
-  # named something else would be the fail-open this change exists to remove.
+  # HISTORY: ruling PP-14 (undated), in the framework source's private hook-rulings record: No line named the trunk, or stdin was empty because a caller invoked this.
   bash "$AUDIT" "$REPO" || RC=$?
 fi
 if [[ "$RC" -eq 0 ]]; then
