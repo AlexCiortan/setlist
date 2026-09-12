@@ -554,6 +554,8 @@ build_brokenjq_bin
 # holes twice while an unassertable one went unrecorded.
 #
 # LEDGER-BEGIN
+# hole: The session layer's one hard deny is defeated by ordinary variable expansion, so read it as a nudge and never as a boundary. | asserted
+# hole: The push-time hooks read only the branch and tag namespaces, so a push to a review-ref namespace is ungoverned by them. | asserted
 # hole: The Bash escape hatch. | asserted
 # hole: The forge check governs the merge button only where the trunk requires it. | asserted
 # hole: The CODEOWNERS bridge reads a subset of the file's grammar, and a pattern is a claim about paths. | asserted
@@ -591,6 +593,10 @@ build_brokenjq_bin
 # hole: The `SETLIST_SKIP_HOOKS=1` escape skips EVERY git hook, `pre-push`'s trunk audit and content scan included. | asserted
 # hole: Merges crafted to evade the trunk audit can succeed, and the list of known routes is maintained rather than complete. | asserted
 # hole: The trunk is recognised by the NAME recorded in `.claude/sdd.json`, so an instance that merges onto a differently-named branch is ungoverned. | asserted
+# hole: A diagram check compares a claim to a diff and a lockfile to a command's output; it does not judge whether a drawing is true of the code. | asserted
+# hole: A drawn name is verified only when it is path-shaped, and everything else is reported rather than checked. | asserted
+# hole: The render check runs where a renderer runs, and the stamped workflow fails its job rather than passing without one. | unassertable | the REFUSAL half is asserted (the forge check refuses a block that does not parse, under a stub parser on PATH); what is unassertable here is the WORKFLOW half, that the stamped renderer step fails its job rather than letting the check pass, because that is a property of a GitHub Actions step and not of these bytes. The stamped workflow's own step verifies its parser in both directions before the check runs, and the release's forge-check run is the evidence
+# hole: Mermaid's inline edge-text form can refuse a close for a path nobody drew. | asserted
 # LEDGER-END
 
 # --- the shards, in order; the program is their concatenation ---------------
@@ -610,6 +616,27 @@ source "$SUITE_DIR/13-push-scan-kl2-kl4.sh"
 source "$SUITE_DIR/14-status-record-rp1.sh"
 source "$SUITE_DIR/15-rc2-f10-jq-hardening.sh"
 source "$SUITE_DIR/16-team-edition-0132.sh"
+source "$SUITE_DIR/17-diagram-edition-0136.sh"
+
+# EVERY SHARD FILE ON DISK IS SOURCED ABOVE, asserted rather than remembered
+# (spec 0136, 2026-09-10, from the defect that produced it). SUITE_FILES globs
+# test/suite/*.sh so the shard MANIFEST sees every file, while the sourcing
+# above is a written list; a shard added to the directory and not to the list is
+# therefore counted in the manifest's denominator and never reached, and its
+# assertions are silently absent from a run that reports green. That is exactly
+# what happened to 17-diagram-edition-0136.sh on its first full run: 1366
+# assertions passed and not one of them was the new shard's. A suite that can
+# quietly not run a file is the failure this whole project keeps rediscovering,
+# so the two lists are compared here and disagreement is a FAILED assertion
+# rather than a comment asking the next person to remember.
+SUITE_ON_DISK="$(cd "$SUITE_DIR" && ls -1 ./*.sh 2>/dev/null | sed 's|^\./||' | sort)"
+SUITE_SOURCED="$(grep -oE '^source "\$SUITE_DIR/[^"]+"' "$ROOT/test/run-tests.sh" | sed 's|^source "\$SUITE_DIR/||; s|"$||' | sort)"
+if [[ "$SUITE_ON_DISK" == "$SUITE_SOURCED" ]]; then
+  ok "suite wiring: every shard file in test/suite/ is sourced by the driver ($(printf '%s\n' "$SUITE_ON_DISK" | grep -c .) files)"
+else
+  bad "suite wiring: every shard file in test/suite/ is sourced by the driver" \
+      "on disk but not sourced: [$(comm -23 <(printf '%s\n' "$SUITE_ON_DISK") <(printf '%s\n' "$SUITE_SOURCED") | tr '\n' ' ')]; sourced but not on disk: [$(comm -13 <(printf '%s\n' "$SUITE_ON_DISK") <(printf '%s\n' "$SUITE_SOURCED") | tr '\n' ' ')]"
+fi
 
 # --- summary -----------------------------------------------------------------
 

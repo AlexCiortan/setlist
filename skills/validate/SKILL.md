@@ -70,7 +70,12 @@ Checks:
    inventory, Open chores, Open questions for the Planner, Pointers) AND
    passes row discipline: inventory notes and chore archive lines are single
    lines, and no resolved item lingers under Open questions.
-6. steering/structure.md contains an architecture diagram (a mermaid block).
+6. The L2 container view exists as a Mermaid block in the document that holds it:
+   `steering/structure.md` for an ordinary application, or, where the instance
+   records that its L2 lives in its own README (the project draws itself for
+   readers who are not its maintainers), that file. Report the absence against
+   the home the instance actually uses; do not report `structure.md` missing a
+   diagram it was never meant to carry.
 7. .gitignore does not exclude `.claude/`.
 8. No [PHASE 2 SLOT: ...] markers remain anywhere in the instance (a leftover
    slot means tailored generation skipped a file).
@@ -207,6 +212,33 @@ Checks:
     from its command line), because then the required check named `setlist
     forge check` verifies nothing. Either file ABSENT is a finding recommending
     `/setlist:upgrade`, which delivers it. Replace neither yourself.
+
+21. **The diagram reports** (projects with `docs/diagrams/`). Where the
+    directory does not exist, report nothing: the project has not opted in, and
+    check 6 above is the whole diagram check for it. Where it does exist, these
+    are REPORTS and never findings that block anything, because each has an
+    honest answer that is "not yet" and the close is where refusal belongs:
+    - **Over twelve nodes.** Any diagram file whose Mermaid block draws more
+      than twelve primary nodes. Name the file and the count, and recommend the
+      split (`docs/diagrams/components/<parent>/<child>.md`). Twelve is a
+      drawing bound, never a refusal. For a diagram drawn INLINE in a document
+      that is not a diagram file there is no child to split into, so recommend
+      cutting a node instead of recommending a split that cannot be made.
+    - **Undiagrammed ownership.** Role paths appearing in closed specs' `Owns:`
+      lines that no L3 diagram names as a node. Name the paths; they are the
+      parts of the system no picture claims anything about.
+    - **Stale nodes from earlier specs.** Node names that are path-shaped and do
+      not resolve in the tree, whose `%% spec NNNN` is not the current work.
+      Name the node, the file, and the spec that introduced it, with the two
+      honest exits: redraw it in a close that names the file in the diagram
+      field, or retire it with a note. The close refuses only the CLOSING
+      spec's own stale nodes, so these are the ones that accumulate quietly.
+    - **Generated edges no hand diagram draws**, where `diagram_command` is
+      declared: edges present in `docs/diagrams/generated/` that appear in no
+      hand-drawn file. Each is either a real dependency nobody drew or a
+      generated artifact worth ignoring, and saying which is the reader's call.
+    Report each as a list with its subject, the measured evidence, and the
+    one-edit fix, which is the message shape the whole diagram half uses.
 
 ## Gotchas (field-observed)
 

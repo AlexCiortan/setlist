@@ -70,7 +70,21 @@
 # Regenerate with:
 #   git rev-list --all -- templates/git-hooks/ | while read c; do
 #     git ls-tree "$c" -- templates/git-hooks/ | awk '{print $3}'; done | sort -u
+#
+# AND UNION THE RESULT WITH WHAT IS ALREADY HERE; never replace it (2026-09-10,
+# spec 0136). The recipe reads THIS repository's reachable history, and three
+# entries in this list are no longer reachable objects here: git cat-file -t
+# says missing for each of them. Whatever pruned them from this clone did not
+# prune them from an operator's instance, which may still carry those exact
+# bytes in .githooks/. The suite requires this list to SUPERSET the history it
+# can see, so an extra entry costs nothing, while a dropped one refuses a hook
+# that really is ours, which is the failure the content-hash design exists to
+# avoid.
 KNOWN_SETLIST_HOOK_BLOBS="
+  b585923532edfffee7e7912863524d61e28d31a9
+  c6435acaf6f4fa7f8c40b1e6d7d6a61ea8e16cf5
+  626cef5fcb43d9206a7099749dfc2c9df1d71ca5
+  9d9a51aea2c29bb757959433316ac8deb909adcb
   00c7f4b6af14b5af6805292e212e52d2857e21f0
   0326524f01f9623f18697f70786caa7a1c6ef72a
   06fd04c5d37ad3090db54f0f70b42606eab403f6
@@ -156,6 +170,7 @@ KNOWN_SETLIST_HOOK_BLOBS="
   b9356dbdb37071944f58d32509e049cc840d2539
   bb2e630f7fe856259c4779f5149a16791a1ad4e9
   bd61d21baed1260515f98e3b00af4a2aa26fa107
+  bf0955f4140fd09d4bd0611e84fd1f18a225d6c5
   c2b8593fc2548511903ba64d6f8ce0ba79aaaf84
   c633f8baa92c3f7fc8fcc3cb6f566e35e7e78696
   c7093ce9e66780cb69f8c44ac229a92c7f4b7235
@@ -168,6 +183,7 @@ KNOWN_SETLIST_HOOK_BLOBS="
   d507ce481b3fca755da5358aa2e6f1c1287aa414
   d930c85033173606994956cf5781a622c6e59e0a
   de7d0187ab42e1ab8125b071557f777e62a37aeb
+  df0dc2c3aeb08fbd155992636f523a3b2af4b4ad
   e50312637551d5617c1371b56cb5888d2aefd31c
   e50e5f813157b6b00f62c9442ac8ce12249c0716
   e5869e22fcc64af7364ab2364956554578f010a1

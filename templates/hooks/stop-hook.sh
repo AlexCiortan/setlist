@@ -88,6 +88,10 @@ IFS= read -r -d '' INPUT || true
 # second block on the same grounds would loop until the harness's own cap.
 # Read by substring on the raw payload, so jq is not on this path.
 case "$INPUT" in
+  # fail-open-ok: the harness has already marked this turn a continuation of a
+  # stop this hook blocked, so blocking again is the loop rather than the gate.
+  # Annotated at F6 of the 2.7.0 leg, which found this file absent from the
+  # disposition audit entirely and these exits therefore never read.
   *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) exit 0 ;;
 esac
 
@@ -99,6 +103,10 @@ if [[ -z "$PROJ" ]]; then
   [[ -n "$PROJ" ]] || PROJ="$PWD"
 fi
 # Not an instance: nothing here is this hook's business.
+# fail-open-ok: no sdd.json on the checked-out branch means this is not a Setlist
+# instance, and a core.hooksPath set in one repository must not govern unrelated
+# work. The same guard every stamped hook opens with, and the boundary it draws is
+# its own documented limitation. Annotated at F6 of the 2.7.0 leg.
 [[ -f "$PROJ/.claude/sdd.json" ]] || exit 0
 
 JQ_NOTE=""

@@ -40,6 +40,60 @@ jobs:
           fetch-depth: 0
       - name: ensure jq
         run: command -v jq >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq jq)
+      # THE MERMAID PARSER, AT A PINNED VERSION, AS ITS OWN STEP (edition v1.15,
+      # D14a). It either succeeds or FAILS THE JOB: the check must never report a
+      # pass on a renderer it could not install, which is the whole reason the
+      # forge is where render validation lives. `set -e` plus the explicit
+      # verification below is what makes that true rather than intended.
+      #
+      # WHY PARSE AND NOT RENDER (D14b, measured 2026-09-10). The claim the check
+      # makes is "the block parses under the pinned Mermaid version", not "a PNG
+      # was produced". mermaid.parse() resolves a valid block and throws a real
+      # parse error on a broken one, headless, with a DOM shim and no browser; its
+      # verdict agreed with mermaid-cli plus puppeteer on every case of a
+      # twelve-case corpus, both directions. Measured cost of the two paths on the
+      # same host: parse-only 1.8s and 143MB, full render 30s and 484MB of
+      # packages plus a 493MB Chromium download. So the browser download goes and
+      # the public boundary bullet states the price this step actually pays.
+      - name: install the pinned Mermaid parser
+        run: |
+          set -euo pipefail
+          npm install --no-audit --no-fund --silent --prefix "$RUNNER_TEMP/mermaid" \
+            mermaid@11.14.0 jsdom@25.0.1
+          cat > "$RUNNER_TEMP/mermaid/parse.mjs" <<'PARSER'
+          import { JSDOM } from 'jsdom';
+          const dom = new JSDOM('<!doctype html><html><body></body></html>');
+          globalThis.window = dom.window;
+          globalThis.document = dom.window.document;
+          const mermaid = (await import('mermaid')).default;
+          const { readFileSync } = await import('node:fs');
+          try {
+            await mermaid.parse(readFileSync(process.argv[2], 'utf8'), { suppressErrors: false });
+            process.exit(0);
+          } catch (e) {
+            console.error(e && e.message ? e.message : String(e));
+            process.exit(1);
+          }
+          PARSER
+          mkdir -p "$RUNNER_TEMP/bin"
+          printf '#!/usr/bin/env bash\nexec env NODE_PATH="%s/mermaid/node_modules" node "%s/mermaid/parse.mjs" "$@"\n' \
+            "$RUNNER_TEMP" "$RUNNER_TEMP" > "$RUNNER_TEMP/bin/setlist-mermaid-parse"
+          chmod +x "$RUNNER_TEMP/bin/setlist-mermaid-parse"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          # THE STEP VERIFIES ITSELF, both directions, before the job is allowed to
+          # continue. A parser that accepts everything is worse than none: it turns
+          # every diagram into a claim nobody checked while reporting that it did.
+          printf 'graph TD\n  a["src/x"] --> b["src/y"]\n' > "$RUNNER_TEMP/ok.mmd"
+          printf 'graph TD\n  a[["broken --> \n' > "$RUNNER_TEMP/bad.mmd"
+          if ! "$RUNNER_TEMP/bin/setlist-mermaid-parse" "$RUNNER_TEMP/ok.mmd"; then
+            echo "::error::the pinned Mermaid parser rejected a VALID block, so it cannot be trusted to judge one."
+            exit 1
+          fi
+          if "$RUNNER_TEMP/bin/setlist-mermaid-parse" "$RUNNER_TEMP/bad.mmd" 2>/dev/null; then
+            echo "::error::the pinned Mermaid parser ACCEPTED a broken block, so it would pass every diagram without reading it."
+            exit 1
+          fi
+          echo "setlist forge check: mermaid 11.14.0 parser installed and verified in both directions"
       - name: setlist forge check
         env:
           GITHUB_TOKEN: ${{ github.token }}

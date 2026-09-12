@@ -178,7 +178,20 @@ while read -r _lref _loid rref _roid; do
       continue
       ;;
     refs/heads/*) ;;
-    *) continue ;;
+    *)
+      # F4 OF THE 2.7.0 LEG, fix round 1: a pushed ref in a namespace this hook
+      # does not recognise used to be skipped in SILENCE, so on a review-ref
+      # workflow (Gerrit's refs/for/<branch> is the common one) neither the
+      # content scan nor the trunk audit ran and the push left at exit 0 looking
+      # governed. It REPORTS now and still refuses nothing, which is the whole
+      # of the fix by ruling: teaching this hook another forge's ref grammar
+      # would be a spelling nobody here can exercise end to end, and an
+      # unexercised spelling is the class that has cost this project two
+      # reverts. The scope is documented in Known limitations with the two ways
+      # through, and native support waits on a field report.
+      slh_report "SLH-REF-NOT-AUDITED" "no trunk audit and no content scan ran for $rref, because this hook reads refs/heads/* and refs/tags/* only. On a review-ref workflow (for example Gerrit's refs/for/<branch>) the work reaching the remote by this ref is ungoverned by these hooks. The two ways through: push the trunk directly so the audit reads it, or require the stamped forge check on the trunk, which judges the merge a pull request would make."
+      continue
+      ;;
   esac
   rname="${rref#refs/heads/}"
 

@@ -1294,11 +1294,17 @@ fi
 # unchanged and is the point: every reader pipes through the live-text rule.
 DIAG_RAW="$(grep -rnE "Architecture diagram:'.*head -n1" "$HOOKS/close-gate.sh" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh" | grep -v 'SLH_LIVE_TEXT_AWK' || true)"
 DIAG_COUNT="$(grep -rcE "Architecture diagram:'.*head -n1" "$HOOKS/close-gate.sh" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh" | awk -F: '{s+=$2} END{print s+0}')"
-if [[ -z "$DIAG_RAW" && "$DIAG_COUNT" -eq 4 ]]; then
-  ok "live text h: every Architecture-diagram field reader (4, across the three lockstep files) routes through the live-text rule"
+# 4 to 6 at edition v1.15 (spec 0136, 2026-09-10): the diagram half added
+# slh_diagram_field_line, once in setlist-hook-lib.sh and once byte-identically
+# in trunk-audit.sh. The COUNT is what makes this pin more than a spell-check on
+# the readers that already exist: a new reader written in a shape this regex does
+# not match at all fails here rather than passing silently, which is the whole
+# reason it is not derived from the same grep it guards.
+if [[ -z "$DIAG_RAW" && "$DIAG_COUNT" -eq 6 ]]; then
+  ok "live text h: every Architecture-diagram field reader (6, across the three lockstep files) routes through the live-text rule"
 else
   bad "live text h: every Architecture-diagram field reader routes through the live-text rule" \
-      "found $DIAG_COUNT reader(s) (expect 4); raw (unrouted): ${DIAG_RAW:-none}"
+      "found $DIAG_COUNT reader(s) (expect 6); raw (unrouted): ${DIAG_RAW:-none}"
 fi
 
 # Pin: the live-text program uses NO {n,m} interval. The git hooks run under

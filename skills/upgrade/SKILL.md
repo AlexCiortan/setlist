@@ -238,6 +238,22 @@ When the instance predates this plugin, also:
   v1.14) means no key at all: the approval is the flip landing on the protected
   trunk through a required review, verified by the stamped forge check, which
   the team must REQUIRE on the trunk for it to be a boundary.
+- **Mention the diagram half, and migrate NOTHING** (BL-005's precedent applied
+  a fourth time). DETECT the old shape: a `steering/structure.md` carrying a
+  Mermaid section and no `docs/diagrams/` directory. REPORT it in one line:
+  this instance carries one diagram at one altitude; the diagram half's checks
+  are off until `docs/diagrams/` exists; opting in is a chore of its own. Then
+  stop. Do NOT create the directory, do not split the diagram across altitudes,
+  and do not redraw anything. An upgrade is a planning-and-documentation act,
+  and a redrawn architecture is neither: it is a scan of the code producing
+  claims nobody reviewed, landed on a docs-only chore branch where nobody would
+  look for them. Creating the directory is also not a neutral act, which is the
+  second reason: its presence ARMS the close's diagram checks, so an upgrade
+  that created it would turn on refusals for a project whose diagrams nobody has
+  read yet. Tell the human the half exists, that opting in is a chore with its
+  own branch and close where the old section is retired to
+  `docs/diagrams/retired/` and the altitudes are seeded under their review, and
+  that until then the instance loses nothing and behaves exactly as it did.
 - **Mention the status record, and migrate NOTHING** (RP1, edition v1.12;
   BL-005's precedent applied a third time). An upgrade NEVER creates
   `.claude/status.json`: stamp parity explicitly excludes it, because the only

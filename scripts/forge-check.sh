@@ -286,7 +286,7 @@ SLH_REFUSED=0
 # is cached for step 9's reports.
 FC_RULES_STATE=""     # "", ok, unreachable, forbidden, plan-limited, rate-limited, no-forge
 FC_RULES_DETAIL=""
-FC_PROTECTED=0; FC_REVIEWS=0; FC_CHECK_REQUIRED=0; FC_REBASE=""; FC_RULESET_REBASE=""
+FC_PROTECTED=0; FC_REVIEWS=0; FC_CHECK_REQUIRED=0; FC_REBASE=""; FC_RULESET_REBASE=""; FC_STRICT=0
 FC_HTTP=""; FC_BODY=""
 
 fc_forge_get() { # fc_forge_get <api-path> -> FC_HTTP and FC_BODY set; 1 when the forge did not answer at all
@@ -354,7 +354,7 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
   # classic endpoint ALWAYS; the trunk is protected when either carries a
   # rule, the review requirement is the higher of the two, the check is
   # required when either requires it, and neither present is UNPROTECTED.
-  local rules_n rs_prot=0 rs_reviews=0 rs_checks=0 cl_prot=0 cl_reviews=0 cl_checks=0 rs_enough=0
+  local rules_n rs_prot=0 rs_reviews=0 rs_checks=0 rs_strict=0 cl_prot=0 cl_reviews=0 cl_checks=0 cl_strict=0 rs_enough=0
   if ! fc_forge_get "repos/$FC_REPO/rules/branches/$TRUNK_NAME"; then FC_RULES_STATE="unreachable"; FC_RULES_DETAIL="no answer to the rules query"; return 0; fi
   case "$FC_HTTP" in
     200) ;;
@@ -368,6 +368,13 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
     # fail-open-ok: both extractions yield 0 when unreadable, and 0 is the REFUSING value for each (no review required, this check not required); an unreadable rule can only refuse here
     rs_reviews="$(printf '%s' "$FC_BODY" | jq -r '[.[] | select(.type == "pull_request") | (.parameters.required_approving_review_count // 0)] | max // 0' 2>/dev/null || printf 0)"
     rs_checks="$(printf '%s' "$FC_BODY" | jq -r '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]? | .context] | index("setlist forge check") | if . == null then "0" else "1" end' 2>/dev/null || printf 0)"
+    # THE STRICT SETTING (TE4, ruled D15 2026-09-10): "require branches to be up
+    # to date before merging". On a ruleset it is the required_status_checks
+    # rule's strict_required_status_checks_policy; on the classic endpoint it is
+    # required_status_checks.strict. Read from BOTH and taken as a union, exactly
+    # as protection is (amendment 4), and 0 is the refusing value here too, so an
+    # unreadable rule can only refuse.
+    rs_strict="$(printf '%s' "$FC_BODY" | jq -r '[.[] | select(.type == "required_status_checks") | .parameters.strict_required_status_checks_policy] | if length == 0 then "0" elif any(. == true) then "1" else "0" end' 2>/dev/null || printf 0)" # fail-open-ok: 0 is the REFUSING value (not strict), so an unreadable rule refuses under forge custody rather than passing
     rs_prot=1
     # THE RULESET'S OWN MERGE METHODS (ratification amendment 3, 2026-09-07).
     # A pull_request rule may carry allowed_merge_methods, which the forge
@@ -399,6 +406,7 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
         # fail-open-ok: as above, 0 is the refusing value for both facts
         cl_reviews="$(printf '%s' "$FC_BODY" | jq -r '.required_pull_request_reviews.required_approving_review_count // 0' 2>/dev/null || printf 0)"
         cl_checks="$(printf '%s' "$FC_BODY" | jq -r '((.required_status_checks.contexts // []) + [(.required_status_checks.checks // [])[] | .context]) | index("setlist forge check") | if . == null then "0" else "1" end' 2>/dev/null || printf 0)"
+        cl_strict="$(printf '%s' "$FC_BODY" | jq -r 'if .required_status_checks.strict == true then "1" else "0" end' 2>/dev/null || printf 0)" # fail-open-ok: as above, 0 is the refusing value
         cl_prot=1 ;;
       404)
         if ! printf '%s' "$FC_BODY" | jq -e '.message == "Branch not protected"' >/dev/null 2>&1; then
@@ -421,6 +429,7 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
     FC_PROTECTED=1
     FC_REVIEWS="${rs_reviews:-0}"; [[ "${cl_reviews:-0}" -gt "$FC_REVIEWS" ]] && FC_REVIEWS="$cl_reviews"
     FC_CHECK_REQUIRED=0; [[ "$rs_checks" == "1" || "$cl_checks" == "1" ]] && FC_CHECK_REQUIRED=1
+    FC_STRICT=0; [[ "$rs_strict" == "1" || "$cl_strict" == "1" ]] && FC_STRICT=1
   else
     FC_PROTECTED=0
   fi
@@ -477,6 +486,23 @@ fc_verify_custody_forge() { # fc_verify_custody_forge <proj> <spec-path> <num> <
     fc_set_token CHECK-NOT-REQUIRED
     printf 'CHECK-NOT-REQUIRED'; return 0
   fi
+  # TE4, ruled D15 (2026-09-10): THE TRUNK MUST REQUIRE BRANCHES TO BE UP TO DATE.
+  #
+  # ONE REFUSAL PER ROOT CAUSE (the owner's ruling S3): this arm sits BELOW the
+  # check-required refusal deliberately and is unreachable while that one fires,
+  # because a trunk that does not require this check has nothing to be strict
+  # ABOUT, and two codes for one cause is two things for an operator to fix when
+  # there is one.
+  #
+  # Why it refuses rather than reports under custody C: this check is the notary,
+  # and without the strict setting two pull requests can each be green against a
+  # base neither of them merged into. The second one lands on a trunk its check
+  # never read. That is precisely the guarantee "forge" custody claims.
+  if [[ "$FC_STRICT" != "1" ]]; then
+    fc_say "[FC-STRICT-NOT-REQUIRED]" "$TRUNK_NAME requires this check but does not require branches to be up to date before merging (the setting is \"Require branches to be up to date before merging\", beside the required status checks; on a ruleset it is the required_status_checks rule's strict policy). Without it two pull requests can both be green against a stale base and the second lands on a trunk this check never read, so under forge custody the notary is not one. Turn the setting on."
+    fc_set_token STRICT-NOT-REQUIRED
+    printf 'STRICT-NOT-REQUIRED'; return 0
+  fi
   # THE SENTENCE, VERBATIM FROM THE RATIFIED DESIGN (section 5, decision 4).
   printf 'setlist forge check [FC-CUSTODY-VERIFIED] spec %s is covered by an approval under "forge" custody: the trunk %s is protected on this forge (a pull request with at least one approving review and the required check "setlist forge check" are required to land on it), the ACTIVE flip that wrote specs/attest/%s.json is an ancestor of that trunk, and the attestation'"'"'s hash covers the spec'"'"'s bytes in this merge. This establishes that the approval reached the trunk through the forge'"'"'s review, not that any particular person decided; the forge'"'"'s account security is the custody.\n' "$num" "$TRUNK_NAME" "$num" >&2
   printf 'VERIFIED'
@@ -526,6 +552,68 @@ if [[ "$MERGE_SHA" != "$BASE_SHA" ]]; then
   bash "$AUDIT" "$FC_CLONE" --since "$BASE_SHA" --until "$MERGE_SHA" >&2 || AUDIT_RC=$?
   if [[ "$AUDIT_RC" -eq 2 ]]; then could_not_run "the trunk audit could not run (see above); exit 2 is never clean"; fi
   [[ "$AUDIT_RC" -eq 0 ]] || refuse AUDIT-VIOLATION
+fi
+
+# --- 8b. RENDER VALIDATION (edition v1.15, contract item 4, D14) --------------
+#
+# The claim this step makes is "every diagram block PARSES under the pinned
+# Mermaid version", not "a PNG was produced". D14b required that distinction to
+# be MEASURED rather than assumed, and it was, on 2026-09-10 against
+# mermaid 11.14.0: mermaid.parse() resolves a valid block and throws a real
+# parse error on a broken one, headless, with a DOM shim and NO browser. Its
+# verdict agreed with the full renderer (mermaid-cli 11.17.0 + puppeteer) on
+# every case of a twelve-case corpus covering flowchart, sequence, state, class,
+# er and C4, both directions. So the step parses, the browser download goes, and
+# the boundary bullet states the price this step actually pays.
+#
+# THE RENDERER IS AN EXTERNAL COMMAND ON PATH, and there are exactly two shapes
+# this step knows how to call. `setlist-mermaid-parse <file>` is what the stamped
+# workflow installs; `mmdc -i <file> -o <out>` is mermaid-cli, accepted so a
+# forge that already has it needs nothing new. Anything else is "no renderer".
+#
+# ABSENCE IS A REPORT HERE AND A FAILED JOB IN THE WORKFLOW (condition (a)).
+# Inside .github/workflows/setlist-forge-check.yml the install step succeeds or
+# fails the job, so this report is reachable only when the stamped script runs
+# somewhere else, which is a forge without node rather than a forge that skipped
+# the check. "Never a pass on absence" stays true exactly where the check is
+# required, and the public bullet says so in those words.
+FC_RENDERER=""
+if command -v setlist-mermaid-parse >/dev/null 2>&1; then FC_RENDERER="parse"
+elif command -v mmdc >/dev/null 2>&1; then FC_RENDERER="mmdc"; fi
+
+if [[ -z "$FC_RENDERER" ]]; then
+  fc_report "[FC-DIAGRAM-NO-RENDERER]" "no Mermaid renderer is on PATH (neither setlist-mermaid-parse nor mmdc), so no diagram block was parsed. Inside the stamped workflow the renderer step fails the job rather than reaching this line, so this report means the check is running somewhere that has no node. Put a renderer on the runner's PATH to turn the diagram blocks into a checked claim."
+else
+  FC_DIAG_FILES="$(git -C "$FC_CLONE" ls-files --cached -- 'docs/diagrams/*.md' 'steering/structure.md' 2>/dev/null || true)" # fail-open-ok: no listed files means no blocks to parse, and the field and node checks in step 4 already ran over the same merge; this step adds a claim, it is not the only reader
+  FC_DIAG_BAD=0
+  while IFS= read -r fcd; do
+    [[ -n "$fcd" ]] || continue
+    fcblob="$(git -C "$FC_CLONE" show ":$fcd" 2>/dev/null || true)" # fail-open-ok: an unreadable file yields no blocks; the close verification already refused an unreadable spec surface
+    [[ -n "$fcblob" ]] || continue
+    # One block at a time, because the refusal has to NAME the block that failed
+    # and a whole-file parse can only say the file is bad.
+    fccount="$(printf '%s\n' "$fcblob" | awk -v want=0 "$SLH_DIAGRAM_MERMAID_BLOCK_AWK")" # fail-open-ok: an unreadable count yields empty, the loop below runs zero times, and this step adds a claim rather than being the only reader of this merge
+    fcn=1
+    while [[ "$fcn" -le "${fccount:-0}" ]]; do
+      fctmp="$FC_TMP/diagram-$fcn.mmd"
+      printf '%s\n' "$fcblob" | awk -v want="$fcn" "$SLH_DIAGRAM_MERMAID_BLOCK_AWK" > "$fctmp"
+      if [[ ! -s "$fctmp" ]]; then fcn=$((fcn + 1)); continue; fi
+      fcok=0
+      if [[ "$FC_RENDERER" == "parse" ]]; then
+        fcout="$(setlist-mermaid-parse "$fctmp" 2>&1)" && fcok=1
+      else
+        fcout="$(mmdc -i "$fctmp" -o "$fctmp.svg" 2>&1)" && fcok=1
+      fi
+      if [[ "$fcok" -ne 1 ]]; then
+        fc_say "[FC-DIAGRAM-RENDER]" "$fcd: Mermaid block $fcn does not parse under the pinned version, so the diagram this repository claims to draw cannot be drawn. The renderer said: $(printf '%s' "$fcout" | tr '\n' ' ' | head -c 300)"
+        FC_DIAG_BAD=1
+      fi
+      fcn=$((fcn + 1))
+    done
+  done <<EOF
+$FC_DIAG_FILES
+EOF
+  [[ "$FC_DIAG_BAD" -eq 0 ]] || refuse DIAGRAM-RENDER
 fi
 
 # --- 9a. the CODEOWNERS bridge (T1) with the forge's identity ------------------
@@ -605,6 +693,9 @@ if [[ "$FC_FORGE" == "github" ]]; then
       else
         [[ "${FC_REVIEWS:-0}" -ge 1 ]] || fc_report "[FC-NO-REVIEW-REQUIRED]" "$TRUNK_NAME requires no approving review. Under custody \"$FC_CUSTODY\" the verdict above stands."
         [[ "$FC_CHECK_REQUIRED" == "1" ]] || fc_report "[FC-CHECK-NOT-REQUIRED]" "$TRUNK_NAME is protected but does not require the check named \"setlist forge check\", so the merge button does not enforce what this check verifies. Add it to the required status checks; a required check that is not required is a report."
+        # TE4's report half (D15), beside the review count. Same root-cause rule as
+        # the refusing arm (S3): silent while the check is not required at all.
+        [[ "$FC_CHECK_REQUIRED" != "1" || "$FC_STRICT" == "1" ]] || fc_report "[FC-STRICT-NOT-REQUIRED]" "$TRUNK_NAME requires this check but does not require branches to be up to date before merging, so two pull requests can both be green against a stale base. Under custody \"$FC_CUSTODY\" the verdict above stands; turn the setting on where this check is the notary."
       fi
     fi
     # Amendment 3: the report fires only where a rebase merge is POSSIBLE on

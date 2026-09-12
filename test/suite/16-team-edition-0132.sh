@@ -99,7 +99,12 @@ fc_forge_fixture() {
 FC_STUB="$WORK/fc-forge-stub.sh"
 cat > "$FC_STUB" <<'STUB'
 #!/usr/bin/env bash
-rules_ok='[{"type":"pull_request","parameters":{"required_approving_review_count":1}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"setlist forge check"}]}}]'
+# TE4 (edition v1.15, spec 0136): a FULLY protected trunk now also requires
+# branches to be up to date before merging, so every stub mode below that stands
+# for "properly protected" carries strict_required_status_checks_policy. Without
+# it these fixtures would stop meaning what their assertions say they mean: the
+# PASS rows would be asserting that a trunk missing a requirement passes.
+rules_ok='[{"type":"pull_request","parameters":{"required_approving_review_count":1}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"setlist forge check"}]}}]'
 case "$FC_STUB_MODE" in
   down) exit 1 ;;
   forbidden) printf '403\n{"message":"Resource not accessible by integration"}\n' ;;
@@ -113,14 +118,14 @@ case "$FC_STUB_MODE" in
   # AMENDMENTS 3 AND 4 (the owner's rulings of 2026-09-07, session 3): the
   # ruleset's allowed_merge_methods beside the repository's allow_rebase_merge,
   # and the two protection mechanisms composing as the forge composes them.
-  rulesetnorebase) case "$1" in repos/*/rules/*) printf '200\n[{"type":"pull_request","parameters":{"required_approving_review_count":1,"allowed_merge_methods":["merge","squash"]}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"setlist forge check"}]}}]\n' ;; repos/*/protection) printf '404\n{"message":"Branch not protected"}\n' ;; *) printf '200\n{"allow_rebase_merge":true}\n' ;; esac ;;
-  rulesetrebase) case "$1" in repos/*/rules/*) printf '200\n[{"type":"pull_request","parameters":{"required_approving_review_count":1,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"setlist forge check"}]}}]\n' ;; repos/*/protection) printf '404\n{"message":"Branch not protected"}\n' ;; *) printf '200\n{"allow_rebase_merge":true}\n' ;; esac ;;
-  reporebaseoff) case "$1" in repos/*/rules/*) printf '200\n[{"type":"pull_request","parameters":{"required_approving_review_count":1,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"setlist forge check"}]}}]\n' ;; repos/*/protection) printf '404\n{"message":"Branch not protected"}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
-  split) case "$1" in repos/*/rules/*) printf '200\n[{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"setlist forge check"}]}}]\n' ;; repos/*/protection) printf '200\n{"required_pull_request_reviews":{"required_approving_review_count":1}}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
-  splitrev) case "$1" in repos/*/rules/*) printf '200\n[{"type":"pull_request","parameters":{"required_approving_review_count":1}}]\n' ;; repos/*/protection) printf '200\n{"required_status_checks":{"contexts":["setlist forge check"]}}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
+  rulesetnorebase) case "$1" in repos/*/rules/*) printf '200\n[{"type":"pull_request","parameters":{"required_approving_review_count":1,"allowed_merge_methods":["merge","squash"]}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"setlist forge check"}]}}]\n' ;; repos/*/protection) printf '404\n{"message":"Branch not protected"}\n' ;; *) printf '200\n{"allow_rebase_merge":true}\n' ;; esac ;;
+  rulesetrebase) case "$1" in repos/*/rules/*) printf '200\n[{"type":"pull_request","parameters":{"required_approving_review_count":1,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"setlist forge check"}]}}]\n' ;; repos/*/protection) printf '404\n{"message":"Branch not protected"}\n' ;; *) printf '200\n{"allow_rebase_merge":true}\n' ;; esac ;;
+  reporebaseoff) case "$1" in repos/*/rules/*) printf '200\n[{"type":"pull_request","parameters":{"required_approving_review_count":1,"allowed_merge_methods":["merge","squash","rebase"]}},{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"setlist forge check"}]}}]\n' ;; repos/*/protection) printf '404\n{"message":"Branch not protected"}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
+  split) case "$1" in repos/*/rules/*) printf '200\n[{"type":"required_status_checks","parameters":{"strict_required_status_checks_policy":true,"required_status_checks":[{"context":"setlist forge check"}]}}]\n' ;; repos/*/protection) printf '200\n{"required_pull_request_reviews":{"required_approving_review_count":1}}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
+  splitrev) case "$1" in repos/*/rules/*) printf '200\n[{"type":"pull_request","parameters":{"required_approving_review_count":1}}]\n' ;; repos/*/protection) printf '200\n{"required_status_checks":{"strict":true,"contexts":["setlist forge check"]}}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
   okclassic403) case "$1" in repos/*/rules/*) printf '200\n%s\n' "$rules_ok" ;; repos/*/protection) printf '403\n{"message":"Resource not accessible by integration"}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
   nocheckclassic403) case "$1" in repos/*/rules/*) printf '200\n[{"type":"pull_request","parameters":{"required_approving_review_count":1}}]\n' ;; repos/*/protection) printf '403\n{"message":"Resource not accessible by integration"}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
-  classic) case "$1" in repos/*/rules/*) printf '200\n[]\n' ;; repos/*/protection) printf '200\n{"required_pull_request_reviews":{"required_approving_review_count":2},"required_status_checks":{"contexts":["setlist forge check"]}}\n' ;; *) printf '200\n{"allow_rebase_merge":true}\n' ;; esac ;;
+  classic) case "$1" in repos/*/rules/*) printf '200\n[]\n' ;; repos/*/protection) printf '200\n{"required_pull_request_reviews":{"required_approving_review_count":2},"required_status_checks":{"strict":true,"contexts":["setlist forge check"]}}\n' ;; *) printf '200\n{"allow_rebase_merge":true}\n' ;; esac ;;
   *) exit 1 ;;
 esac
 STUB
@@ -643,7 +648,7 @@ fi; shard_region_end
 # and no frozen parser byte moves (PD1). Watched red on e3626ef first: every
 # spelling below was allowed with no code.
 # =============================================================================
-# >>> SHARD-BEGIN bypass-deny-0132 cost=3
+# >>> SHARD-BEGIN bypass-deny-0132 cost=14
 if shard_region bypass-deny-0132; then
 
 # --- the stderr half: only the four announcements name a spelling ------------
@@ -701,6 +706,37 @@ bd_deny e 'git push --no-verify origin main' CM-BYPASS-SPELLED
 bd_deny f 'git -c core.hooksPath=/dev/null commit -m x' CM-HOOKSPATH-MOVED
 bd_deny g 'git  -c   core.hooksPath=.nothing merge --no-ff spec/0001-thing' CM-HOOKSPATH-MOVED
 bd_deny h 'cd repo && git commit -m "x" --no-verify' CM-BYPASS-SPELLED
+
+# THE FOUR SPELLINGS THAT DEFEAT THE ONE HARD DENY (DE13, measured by the 2.7.0
+# adversarial review, each with a replay). Pinned as ALLOWED on purpose, the way
+# the pathspec hole is: this is a documented boundary, so the day one of them
+# starts denying, the suite says so instead of the docs quietly going stale.
+#
+# The first is the one that matters and the reason the public bullet does not say
+# "crafted spellings": `-m ${MSG}` is how a shell script writes a message, so a
+# cooperating developer meets it while doing nothing unusual. The parser freeze of
+# 2026-08-04 is why none of the four is repaired; the git hooks are unaffected by
+# all of them, which is where the guarantee lives.
+bd_allow de13a 'git commit -m ${MSG} --no-verify'
+bd_allow de13b "git commit \$'--no-verify' -m x"
+bd_allow de13c 'git --attr-source HEAD commit -n -m x'
+bd_allow de13d 'EV=/tmp/nohooks git --config-env=core.hooksPath=EV commit -m x'
+
+# F2 OF THE SECOND 2.7.0 LEG, fix round 2: the one hard veto stopped firing on
+# data. All four of these were DENIED on the shipped 2.7.0 candidate, and two of
+# them are read-only commands: the veto read every word of the segment for the
+# assignment spelling, and read the operand of a value-taking option as a flag.
+# Pinned in the ALLOWING direction, because a veto that fires on a grep is a false
+# denial at the only place in the session layer that can actually stop you.
+bd_allow f2a 'git commit -m "SETLIST_SKIP_HOOKS=1"'
+bd_allow f2b 'grep -rn SETLIST_SKIP_HOOKS=1 .'
+bd_allow f2c 'echo "SETLIST_SKIP_HOOKS=1"'
+bd_allow f2d 'git log --grep "--no-verify"'
+# And the escapes they are NOT allowed to have freed: assignment position, in all
+# three spellings the shell gives it, plus the flag forms on both sides of -m.
+bd_deny f2e 'SETLIST_SKIP_HOOKS=1 git commit -m x' CM-BYPASS-SPELLED
+bd_deny f2f 'env SETLIST_SKIP_TRUNK_AUDIT=1 git push origin main' CM-BYPASS-SPELLED
+bd_deny f2g 'git commit -m x --no-verify' CM-BYPASS-SPELLED
 # The 2.6.0 leg's F2, F3, F10, F11 (fix round 1, 2026-09-08), watched RED on the
 # candidate 2217acea: the span-deleting un-quoter missed every spelling git honours
 # that a quote touched, and sed paired quotes ACROSS segments. The deny is a word

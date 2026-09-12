@@ -40,6 +40,16 @@ specs/TEMPLATE.md, which is the same text, stamped at bootstrap.
   template on purpose). Do not add, edit or imitate either while authoring:
   the audit reads their exact grammar, and a hand-written declaration is a
   claim checkpoint never made.
+- A spec MAY carry an optional `## Design sketch` section, above Scope, holding
+  the intended change as a picture in the type the `diagrams` skill's routing
+  test picks. Delete it if a sentence says it faster. It is a decision surface,
+  not paperwork: it is what the owner approves and what the Builder builds to,
+  so a build that departs from it is a scope deviation on the existing rule. It
+  stays in the closed spec as the record of what was INTENDED, which is what a
+  reader compares the living diagram against later; checkpoint absorbs it into
+  the living diagrams at the close rather than moving it. Draw the mechanism,
+  not its name; label every arrow with what it carries; invent no box and no
+  arrow; one main path and at most twelve nodes.
 - Acceptance criteria are dual-purpose: a human checklist AND the verbatim
   prompt that drives automated QA Pass 1. Write each as a concrete, checkable
   statement naming observable behavior, never implementation; if two readers
@@ -67,8 +77,18 @@ verifies it mechanically:
   not in the repo did not happen. Honest PARTIALs, never claimed PASSes.
 - QA Pass 2: confirmed by the developer, with the spot-checked criterion named.
 - Design QA: punch list state, or "n/a (functional)".
-- The mandatory diagram field, exactly: `Architecture diagram: updated in this
-  commit` or `no impact`. Any diagram edit rides the closing commit.
+- The mandatory diagram field, answered `updated` or `no impact`, with any
+  diagram edit riding the closing commit. **On a project that has opted in to
+  the diagram half (one where `docs/diagrams/` exists) the `updated` answer
+  NAMES ITS FILES**, as
+  `Architecture diagram: updated (docs/diagrams/components/auth.md, steering/structure.md)`,
+  and the hooks compare that list to the closing commit's own diff: a named file
+  the commit does not touch is refused, and so is `updated` naming nothing,
+  because a claim that names nothing cannot be checked. `no impact` while the
+  commit touched a diagram is refused the other way. Where `docs/diagrams/` does
+  not exist none of that runs, and `updated in this commit` remains the whole
+  answer. Write one `Architecture diagram:` line and put it in the Closing
+  report: the readers take the FIRST one.
 - Follow-ups filed as chores or parking-lot rows.
 - The spec's one-line inventory row in specs/STATUS.md flips to CLOSED in the
   same commit.

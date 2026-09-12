@@ -80,7 +80,18 @@ command -v jq >/dev/null 2>&1 \
 jq -e . "$SDD" >/dev/null 2>&1 \
   || die "refusing to refresh: $SDD does not parse as JSON, so the recorded plugin version cannot be read. Fix the file, then retry."
 
-RECORDED="$(jq -r '.plugin.version // empty' "$SDD")"
+# ABSENT AND UNREADABLE ARE DIFFERENT ANSWERS (F4 of the second 2.7.0 leg, fix
+# round 2). This read .plugin.version directly, and when .plugin was present but
+# not an object jq exited nonzero with "Cannot index string with string"; the
+# error went to stderr, the substitution captured an empty stdout, and the empty
+# value was then read as "stamped before the plugin version was recorded". So an
+# instance recording a NEWER plugin in a malformed field was refreshed FORWARD,
+# the older enforcement files were written over the newer ones, and report mode
+# printed "forward" to the one person who could have caught it. The downgrade
+# guard exists to make exactly that impossible, and it failed open.
+if ! RECORDED="$(jq -r 'if has("plugin") and ((.plugin | type) != "object") then error("plugin-not-object") else (.plugin.version // empty) end' "$SDD" 2>/dev/null)"; then
+  die "refusing to refresh: .claude/sdd.json has a .plugin field that is not an object, so the version this instance records cannot be read and a downgrade would be indistinguishable from an upgrade. A check that could not run has not passed. Make .plugin an object, for example {\"version\": \"2.6.1\"}, then retry. Nothing was written."
+fi
 
 # --- direction ----------------------------------------------------------------
 
@@ -530,8 +541,8 @@ OURS_TEST='
   A hook the harness cancels is a gate that did not run, verified live on
   Claude Code 2.1.x: a hook exceeding its timeout is dropped and the tool call
   PROCEEDS. The value is in SECONDS. The template ships 120 for the scope
-  hook, 300 for the commit gate, 1800 for the close gate (it re-runs your full
-  suite), and 60 for the re-grounding hook."
+  hook, 300 for the commit gate, 300 for the close gate, 60 for the
+  re-grounding hook and 60 for the Stop hook."
   fi
 fi
 

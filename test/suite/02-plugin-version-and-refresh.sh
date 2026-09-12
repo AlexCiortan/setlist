@@ -223,6 +223,27 @@ assert_true "refresh down2: the refused refresh copied nothing" \
   "the instance's close-gate.sh lost its marker, so the refusal overwrote the file it refused to touch" \
   marker_intact "$INST"
 
+# F4 OF THE SECOND 2.7.0 LEG, fix round 2: ABSENT AND UNREADABLE ARE DIFFERENT.
+# The guard read .plugin.version directly, so a .plugin that was present but not an
+# object made jq exit nonzero, the substitution captured empty stdout, and empty was
+# read as "stamped before the version was recorded". The instance above records a
+# NEWER plugin; with the field malformed the same instance was refreshed FORWARD,
+# older enforcement files written over newer ones, and report mode printed "forward"
+# to the one person who could have caught it. The guard exists to make that
+# impossible and it failed open, so both directions are pinned here.
+INST="$WORK/inst-plugin-not-object"
+instance_fixture "$INST" 9.9.9
+python3 - "$INST/.claude/sdd.json" <<'PY' 2>/dev/null ||   sed -i.bak 's/"plugin": *{[^}]*}/"plugin": "9.9.9"/' "$INST/.claude/sdd.json"
+import json,sys
+p=sys.argv[1]; d=json.load(open(p)); d["plugin"]="9.9.9"; json.dump(d,open(p,"w"))
+PY
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "refresh notobj: a .plugin that is not an object REFUSES rather than reading as unrecorded" 1 \
+  "not an object"
+assert_true "refresh notobj2: the refused refresh copied nothing" \
+  "the instance's close-gate.sh lost its marker, so the refusal overwrote the file it refused to touch" \
+  marker_intact "$INST"
+
 # --- the refresh DELIVERS the git-hook boundary (v1.7 dogfood BLOCKER) ----------
 #
 # Found by the Phase 5 dogfood gate, and it is plugin 1.0.3's defect restated:

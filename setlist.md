@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.14 (the team edition)**
+**Edition v1.15 (the diagram edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -208,7 +208,7 @@ settings edit, not a protocol change.
 ### The Builder (execution mode)
 - **Job:** read the project documents and the one active spec, write ALL the code, run tests,
   perform ALL version-control operations via `/setlist:checkpoint`, and keep the
-  architecture diagram in `structure.md` truthful (Part 4).
+  living diagrams truthful (Part 4).
 - **Touches everything, governed by the spec.** Ambiguities found mid-build are parked in
   STATUS.md's "Open questions for the Planner," not improvised.
 - **Cadence:** continuous within a feature; one spec at a time; no parallel agents on
@@ -320,7 +320,7 @@ project-root/
 │   ├── settings.json              # model + permission rules + hook wiring (below)
 │   ├── sdd.json                   # instance config read by the hooks and /setlist:checkpoint:
 │   │                              #   role paths, gate command, the gates block (v1.14),
-│   │                              #   scaffolded flag
+│   │                              #   the optional diagram_command (v1.15), scaffolded flag
 │   ├── status.json                # THE STATUS RECORD (v1.12): the machine inventory the
 │   │                              #   gates read; /setlist:checkpoint is its ONE writer
 │   ├── skills/
@@ -350,9 +350,18 @@ project-root/
 │   └── design-tokens.md           # the locked visual system (for anything with a UI)
 │
 ├── docs/
-│   └── design/                    # UI projects: the committed design record (Part 5c)
-│       ├── INDEX.md               #   the design source-of-truth index
-│       └── ...                    #   locked redlines (.md) + mock exports (.png/.html)
+│   ├── design/                    # UI projects: the committed design record (Part 5c)
+│   │   ├── INDEX.md               #   the design source-of-truth index
+│   │   └── ...                    #   locked redlines (.md) + mock exports (.png/.html)
+│   └── diagrams/                  # THE DIAGRAM SWITCH (v1.15, Part 4): this directory
+│       ├── context.md             #   present arms the close checks; absent, every reader
+│       ├── components/            #   behaves exactly as v1.14. L1 context; L3 components,
+│       │   └── <role-path>.md     #   one file per role path, named by the path it draws
+│       ├── flows/                 #   flows promoted from a spec's Design sketch
+│       │   └── NNNN-<slug>.md
+│       ├── generated/             #   L4, never hand-drawn: diagram_command's committed
+│       │   └── <one file>         #   output, held equal to what the command prints
+│       └── retired/               #   what the baseline chore retired, verbatim (Part 5b)
 │
 ├── specs/                         # the working queue, one file per feature
 │   ├── STATUS.md                  # BOUNDED operational state (Part 4)
@@ -430,8 +439,8 @@ an explicit `timeout` because a hook the harness cancels is a gate that did not 
 wiring is never hand-maintained, and the template is the authority on the exact matcher
 set. Next to it sits `.claude/sdd.json`, the instance config
 the hooks and `/setlist:checkpoint` read: the src and tests role paths, the gate command
-(recorded by `/scaffold`), the `gates` block (below), and the `scaffolded` flag that arms
-the scope hook.
+(recorded by `/scaffold`), the `gates` block (below), the optional `diagram_command` (below,
+new in v1.15), and the `scaffolded` flag that arms the scope hook.
 
 **The `gates` block: three tiers, and who runs which (new in v1.14).** One gate command
 was one answer to three questions asked at different prices. The block names a command per
@@ -456,6 +465,28 @@ block on an instance that lacks it, so no verdict changes on the day of the upgr
 that is not an object of three strings refuses (`SLH-GATES-SHAPE`) rather than being guessed
 at, and a scaffolded instance whose `close` and `push` are both empty refuses every close,
 exactly as an empty `gate_command` always has: `/scaffold` records the tiers beside it.
+
+**The `diagram_command` key: a generated view as a lockfile (new in v1.15).** An instance
+MAY declare one command beside `gate_command` whose output is the L4 view, committed under
+`docs/diagrams/generated/`:
+
+```json
+"diagram_command": "npx madge --image-mermaid src/"
+```
+
+The stamped `sdd.json` carries the key EMPTY, which is the same state as an instance that
+never heard of it: no command, no lockfile, no check. The framework ships no extractor; the
+command is the instance's, and what makes it worth declaring is not the picture but the
+lockfile discipline around it. At every close, on the
+diagram switch: declared and the committed file equals what the command prints, silence;
+declared and different, `SLH-DIAGRAM-DRIFT` with the difference printed; declared and the
+command fails, prints no Mermaid block, or the instance commits none or more than one file
+under `docs/diagrams/generated/`, `SLH-DIAGRAM-SHAPE`, never a pass. The key absent is
+byte-identical to v1.14, which the differential fixture proves rather than assumes. One
+command and one generated view is the whole contract: the reader refuses rather than guess
+which committed file a command's output belongs to. The generated view counts as a diagram
+file for the Closing report's field, and it is NOT scanned for node evidence, because it is
+the command's output rather than a drawing anyone signed.
 
 **The `attestation` block (new in v1.11), and OFF is the default.** A project that wants
 the headless build integrity chain of Part 6 declares it:
@@ -520,7 +551,12 @@ The grammar, in full, because a grammar this small is the point:
   `qa_pass_1` admits exactly `ok`; `diagram` admits exactly `updated` or `no-impact`. All
   three close facts are written at the close, by checkpoint, in the close commit on the
   branch. One token per fact, because a record that can express a tally will be read as
-  prose.
+  prose. **The diagram field's FILE LIST (v1.15) lives in the Closing report's field text
+  and not here**, and the reason is this grammar's own strictness: an unknown key is
+  MALFORMED rather than ignored, so the first instance on a new edition to write a new key
+  would make every clone still on the previous one refuse ordinary commits. The schema is
+  therefore frozen for as long as two editions may share a repository, and the readers parse
+  the file list out of the report the way the audit already reads an `Owns:` declaration.
 - `chores.<id>.status` admits `open` or `done`; `files` is the chore's declared set
   (Part 6's ownership question), present from the first checkpoint that touches the chore.
 - Unknown top-level keys, unknown tokens, wrong types, a missing `setlist_status`, or
@@ -639,18 +675,16 @@ STATUS.md *in the same commit*. Stale STATUS.md is worse than none: it confident
   it precisely: types, invariants, why it's shaped that way, plus the code layout, especially
   the boundary between pure, testable logic and framework/UI code.
 
-  **The architecture diagram.** A living Mermaid section at the bottom of the file depicting
-  the system as it exists on `main`. Rules:
+  **The architecture diagram.** A living Mermaid section at the bottom of the file, holding
+  the **L2 container view** of the system as it exists on `main`, with the core-model diagram
+  beside its prose. It is one of the altitudes "The living diagrams" defines below, and the
+  rules that govern all of them are stated there once. What is local to this file:
   - **The principle: diagram source must be diffable text, and it must be close-gated.**
     The format is a binding. Mermaid is the default (renders on GitHub, agent-native,
     cleanest diffs). `.drawio.svg` is a documented alternative where non-engineers must edit
     diagrams in a UI and the platform renders SVG natively: it is XML-in-SVG, less reviewable
     than Mermaid but far better than binary. Pure binary formats fail "review is the gate"
     and are rejected. A rendered image export for slides is a one-off, never source.
-  - Every spec's Closing report answers a mandatory field: **"Architecture diagram: updated
-    in this commit / no impact."** `/setlist:checkpoint` refuses to close a spec while the
-    field is unanswered, and the stamped close-gate hook denies the merge independently
-    (Part 6). This is what guarantees the diagram never silently drifts.
   - The sync edit rides the closing commit on the spec branch, after gates and QA pass,
     merging with the feature. Never a separate post-merge commit on `main` (which would both
     violate the Git rules and create a window where `main` lies about itself).
@@ -671,6 +705,127 @@ STATUS.md *in the same commit*. Stale STATUS.md is worse than none: it confident
   colors, typography, spacing, component conventions locked as tokens the Builder must use
   everywhere. Decided before building UI. Where a design surface exists (Part 5c), it owns
   proposals to this file; the edits still land via ADR like any steering change.
+
+### The living diagrams (new in v1.15)
+
+Until v1.15 an instance had exactly one diagram, a Mermaid section at the bottom of
+`structure.md`, and one mandatory field in every Closing report asserting that it was current.
+The field was a promise nobody could check: it answered "updated in this commit" and nothing
+compared that answer to the commit. v1.15 makes a diagram **a set of claims about the tree**,
+compared at the close to the diff and to the tree itself.
+
+**The switch, first, because everything mechanical here depends on it.** A project is opted in
+when `docs/diagrams/` exists on the branch under review. Absent, every reader behaves exactly
+as v1.14 and nothing below runs: no new refusal, no new report, no new field grammar. Opting
+in is a chore of its own (Part 5b), never a side effect of an upgrade.
+
+**Altitudes and layout.** Four C4 levels, three of them drawn by hand.
+
+| Altitude | What it draws | Where it lives |
+|---|---|---|
+| L1 context | the system and what is outside it | `docs/diagrams/context.md` |
+| L2 containers | the deployables and the stores, not the files inside them | inline at the bottom of `steering/structure.md` |
+| L3 components | inside one container, one file per role path or module | `docs/diagrams/components/<role-path>.md` |
+| L4 code | never hand-drawn | `docs/diagrams/generated/`, from `diagram_command` (Part 3) |
+
+Flows promoted out of a spec's Design sketch live at `docs/diagrams/flows/<NNNN>-<slug>.md`.
+Diagrams are Mermaid blocks inline in Markdown, one file per view, so each renders and diffs
+on its own.
+
+**L2's home is the document a reader of this system actually opens.** For an ordinary
+application that is `steering/structure.md`, and the paragraph above says so. For a project
+whose readers are not its maintainers, a library or a tool whose own README is the front
+door, L2 belongs there instead, and the rules below are unchanged by the move. What is NOT
+allowed is two L2 views: one container diagram exists, in one place, and every other document
+links to it.
+
+**Every file under `docs/diagrams/` opens with a four-line header**: `Shows:` one sentence
+naming the mechanism a reader sees here that prose would make them assemble; `Altitude:` L1,
+L2 or L3; `Synced by:` the spec that last changed this file; `Encodes:` the constraints the
+picture asserts. The header is prose that people read, except `Synced by:`, which the checks
+read. **A diagram drawn INLINE in a document that is not a diagram file** (the L2 section of
+`structure.md`, a README, an ADR) has nowhere to put four header lines, so it folds them into
+the prose around the block instead: the sentences before the block say what it shows and at
+what altitude, the sentences after say what it encodes, and `Synced by:` is carried by the
+Closing report's field, which names the file the close touched. Folding the header is
+permitted; dropping it is not, and a diagram with no `Encodes:` anywhere near it is
+decoration.
+
+**What a diagram may not do.** A diagram in this repository is a set of claims about the
+tree on `main`, and it is held to the standard a Closing report is held to. It may not invent
+topology: no box for a component that does not exist, no arrow for a call that is not made,
+no boundary the code does not draw. It keeps exact names: a node is named by the path or
+module it draws, an arrow by the protocol, command, API path or event it carries, exactly
+as the code spells them, never a paraphrase. It labels every arrow, and drops a label only
+when both endpoints already state everything the label would (the protocol, the action, the
+direction, whether the call is synchronous, and any boundary crossed). It draws the
+mechanism, not its name, and when it compares two options it draws the difference between
+them rather than two labeled boxes. It is one figure making one claim; a second claim is a
+second figure. It starts from one main path and at most twelve primary nodes, and a diagram
+that outgrows that splits into a child rather than growing. Every L2 and L3 node's path must
+exist in the tree at the commit that closes the spec; a node the closing spec introduced
+whose path does not exist is refused, and an older node whose path has gone is reported
+until it is redrawn or retired with a note. Line ranges are not evidence: they are true at
+one commit and false at the next. A rendered image is never source.
+
+**Two riders on the twelve-node bound, both learned by drawing.** Over twelve, a diagram
+splits into a child under a directory named for the parent node
+(`components/<parent>/<child>.md`), and the parent node then stands for the child diagram;
+validate REPORTS the count and refuses nothing, so a thirteenth node is a decision you make
+rather than one the tooling makes for you. **Where there is no child to split into, the bound
+is HARD**: an L2 view inline in a README has no `components/` directory beneath it, so the
+only way down to twelve is to cut a node, and cutting is what the drawer must do.
+
+**One sense per ARROW, named in its label.** An honest container view mixes senses: one
+arrow is an invocation, the next is a read of a file. What is forbidden is an arrow whose
+sense the reader has to guess, or a figure where the same arrow style silently means
+"depends on" in three ways. Name the sense in the label (`runs it`, `reads it first`,
+`sources the predicates`) and the mixture is legible; leave it unnamed and the figure asserts
+nothing a reader can check.
+
+**When a project draws the software it STAMPS rather than the software it runs**, the nodes
+are the paths of a stamped instance, and the evidence behind them is the stamp contract, not
+`git ls-tree` of the tree that carries the drawing. A plugin, a generator or a scaffolding
+tool draws what its output looks like; the drawing is true when the stamp really writes those
+paths, and it is checked by whatever check holds the stamp to its file list. Such a project
+is usually not opted in to the close checks at all, because it has no `docs/diagrams/` of its
+own, and stating the rule is what keeps its diagram honest anyway.
+
+**The field names files, and the close compares it to the diff.** Every spec's Closing report
+answers a mandatory field. On an opted-in instance it takes the form
+
+```
+Architecture diagram: updated (docs/diagrams/components/auth.md, steering/structure.md)
+Architecture diagram: no impact
+```
+
+and the readers compare the parenthesised list to the closing commit's diff at all three
+enforcing layers (Part 6). `updated` naming a file the commit does not touch, or naming
+nothing at all, is refused: a claim that names nothing cannot be checked. `no impact` while
+the commit touched a diagram is refused as an undeclared change. On an instance that has not
+opted in, the v1.14 answers (`updated in this commit`, `no impact`) are what the field admits
+and nothing compares them to anything, exactly as before. This, and not the older sentence it
+replaces, is what guarantees the diagram never silently drifts.
+
+**Node evidence, verified at the close.** A node's drawn name is the path it draws, written
+in the declaration's own label (`auth["src/auth"]`), and the close resolves that text against
+the tree under review. A name counts as a path when it contains a slash and no whitespace;
+anything else is PRINTED as unverified rather than silently skipped, so a label meant as a
+path and spelled as prose comes back to the drawer. A node a spec introduces carries
+`%% spec NNNN` on its own line, which is what decides whose node a stale one is: the closing
+spec's own stale node refuses, an earlier spec's is reported with two honest exits (redraw it
+in this close and name the file in the field, or retire it with a note). Spec pins, not commit
+pins. This is the cheapest check in the edition: no toolchain, no command, no rendering.
+
+**The `diagrams` reference skill** ships with the plugin as a condensed binding of this
+section, with one reference per diagram type loaded only when that type is being drawn; on
+any conflict the edition text wins.
+
+**Rendering is checked where a renderer runs.** The forge check parses every Mermaid block
+under a pinned Mermaid version and refuses one that does not parse; local git hooks never
+render, because a git hook that needs a toolchain is a git hook that fails for a reason that
+has nothing to do with the work. Part 6 says what the stamped workflow does when the parser
+cannot be installed.
 
 ### The Current vs target callout
 
@@ -758,7 +913,7 @@ written gate. Part 7b defines the gates and the transition protocol.
 |---|---|
 | An architectural decision and its reasoning | `DECISIONS.md` (entry + index row), if it outlives its spec; else the spec itself |
 | The constitution (scope, stack, model, conventions) | `steering/*.md` (edits need an ADR) |
-| The system's current shape, as a picture | `structure.md` diagram (synced at spec close) |
+| The system's current shape, as a picture | the living diagrams: L2 in `structure.md`, L3 under `docs/diagrams/` (synced at spec close) |
 | A divergence between today's reality and intent | A Current vs target callout in the steering doc |
 | A locked visual decision (redline, mock, exact values) | `docs/design/` + its INDEX.md (Part 5c) |
 | The work to do next as a feature | A spec file from `specs/TEMPLATE.md` |
@@ -802,6 +957,14 @@ file:
 - **(Optional) Post-v1 parking lot:** a table of out-of-scope follow-ups with triggers and
   dependencies. Each row can be promoted to its own spec later. This beats writing DRAFT
   specs for everything: DRAFT proliferation creates the illusion of plan.
+- **(Optional, new in v1.15) Design sketch:** one Mermaid block drawing the intended change,
+  in the type the diagrams skill's routing test picks, under every rule in Part 4's "What a
+  diagram may not do". It is what the human approves and what the Builder builds to, so a
+  build that departs from it is a scope deviation and is recorded as one. At the close the
+  sketch is absorbed: what it drew that survives is edited into the living diagrams, a flow
+  worth keeping is promoted to `docs/diagrams/flows/`, and a sketch that was only the
+  change's scaffolding stays in the closed spec as the record of what was intended. Delete
+  the section when a sentence says it faster; that is the first rule of drawing anything.
 - **(At close) Closing report:** see lifecycle below.
 
 **The lite tier (new in v1.14).** Not every change earns the full skeleton, and a template
@@ -912,7 +1075,8 @@ the spec inventory. Shipped work stays intact; only the affected criteria are re
 A spec **closes** only when every acceptance checkbox is satisfied, the gates pass, and both
 QA passes are clean. At close, the **Closing report** section in the spec file is completed:
 what was built, deviations from the spec, test counts, the committed Pass 1 QA report, the
-mandatory **architecture-diagram field** ("updated in this commit / no impact"), and open
+mandatory **architecture-diagram field** (on an opted-in instance, `updated (<the files this
+commit changed>)` or `no impact`; otherwise the v1.14 answers, Part 4), and open
 follow-ups (filed as chores or parking-lot rows). If the spec went through REVISED, the
 report covers both build passes, so the revision history is readable in one place.
 STATUS.md gets the one-line inventory update; the detail lives here.
@@ -1068,6 +1232,24 @@ transition and it does not reuse the spec number. Part 6's "Amending a spec that
 CLOSED" gives the reasoning and the other two routes.
 
 Without this primitive, small debt either inflates into ceremony specs or gets forgotten.
+
+**`chore/diagram-baseline`: the one legitimate scan (new in v1.15).** Opting in to the
+living diagrams is a chore with its own branch and its own close, cut deliberately after an
+upgrade, and it is the ONE place in this framework where scanning the code and drawing fresh
+is allowed. It runs in four steps. Retire the old `structure.md` diagram section verbatim to
+`docs/diagrams/retired/structure-<date>.md` under a dated provenance banner (Part 4's
+annotate-never-rewrite rule: the old drawing is evidence of what was believed, and evidence
+is not improved by correcting it). Seed `docs/diagrams/`: L1 context, the L2 container view
+in its home, and one L3 file per role path, each with its four-line header and
+`Synced by: chore diagram-baseline`. **The human reviews the seed file by file before it is
+committed**, on Part 5c's rule for mocks, because a diagram drawn by a scan is a claim
+nobody has checked and the whole point of the altitude is that somebody has. The chore
+closes on validate's diagram reports being read, not on them being empty.
+
+From that merge onward the seed is source and the checks are on, and **a wholesale re-scan is
+refused**: diagrams are edited in closing commits, one spec at a time, the way every other
+claim about the tree is. A second baseline is the same act as regenerating a Closing report
+from the diff, and it means the same thing.
 
 ---
 
@@ -1541,6 +1723,15 @@ skill of their own (upgrading repos remove them; the Changelog is the delta list
   `.claude/sdd.json` parses and names the role paths and, once scaffolded, a gate
   command, and no phase-2 slot marker survives anywhere in the instance. Reports
   findings; fixes nothing without approval.
+- **Three diagram reports, and never a refusal (new in v1.15).** On an opted-in instance
+  validate reports: diagrams over twelve primary nodes, with the count; **undiagrammed
+  ownership**, role paths that closed specs declared under `Owns:` and no L3 diagram names;
+  and stale nodes introduced by EARLIER specs, which the close reports rather than refuses.
+  Where a `diagram_command` is declared it adds a fourth: edges in the generated view that
+  no hand-drawn diagram draws, which is the cheapest way to find a dependency the
+  architecture never admitted to. All four are information. Validate refuses nothing here,
+  because a health check that blocks turns the diagrams into a thing to satisfy rather than
+  a thing to read.
 - **Structural by design.** It verifies shape: files in place, sections present, wiring
   intact, config coherent. It does not judge semantic consistency (a plan that
   contradicts its spec, criteria that miss the goal); that is Planner work at spec time,
@@ -1584,6 +1775,13 @@ skill of their own (upgrading repos remove them; the Changelog is the delta list
   (and nothing more) in the same commit. The stamped close-gate hook verifies the same
   conditions independently on any merge attempt; passing this checklist is what satisfies
   it.
+- **It drafts the diagram sync, and names the files (new in v1.15).** On an opted-in
+  instance checkpoint drafts the edit the living diagrams need from what the spec's Design
+  sketch touched, promotes a flow worth keeping to `docs/diagrams/flows/`, and writes the
+  field with the files NAMED. The sync edit rides the closing commit on the spec branch,
+  never a separate commit on the trunk. The human still answers the field: checkpoint can
+  see which diagram files the commit touches, and only a person can say whether the picture
+  is now true.
 
 **browser-qa** (web UIs, per QA pass):
 - The Part 5 web binding as a skill: build and serve the production bundle, write the
@@ -1645,7 +1843,8 @@ parser has failure modes its subject matter does not.
   headless build produces. It also carries the close verification in one specific case,
   described under "What each hook can and cannot see" below.
 - **`pre-merge-commit`** carries the close verification: every spec this change CLOSES has a
-  complete Closing report with a pasted QA Pass 1 verdict and an answered diagram field, its
+  complete Closing report with a pasted QA Pass 1 verdict and an answered diagram field
+  (checked against the commit's own diff where the instance is opted in, below), its
   CLOSED inventory row, and a green run of the project's gate command. It also refuses a
   merge that brings feature code to the trunk while closing no spec that was not already
   CLOSED **and recording no completed chore**. This is the expensive one, and it belongs at
@@ -1688,6 +1887,23 @@ field is decided by the FIRST `Architecture diagram:` line at either layer, read
 answer rather than as a sentence containing one; on the record path (v1.12) the diagram
 answer is a one-token close fact in `.claude/status.json` and the question cannot arise.
 Keeping the label on one line of a spec is still good manners, not a workaround.
+
+**THE DIAGRAM CHECKS RUN AT ALL THREE ENFORCING LAYERS, AND ONLY ON AN OPTED-IN INSTANCE
+(new in v1.15).** `docs/diagrams/` present on the branch under review arms them; absent, every
+reader behaves exactly as v1.14. Armed, the merge hook, the trunk audit on both its routes and
+the forge check ask the same five questions out of the same library, with the same codes:
+`SLH-DIAGRAM-CLAIM` (the field says `updated` and names a file this commit does not touch, or
+names nothing at all), `SLH-DIAGRAM-UNDECLARED` (the field says `no impact` and the commit
+touched a diagram), `SLH-DIAGRAM-STALE-NODE` (a drawn path that does not exist in the tree
+under review: a refusal for the closing spec's own node, a report for an earlier spec's),
+`SLH-DIAGRAM-DRIFT` and `SLH-DIAGRAM-SHAPE` (the generated view against `diagram_command`,
+Part 3). A sixth is a report and never a refusal: `SLH-DIAGRAM-NODE-SKIPPED`, every drawn name
+that is not path-shaped, listed with what it is (a node, a subgraph id, a subgraph title), so
+a label meant as a path and spelled as prose is printed rather than passed over in silence.
+There is no advisory twin: the session gates gained no byte this edition, which is why their
+close gate still asks the v1.14 question of the field and is described under Known limitations
+below. Every one of these names three things in its message, on this edition's standing rule
+for any refusal: the subject, the measured evidence, and the one edit that fixes it.
 
 **THE GUARANTEE IS A DISCIPLINE CONTROL FOR COOPERATING USE, NOT A SECURITY BOUNDARY, and six rounds of
 adversarial claims review are what narrowed it to that.** For a developer or agent following the process,
@@ -1796,7 +2012,8 @@ the recorded trunk (a pull request against another base passes with the words "n
 pull request; nothing to verify", the one pass on nothing, said out loud); the scratch merge
 under a fixed identity; the close verification over the merge index; the attestation walk
 over the range; the content scan; the `push` gate tier in the merged worktree; the merge
-committed and the trunk audit over it; the forge questions; then ONE token on stdout. It
+committed and the trunk audit over it; the Mermaid parse (v1.15, below); the forge questions;
+then ONE token on stdout. It
 reads the checkout's own stamped bytes and fetches nothing, so it verifies what `pre-push`
 verifies and nothing more, and a check that died prints nothing, which the workflow refuses.
 
@@ -1833,6 +2050,33 @@ the pull request's author and at `pre-push`'s audit on the closing commit's emai
 ADVISES at the merge hook, whose identity is the merging clone's claim. Locally only email
 owners can be matched; a handle or a team the audit cannot resolve is REPORTED, not refused,
 and resolved at the forge. Ownership here is what the file says.
+
+**Render validation lives here, and only here (new in v1.15).** The check parses every
+Mermaid block in the merge under a pinned Mermaid version and refuses one that does not
+parse (`FC-DIAGRAM-RENDER`, naming the file, the block and what the parser said). Local git
+hooks never render: a git hook that needs a toolchain is a git hook that fails for reasons
+unrelated to the work, on a machine whose node nobody chose. Two properties make this a
+boundary rather than a promise. **Inside the stamped workflow the parser step either
+succeeds or FAILS THE JOB**, and it verifies itself in both directions before the check runs
+(a parser that accepts a broken block is worse than no parser, because it turns every
+diagram into a claim nobody checked while reporting that it did); so where the check is
+required, there is no pass on a renderer that could not be installed. **Run anywhere else**
+(a forge with no node, the script invoked by hand) the check REPORTS `FC-DIAGRAM-NO-RENDERER`
+and refuses nothing on that ground, which is the one thing in the check that is a report on
+absence, and it is reachable only outside the workflow the framework stamps. What is
+verified is that the block PARSES, not that a picture was produced: parsing is the claim a
+diagram makes about itself, and it is what a headless parser can answer without a browser.
+
+**TWO SETTINGS BELONG BESIDE THE CHECK RATHER THAN INSIDE IT.** Disable rebase merging on a
+governed trunk: a rebase lands every branch commit as direct feature code before any run of
+the check sees it. And require branches to be up to date before merging: the check judges
+the merge against the base its own checkout carries, so without that setting two pull
+requests can both be green against a stale base and the second lands on a trunk this check
+never read. The check cannot set either one, but it does not stay silent about the second:
+under `forge` custody, where this check is the notary, a trunk that requires the check and
+not the setting REFUSES (`FC-STRICT-NOT-REQUIRED`, naming the setting); under every other
+custody it is reported beside the review count, which is the same split step 9 already made
+for an unprotected trunk and a trunk with no review required.
 
 **There is no escape variable.** The check reads neither `SETLIST_SKIP_HOOKS` nor
 `SETLIST_SKIP_TRUNK_AUDIT`, and nothing it prints names either. A workflow that wants to skip
@@ -1974,6 +2218,40 @@ where that layer ends. Everything below is a real hole, known and accepted, not 
   macOS under bash 3.2 with the BWK awk, which is where the 1.0.8 fault would have been
   caught. A platform absent from that list is untested, and the release notes say which list
   rather than implying the proof.
+- **A diagram check compares a claim to a diff, never a drawing to the code (new in
+  v1.15).** The field checks establish that the files the closer named are the files the
+  commit touched; the node check that every drawn path exists in the tree; the lockfile that
+  the generated view equals what the command prints. Whether a box, an arrow or a label is
+  TRUE of the mechanism is not asked by any of them, and cannot be: that is what review
+  establishes, and the baseline chore's file-by-file human review is the first instance of
+  it. Two arms are reports rather than refusals and are named here so they are not mistaken
+  for guarantees: a stale node introduced by an EARLIER spec is reported at every close and
+  refuses nothing, and the twelve-node bound is reported at validate. And the whole half is
+  OPT-IN: an instance with no `docs/diagrams/` is judged exactly as v1.14 judged it, so an
+  instance that never opts in has none of this.
+- **Only a path-shaped drawn name is verified (new in v1.15).** A drawn name counts as a
+  path when it contains a slash and no whitespace. `api["src/api"]` is resolved against the
+  tree; `api["The API"]`, a module identifier with dots and no slash, and a boundary that is
+  a process rather than a directory are all PRINTED as unverified and checked by nobody. The
+  print is the honest half, and it is why the report exists rather than a silence; what it
+  cannot do is make a prose label into a claim. Three Mermaid spellings are not read at all
+  and the drawer is told rather than believed: the rhombus and hexagon (`{...}`), the
+  asymmetric (`>...]`), and a label separated from its id by a space (`a ["src/a"]`).
+- **Render validation lives at the forge, and nowhere else (new in v1.15).** Inside the
+  stamped workflow the parser step succeeds or fails the job, so a required check never
+  passes on a renderer it could not install. Run anywhere else, the check reports that it
+  could not parse and refuses nothing on that ground. Local git hooks never render at all,
+  so a Mermaid block that does not parse reaches the trunk on a project whose pull requests
+  do not run the check, and is caught on the rendered page instead.
+- **Mermaid's inline edge-text form can refuse a close for a path nobody drew (new in
+  v1.15).** A drawn name is read from a declaration's own label, the bracket or parenthesis
+  attached directly to a node id. Mermaid's other edge-label spelling, `a -- text --> b`,
+  puts its text in exactly that position, so a path written inside it
+  (`a -- reads(src/gone.json) --> b`) is read as a node and can refuse a close for a node
+  the drawer never drew. No regex separates the two, because `-- text --` and `-->` are the
+  same dash run to a lexer that does not know whether the link closed; a real parse of the
+  line is what it would take. Use the pipe form, `-->|"text"|`, which every type reference
+  teaches and which has no such hazard.
 
 ### Spec integrity: the approved text is the text you build (new in v1.7)
 
@@ -2675,6 +2953,12 @@ Gather:
   with a key the approver holds, or the feature stays off honestly. Do not turn it on to be
   thorough: an integrity chain nobody can describe the strength of is worse than none,
   because it reports green.
+- **A generated diagram view: ask once, and the DEFAULT IS NONE** (new in v1.15). "Is there
+  a command in this stack that prints a dependency or module graph as Mermaid?" If yes it
+  becomes `diagram_command` (Part 3) and its output is committed as a lockfile; if no, or if
+  nobody would look at it, leave the key out and the instance behaves as though the feature
+  did not exist. Do not invent one to be thorough: a generated view nobody reads is a file
+  that fails closes.
 - Record each as an ADR (entry + index row) -> `DECISIONS.md`.
 
 ### Step 3 - Generate the files (two phases, new in v1.5)
@@ -2710,7 +2994,9 @@ health check ships as `/setlist:validate`); the `.claude/agents/qa-verifier.md`
 stub; **the framework markdown itself
 committed into the repo** (the audit trail of which edition governed which work; upgrades
 replace it, Part 8c); `docs/design/INDEX.md` as a stub for UI projects with a design
-surface; an empty `journal/`; and skeletons of `CLAUDE.md`, `README.md`, and `ROADMAP.md`
+surface; **`templates/root/DIAGRAM-HEADER.md`'s four-line header as the shape every diagram
+file opens with (new in v1.15)**, which the stamp carries and phase 2 uses; an empty
+`journal/`; and skeletons of `CLAUDE.md`, `README.md`, and `ROADMAP.md`
 carrying the invariant golden rules (the no-em-dash style rule, the transcript-secrets
 rule, the role boundary, the read budget) with marked slots for phase 2. Without the
 plugin (a session primed with this document), the same split still governs: generate the
@@ -2719,10 +3005,21 @@ the content is identical, only the emitter differs.
 
 **Phase 2, tailored generation (the part that is the product).** The model writes only
 what encodes decisions made with the user: the steering docs' content (structure.md with
-its initial Mermaid diagram remains the single largest effort item), the founding ADRs
+its initial L2 container diagram remains the single largest effort item), the founding ADRs
 (entry plus index row), the first specs (Step 4), `RUNBOOK.md` (Step 5), and every slot
 the stamp left marked. No slot marker survives this phase; `/setlist:validate`
 reports any that do.
+
+**`docs/diagrams/` is seeded HERE, in phase 2, and never by the stamp (new in v1.15)**,
+for the reason the split exists: a diagram is content, and an empty directory of headers is
+not a diagram. The seed is two files written from the decisions just made, the L1 context
+view and the L2 container block in `structure.md` beside the core model, each opening with
+the four-line header and `Synced by: bootstrap`, with node names taken from the role paths
+the interview recorded so they resolve against the tree from the first close. Say plainly
+what creating the directory does, because it is a decision and not a formality: its presence
+ARMS the close's diagram checks from the first spec onward. That is the intended state for a
+project born under this edition, and a user who wants to start without it deletes the
+directory.
 
 ### Step 4 - Write the first specs
 A **spike (0000)** for the riskiest assumption, if any; **0001** the foundational feature
@@ -2739,7 +3036,8 @@ go wrong" procedures.
 
 ### Customization by project type
 - **Non-UI** (CLI, library, pipeline): drop `design-tokens.md`, `docs/design/`, and Part 5c;
-  `structure.md` and a clear module/API boundary matter even more.
+  `structure.md` and a clear module/API boundary matter even more. `docs/diagrams/` is NOT
+  dropped with them: it is the architecture surface, not the visual-design one.
 - **Backend/service:** `state.md` becomes data/persistence and request lifecycle; hard rules
   on secrets, auth, migrations early.
 - **Data/ML:** add a doc on provenance, reproducibility, evaluation; acceptance criteria
@@ -2794,8 +3092,16 @@ The Part 8 Step 3 file set, generated in the same two phases, with retrofit diff
 - DECISIONS.md is seeded with INFERRED ADRs (Part 4), one per de-facto decision read off
   the code. The **flip ceremony** (the human walks the index, confirming or superseding
   each row) is the first Planner action of the next session, before any spec runs.
-- The initial architecture diagram depicts what exists, drawn from the real import or
-  dependency graph, never from intent.
+- The initial diagrams depict what exists, drawn from the real import or dependency graph,
+  never from intent. **A retrofit is seeded like a new project (new in v1.15)**, in phase 2:
+  `docs/diagrams/context.md` at L1 and the L2 container view in `structure.md`, both from
+  the Step 1 inventory, each `Synced by: retrofit`, node names the de-facto role paths the
+  inventory found. This is the ONE scan-and-draw-fresh a retrofit gets, and it is the same
+  act `chore/diagram-baseline` performs for an UPGRADED instance; the retrofit gets it
+  without a second chore because the whole retrofit is already a scan the human reviews.
+  Show the seeded files before the retrofit commit, the way the inventory was shown: a
+  diagram the user cannot read as true of their own code is redrawn now, not accepted and
+  fixed later. Where a `diagram_command` exists for the stack, the interview records it.
 - No `/scaffold` is emitted: the project is already scaffolded, and the health check
   ships as `/setlist:validate` (web UIs still get `browser-qa`).
 - **A retrofit gets the forge side too (new in v1.14):** the forge check beside the audit,
@@ -2924,6 +3230,18 @@ action.
   block; a present block is left alone. `forge` custody stops refusing on the day of the
   upgrade wherever the stamped check is in the tree; requiring the check on the trunk is
   the team's act at the forge, and the check reports until they do.
+- **The v1.15 delta: the diagram half is DETECTED and MIGRATED NOT AT ALL (new in v1.15;
+  BL-005's precedent applied a fourth time).** An upgrade never creates `docs/diagrams/`,
+  never redraws the instance's one diagram, and never turns the close checks on. It does
+  exactly one thing: it reports, in one line, that the instance has a `structure.md` with a
+  Mermaid section and no `docs/diagrams/`, so it is drawing at one altitude and the edition
+  now describes three. Everything else waits for `chore/diagram-baseline` (Part 5b), which
+  is a chore the human cuts, because seeding the altitudes means SCANNING THE CODE AND
+  DRAWING FRESH, and a drawing produced during a migration and never reviewed is the
+  laundering the record's own rule was written against. The bundled `specs/TEMPLATE.md`
+  gains the Design sketch block through the ordinary unmodified-copy refresh; a spec written
+  before the block existed is not rewritten to have one. Until the chore lands, the
+  instance's diagram field answers exactly as it did and every reader behaves as v1.14.
 - **Accepted deviations are recorded, not erased.** If the repo keeps a non-canonical
   layout (paths are roles), say so inside the umbrella ADR; a future chore can relocate.
 - **Close like any chore:** gates pass (docs-only, so results must match pre-migration), a
@@ -3120,8 +3438,9 @@ declares closes under the pre-v1.12 rules.
 
 **The lite shape (new in v1.14).** A lite spec (Part 5) is this template with `Tier: lite`
 in its header and the middle trimmed: one acceptance criterion (plus the human-acceptance
-item where the work is experience-critical), the v1.7 clauses deleted, the Gates block as it
-stands, and the Closing report kept whole where the gates read it: the QA Pass 1 verdict
+item where the work is experience-critical), the v1.7 clauses deleted, the Design sketch
+deleted unless the change is one a picture settles faster than a sentence, the Gates block
+as it stands, and the Closing report kept whole where the gates read it: the QA Pass 1 verdict
 block (one line), QA Pass 2, and the mandatory diagram field answered exactly as a full spec
 answers it. The `Tier:` line ships in the template reading `full`, because the tier is a
 fact every spec states; only the exact line `Tier: lite` is read by the hooks, so a full
@@ -3202,6 +3521,21 @@ rather than leaving them unanswered.>
 | Idea | Trigger to promote | Depends on |
 |---|---|---|
 
+## Design sketch (optional; delete this section if a sentence says it faster)
+<One Mermaid block drawing the INTENDED change, in the type the diagrams skill's routing
+test picks. It is what the human approves and what the Builder builds to, so a build that
+departs from it is a scope deviation and is recorded as one above. Every rule in Part 4's
+"What a diagram may not do" applies here: the mechanism and not its name, exact paths as
+node labels, one sense per arrow named in its label, no box for a component that does not
+exist, no arrow for a call that is not made, twelve nodes at most. At the close, what
+survives is edited into the living diagrams and a flow worth keeping is promoted to
+docs/diagrams/flows/; this block stays here as the record of what was intended.>
+
+```mermaid
+flowchart LR
+  a["src/<path>"] -->|"what this arrow carries"| b["src/<path>"]
+```
+
 ## Closing report (completed at close; checkpoint gates on this section)
 <Contract, v1.7: every evidence claim is labelled OBSERVATION or INFERENCE and scoped to
 what was actually measured. "It works" and "the mechanism is proven" are different claims,
@@ -3232,7 +3566,7 @@ person.>
   BLOCKED, <what is unreachable>, recorded as a per-session fact>
 - Migrations: <none | the ordered list of migration files this spec shipped>
 - Design QA: <punch list empty | items accepted/deferred by name | n/a (functional)>
-- Architecture diagram: <updated in this commit | no impact>
+- Architecture diagram: <answer it: on an instance with docs/diagrams/, write "updated" with the diagram files this commit changed in parentheses, comma-separated, or "no impact"; the close compares that list to the commit's own diff. Without docs/diagrams/, "updated in this commit" or "no impact", as before.>
 - Follow-ups filed: <CHORE-NNN / parking-lot rows / none>
 - If REVISED: what changed between passes and why:
 ````
@@ -3246,6 +3580,69 @@ judgment. Appendix A is the part worth keeping; everything else is implementatio
 ---
 
 ## Changelog
+
+- **v1.15 (the diagram edition).** This delta list is authoritative for
+  `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases
+  (this edition ships as plugin 2.7.0), the edition counts revisions of this document.
+  v1.15 moves because the PROTOCOL gains its diagram half: a diagram becomes a set of
+  claims about the tree, compared at the close to the diff and to the tree, at altitudes,
+  in files that render and diff on their own.
+
+  **THE FIELD NAMES FILES, AND TWO CHECKS COMPARE IT TO THE DIFF (Parts 4, 6, Appendix C).**
+  `Architecture diagram: updated (<files>) | no impact`; the merge hook, the audit and the
+  forge check refuse `updated` with a named file untouched, or naming nothing at all
+  (`SLH-DIAGRAM-CLAIM`), and `no impact` with a diagram touched
+  (`SLH-DIAGRAM-UNDECLARED`), on an instance whose `docs/diagrams/` exists; absent, every
+  reader behaves as v1.14. Part 4's sentence that the field guarantees the diagram never
+  silently drifts is true for the first time. The file list lives in the Closing report's
+  field text and NOT in `.claude/status.json`, whose grammar reads an unknown key as
+  malformed: a new record key would make every clone on the previous edition refuse
+  ordinary commits, so the schema stays frozen while two editions may share a repository.
+
+  **NODE EVIDENCE, VERIFIED AT THE CLOSE (Parts 4, 6).** Every L2 and L3 node is named by
+  the path it draws, in the declaration's own label, and carries the spec that introduced
+  it; the close resolves each path against the tree, refusing a stale node the closing spec
+  drew (`SLH-DIAGRAM-STALE-NODE`) and reporting an older one with its two honest exits. A
+  name counts as a path when it holds a slash and no whitespace, and every name that does
+  not is PRINTED with what it is, a node, a subgraph id or a subgraph title
+  (`SLH-DIAGRAM-NODE-SKIPPED`), never silently skipped. Line ranges are not evidence.
+
+  **THE GENERATED VIEW AS A LOCKFILE (Parts 3, 6).** An optional `diagram_command` beside
+  `gate_command`, its committed output under `docs/diagrams/generated/` required equal to
+  what it prints (`SLH-DIAGRAM-DRIFT`, `SLH-DIAGRAM-SHAPE`); one command, one generated
+  view, and the reader refuses rather than guess which file belongs to the command; absent,
+  byte-identical to v1.14; no extractor ships.
+
+  **RENDER VALIDATION AT THE FORGE (Part 6).** The forge check parses every diagram block
+  under a pinned Mermaid version and refuses one that does not parse (`FC-DIAGRAM-RENDER`);
+  the stamped workflow's parser step fails its job rather than letting the check pass
+  without one, and verifies itself in both directions first; the claim is that the block
+  PARSES, which a headless parser answers without a browser. Local hooks never render.
+
+  **ALTITUDES, LAYOUT, THE SKETCH AND THE SKILL (Parts 3, 4, 5, 8, 8b, Appendix C).** L1
+  context, L2 containers in `structure.md` or in whichever document a reader of this system
+  actually opens, L3 one file per role path, L4 generated only; a four-line header per file,
+  folded into the prose where a diagram is inline in a document that is not a diagram file;
+  twelve nodes reported at validate, and HARD where there is no child to split into; the
+  spec template's optional Design sketch and the ADR template's; `skills/diagrams/` with the
+  routing test, the type references and "What a diagram may not do"; validate's three
+  reports (over twelve nodes, undiagrammed ownership, earlier specs' stale nodes) and a
+  fourth where a `diagram_command` is declared; `new` and `retrofit` seed the directory at
+  birth.
+
+  **THE BASELINE CHORE, AND AN UPGRADE THAT MIGRATES NOTHING (Parts 5b, 8c).** The upgrade
+  detects one diagram at one altitude and reports it in a line; `chore/diagram-baseline` is
+  the one legitimate scan, reviewed by the human file by file, after which a wholesale
+  re-scan is refused.
+
+  **THE FORGE CHECK READS THE STRICT SETTING (Part 6).** Under `forge` custody a trunk that
+  does not require branches to be up to date before merging refuses
+  (`FC-STRICT-NOT-REQUIRED`); elsewhere it is reported beside the review count.
+
+  **FOUR BULLETS ENTER THE KNOWN-LIMITATIONS LIST (Part 6).** A diagram check compares a
+  claim to a diff and never a drawing to the code; only a path-shaped drawn name is
+  verified; render validation lives at the forge and nowhere else; and Mermaid's inline
+  edge-text form can refuse a close for a path nobody drew, which the pipe form avoids.
 
 - **v1.14 (the team edition).** This delta list is authoritative for
   `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases

@@ -54,6 +54,13 @@ Ask for, in plain conversation:
   that lacks it will deny its own first writes; a clean container is the
   common case, since jq is not in most default installs. Report the install
   command and let the user run it; install nothing yourself.
+- Ask the `diagram_command` question in the same round, DEFAULT NONE. "Is there
+  a command that prints this project's structure as one Mermaid block (an import
+  graph, a schema dump)?" A yes records it in `.claude/sdd.json` beside
+  `gate_command`, and its committed output under `docs/diagrams/generated/` is
+  then required to equal what it prints at every close. A no records nothing,
+  which is the right default: the framework ships no extractor, and a declared
+  command that does not run refuses the close rather than degrading.
 - Run Step 2 foundational decisions WITH the user at full depth. This is the
   product of the whole session; do not compress it. The core data model gets
   the most effort.
@@ -98,6 +105,23 @@ first specs per Part 8 Step 4 (spike 0000 if warranted, 0001 to 0003, later
 ones as DRAFT or parking-lot rows), `RUNBOOK.md` as Part 7 instantiated with
 this stack's exact commands, and every `[PHASE 2 SLOT: ...]` marker the stamp
 left behind. No slot marker survives this phase.
+
+**Seed `docs/diagrams/` here, in phase 2, and never in the stamp.** Create the
+directory and write two files from the decisions just made: `context.md` at L1
+(the system, its users and the outside services it talks to) and the L2
+container block at the bottom of `steering/structure.md` beside the core model.
+Both under the `diagrams` skill's rules, each opening with the four-line header
+from `${CLAUDE_PLUGIN_ROOT}/templates/root/DIAGRAM-HEADER.md` and
+`Synced by: bootstrap`. Node names are the role paths the answers file recorded,
+so they resolve against the tree from the first close.
+
+Say plainly what creating the directory does, because it is a decision and not a
+formality: its presence ARMS the close's diagram checks, so from the first spec
+onward a close that says `updated` names its files and one that says
+`no impact` while a diagram moved is refused. That is the intended state for a
+project born under this edition. A user who wants to start without it deletes
+the directory, and every reader behaves as it did before the diagram half
+existed.
 
 ## 6. Hand off
 

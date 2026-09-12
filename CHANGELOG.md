@@ -9,6 +9,112 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.7.0
+
+**Edition v1.15 (the diagram edition).** A diagram stops being a picture the close asks
+about and becomes a set of claims the close checks: against the closing commit's diff,
+against the tree, and against a command's output where one is declared. Two things
+opt you in, a file under `docs/diagrams/` carrying the four-line header or a declared
+`diagram_command`; with neither, every reader behaves byte for byte as 2.6.1 did, which a
+differential fixture proves rather than assumes.
+
+- **The diagram field names files, and the close compares it to the diff.**
+  `Architecture diagram: updated (docs/diagrams/components/auth.md)` is refused when a named
+  file is not in the closing commit, or names nothing at all (`SLH-DIAGRAM-CLAIM`), and
+  `no impact` is refused when the commit touched a diagram (`SLH-DIAGRAM-UNDECLARED`). The
+  merge hook, the trunk audit on both routes and the forge check ask it out of one library.
+  The file list lives in the Closing report's field text and not in `.claude/status.json`:
+  that record reads an unknown key as malformed, so a new key would make every 2.6.1 clone
+  in the same repository refuse ordinary commits.
+- **Node evidence, verified at the close.** A node is named by the path it draws, in the
+  declaration's own label, and carries the spec that introduced it; the close resolves each
+  path against the tree, refusing a stale node the closing spec drew and reporting an older
+  one with its two honest exits. A name that is not path-shaped is printed with what it is,
+  a node, a subgraph id or a subgraph title, never skipped in silence.
+- **A generated view as a lockfile, opt-in.** Declare `diagram_command` beside
+  `gate_command` and the file committed under `docs/diagrams/generated/` must equal what the
+  command prints at every close (`SLH-DIAGRAM-DRIFT`); a command that fails, prints no
+  Mermaid block, or has no single file to lock refuses instead (`SLH-DIAGRAM-SHAPE`). No
+  extractor ships; the command is yours.
+- **Render validation at the forge.** The forge check parses every Mermaid block under
+  mermaid 11.14.0 and refuses one that does not parse (`FC-DIAGRAM-RENDER`). The stamped
+  workflow's parser step fails the job rather than letting the check pass without a parser,
+  and verifies itself in both directions before the check runs. Local git hooks never render.
+- **Three diagram altitudes, one file per view.** Context, containers and components, each
+  file opening with what it shows, its altitude, the spec that last synced it and what it
+  encodes; twelve nodes reported at validate, beside undiagrammed ownership and earlier
+  specs' stale nodes.
+- **The Design sketch, and the `diagrams` skill.** A spec can draw the intended change in
+  the type a routing test picks, and checkpoint absorbs what survives into the living
+  diagrams at the close. The skill is the twelfth in the plugin and the fifth reference
+  skill, with five type references it loads only when that type is being drawn.
+- **The baseline chore, for an instance that upgrades.** `/setlist:upgrade` creates nothing
+  and redraws nothing; it reports in one line that you are drawing at one altitude.
+  `chore/diagram-baseline` is the opt-in and the one place scanning the code and drawing
+  fresh is allowed, under your review file by file, after which a wholesale re-scan is
+  refused.
+- **The forge check reads the strict setting.** Under `forge` custody a trunk that requires
+  this check but not "require branches to be up to date before merging" is refused by name
+  (`FC-STRICT-NOT-REQUIRED`); under every other custody it is reported beside the review
+  count.
+- **The container view in this README.** One picture of a stamped project above Known
+  limitations: the three command gates the session runs, the three git hooks and the library
+  they source, the trunk audit that both `.githooks/pre-push` and the forge check run, the
+  stamped workflow, and the two files every layer reads. Every node is a stamped path and
+  every arrow a call or a read in those files. The one arrow out of the advisory box is
+  dotted, because the commit gate's single refusal guards the git hooks rather than standing
+  ahead of them. The block parses under the same pinned Mermaid version the forge check
+  installs.
+
+**What the session gates do NOT do, said plainly.** The three advisory Claude Code gates
+gained no byte this release, so the close gate still asks the older question of the diagram
+field and reports it unanswered when it reads the new form that names files. Nothing is
+refused by that: the session layer has been advisory in mechanism since 2026-08-04, its
+verdict is always `allow`, and its reason is not rendered to the agent on current harnesses,
+which this project's per-release probe has now measured as unseen across four consecutive
+releases. The gates are removed in 2.8.0.
+
+**A note for anyone who maintains a fork of the hooks.** The delivery library's list of
+known hook blobs is a UNION across releases and never a replacement. An operator's instance
+may carry bytes from a version this clone can no longer reach, so regenerating that list
+from the current tree alone would drop them and refuse a hook that really is ours.
+
+**A correction to the 2.6.1 entry, dated 2026-09-10.** Two figures in that entry are
+restated here rather than rewritten there, because a published entry is a record of what
+was said. It reported that each relocated comment block "keeps one pointer line naming its
+ruling and date": the 199 pointer lines are there, and 86 of them read "(undated)", because
+the block carried no date of its own and the private record says so rather than supplying
+one. It also reported "2,875 lines of rule history" leaving the five files, which is a
+plain diff's removed-line count between the two published trees; git's own numstat of the
+relocating commit reads 2,876 removed against 200 added, and GNU diff reads 2,877 against
+201. The net is 2,676 by every one of the three.
+
+**The Known-limitations full text points the way it means.** After 2.6.1 reordered the
+list, five cross-references sent the reader above for a bullet that sits below, or below
+for one that sits above; they are fixed in place in `LIMITATIONS.md`. One of them had been
+pointing at the wrong section since before that release. No limitation changed, no title
+moved, and both layers carried the same 37 titles at that point.
+
+**The Known-limitations list as it leaves this release: 38 design boundaries, 3 open
+limitations, 2 upstream conditions.** Six bullets enter and none leaves. Three are design
+boundaries of the diagram half, in a group of their own: what a diagram check actually
+compares (a claim to a diff, a lockfile to a command's output, and never a drawing to the
+code), that only a path-shaped drawn name is verified, and that render validation lives at
+the forge and reports rather than refuses anywhere else. The fourth is an OPEN limitation,
+disclosed with its one-edit workaround: Mermaid's inline edge-text form puts its text where
+a declaration's label goes, so a path written inside it can refuse a close for a node nobody
+drew, and the pipe form every type reference teaches has no such hazard.
+
+**The fifth and sixth enter in this release's fix round**, from its own adversarial review, and
+they are boundaries of the layers rather than of the diagram half. The session layer's ONE hard
+deny is defeated by ordinary variable expansion, so `git commit -m ${MSG} --no-verify` is allowed
+in silence: read that deny as a nudge that stops an obvious spelling and never as a boundary,
+because three crafted spellings defeat it too and the parser freeze of 2026-08-04 is why none is
+repaired. And the push-time hooks read only the branch and tag namespaces, so a push to a
+review-ref namespace, of which Gerrit's is the common one, is ungoverned by them; the hook now
+REPORTS that skip by name rather than passing in silence, and the ways through are to push the
+trunk directly or to require the forge check. Both layers carry the same six titles.
+
 ## 2.6.1
 
 **Edition v1.14 (the team edition), unchanged.** A docs patch and a no-behaviour-change

@@ -222,7 +222,23 @@ BYPASS_LEX_AWK='
 function flush() { if (inw) { W[++nw] = w }; w = ""; inw = 0 }
 function judge(   j, g, k, sub_, x) {
   if (verdict != "") { nw = 0; return }
-  for (j = 1; j <= nw; j++) if (W[j] ~ /^SETLIST_SKIP_(HOOKS|TRUNK_AUDIT)=1$/) { verdict = "var"; nw = 0; return }
+  # F2 OF THE SECOND 2.7.0 LEG: AT ASSIGNMENT POSITION, NOT ANYWHERE IN THE SEGMENT.
+  # This loop read EVERY word of the segment, so any command carrying the spelling
+  # as data drew the one hard deny in the session layer. Measured on the shipped
+  # bytes: echo "SETLIST_SKIP_HOOKS=1", grep -rn SETLIST_SKIP_HOOKS=1 . and
+  # git commit -m "SETLIST_SKIP_HOOKS=1" all denied, while one more character in
+  # the message cleared it. Two of those are read-only commands and the third is an
+  # ordinary commit, and the deny reason promised in its own last sentence that a
+  # message merely quoting the spelling is not denied.
+  # A shell assignment prefix can only appear BEFORE the command word, optionally
+  # after env or export, so that is where the test belongs. Past the command word
+  # every remaining word is data as far as this gate is concerned.
+  for (j = 1; j <= nw; j++) {
+    if (W[j] ~ /^SETLIST_SKIP_(HOOKS|TRUNK_AUDIT)=1$/) { verdict = "var"; nw = 0; return }
+    if (W[j] == "env" || W[j] == "export") continue
+    if (W[j] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
+    break
+  }
   g = 0
   for (j = 1; j <= nw; j++) if (W[j] ~ /(^|\/)git$/) { g = j; break }
   if (g == 0) { nw = 0; return }
@@ -235,6 +251,15 @@ function judge(   j, g, k, sub_, x) {
   if (k <= nw) sub_ = W[k]
   for (j = g + 1; j <= nw; j++) {
     x = W[j]
+    # F2, second half: the OPERAND of a value-taking option is data, not a flag.
+    # git log --grep "--no-verify" was vetoed while the equals spelling of the same
+    # read-only command allowed, so two spellings of one command disagreed and the
+    # unpinned one was the hole. A word git consumes as a value cannot also be the
+    # flag that disables hooks: git commit --message --no-verify sets a message and
+    # passes no such flag. The attacking spellings are untouched, because in
+    # git commit --no-verify -m x and in git commit -m x --no-verify the word is not
+    # preceded by an option expecting a value.
+    if (j > g + 1 && W[j - 1] ~ /^(-m|--message|--grep|--author|--committer|--date|-F|--file|--pathspec-from-file)$/) continue
     if (x == "--no-verify" || x == "--no-verif" || x == "--no-veri") { verdict = "noverify"; break }
     if (sub_ == "commit" && j > k && x ~ /^-[aeiopqsvz]*n[a-zA-Z]*$/) { verdict = "noverify"; break }
     if ((x == "-c" && j < nw && tolower(W[j + 1]) ~ /^core\.hookspath(=|$)/) || tolower(x) ~ /^-ccore\.hookspath(=|$)/) { verdict = "hookspath"; break }

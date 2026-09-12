@@ -129,3 +129,14 @@ stops nothing and reports nothing.
 Steering doc content, the founding ADRs, the first specs, `RUNBOOK.md`, and the
 tailored slots above. Phase 1 never writes a file that encodes a Step 2
 decision.
+
+- `root/DIAGRAM-HEADER.md`: the four-line header every file under
+  `docs/diagrams/` opens with, and the shape `/setlist:new` and
+  `/setlist:retrofit` seed L1 and L2 from in phase 2. It is a template with no
+  `.tmpl` suffix on purpose: the suffix means placeholder substitution at STAMP
+  time, and nothing here is substituted by `stamp.sh`. Its angle-bracket fields
+  are filled by the model with the human, because `Shows:` and `Encodes:` are
+  Step 2 decisions about what the picture claims, and phase 1 never writes one
+  of those. The directory `docs/diagrams/` is likewise created in phase 2 and
+  not by the stamp: its presence is the switch that arms the close's diagram
+  checks, and arming a check is not a mechanical copy.

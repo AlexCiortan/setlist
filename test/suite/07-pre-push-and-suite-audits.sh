@@ -98,6 +98,19 @@ git -C "$PPE" fetch -q origin_i
 run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPE' && CLAUDE_PLUGIN_ROOT='$ROOT' bash '$PP' origin_i '$WORK/nonempty-i.git' <<< 'refs/heads/spec/0009-raw $FOID refs/heads/spec/0009-raw $ZERO'"
 expect_script "pre-push i: a feature branch pushed to a NON-EMPTY remote is an ordinary spec push, allowed" 0
 
+# DE14, the review-ref namespace (F4 of the 2.7.0 leg, fix round 1). The hook
+# matches refs/heads/* and refs/tags/* and nothing else, so a push to Gerrit's
+# refs/for/<branch> ran neither the content scan nor the trunk audit AND SAID
+# NOTHING, leaving at exit 0 looking governed. The scope is unchanged by ruling,
+# because teaching this hook another forge's ref grammar ships a spelling nobody
+# here can exercise; what changed is the silence. Both directions in one case:
+# the report fires by its CODE (never its prose, per the rule below), and the
+# push is still ALLOWED, so a hook that has merely declined to audit a ref it
+# does not own denies nothing. It reuses origin_i because a resolvable remote is
+# what lets the rest of the hook run to its ordinary end.
+run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPE' && CLAUDE_PLUGIN_ROOT='$ROOT' bash '$PP' origin_i '$WORK/nonempty-i.git' <<< 'refs/heads/main $MOID refs/for/main $ZERO'"
+expect_script "pre-push reviewref: a push to a namespace this hook does not read is REPORTED by code and still allowed" 0 "SLH-REF-NOT-AUDITED"
+
 # =============================================================================
 # NO TEST MAY MATCH A DENY ON ITS PROSE (cut worklist 4.5)
 #

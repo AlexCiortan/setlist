@@ -39,6 +39,13 @@ question. One round, genuine forks only, recommendations inline, and the same
 opener: "what has changed since this framework edition was written" comes
 first.
 
+Ask the `diagram_command` question in this round too, DEFAULT NONE: is there a
+command that prints this project's structure as one Mermaid block (an import
+graph, a schema dump)? A yes is recorded in `.claude/sdd.json` beside
+`gate_command` and its committed output under `docs/diagrams/generated/` must
+then equal what it prints at every close; a no records nothing, which is the
+right default.
+
 Verify the environment in this round too: the `opusplan` live probe, and
 `command -v jq`. The three stamped gates are advisory and PERMIT without jq; the GIT hooks fail closed without it, so a retrofit
 onto a machine that lacks it will deny its own first commits. Report the
@@ -89,10 +96,33 @@ commits the loop depends on.
 All from the loaded Part: steering docs DESCRIBE what is, with Current vs
 target callouts wherever reality and intent diverge; DECISIONS.md seeded with
 INFERRED ADRs for the flip ceremony; the diagram drawn from the real dependency
-graph; the queue per Step 4 (spec 0001 is characterization tests around the
+graph, which for this edition means SEEDING `docs/diagrams/` from the inventory
+you already read (see below); the queue per Step 4 (spec 0001 is characterization tests around the
 de-facto core abstraction unless its Goal justifies otherwise); the whole
 retrofit landing as ONE commit on the default branch with message prefix
 `framework:`; and the Step 5 hand-off lines in RUNBOOK.md.
+
+### Seeding `docs/diagrams/` in phase 2
+
+Create the directory and write `docs/diagrams/context.md` at L1 and the L2
+container block at the bottom of `steering/structure.md`, both from the Step 1
+inventory you have already read, under the `diagrams` skill's rules, each
+opening with the four-line header from
+`${CLAUDE_PLUGIN_ROOT}/templates/root/DIAGRAM-HEADER.md` and
+`Synced by: retrofit`. Node names are the de-facto role paths the inventory
+found, so they resolve against the tree from the first close. This is the ONE
+scan-and-draw-fresh a retrofit gets, and it is bounded by the same read you
+already showed the user: it draws what exists, not what should exist, and a box
+you cannot point at a path for does not go in.
+
+Say plainly what creating the directory does: its presence ARMS the close's
+diagram checks, so from the first spec onward a close that says `updated` names
+its files and one that says `no impact` while a diagram moved is refused. Show
+the seeded files to the user before the retrofit commit, the way you showed the
+inventory; a diagram they cannot read as true of their own code is redrawn now,
+not accepted and fixed later. A project that would rather not opt in yet deletes
+the directory, and every reader behaves as it did before the diagram half
+existed.
 
 ## Gotchas (field-observed)
 
