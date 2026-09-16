@@ -129,16 +129,6 @@ if git -C "$D2" push -q origin main >"$WORK/rc2d2.out" 2>&1; then
   ok "RC2 d twin: a clean push still lands under color.ui=always"
 else bad "RC2 d twin: a clean push still lands under color.ui=always" "$(tr '\n' ' ' < "$WORK/rc2d2.out" | cut -c1-200)"; fi
 
-# --- e. the advisory commit gate under color.ui=always -----------------------
-E="$WORK/rc2-e"; rm -rf "$E"; git_init "$E"; sdd_json "$E"; git -C "$E" config color.ui always
-printf '%s\n' "$RC2_SECRET" > "$E/config.txt"; git -C "$E" add config.txt
-run_hook "$HOOKS/commit-gate.sh" "$E" "$(bash_payload 'git commit -m "config"')"
-expect_deny "RC2 e: the advisory commit gate denies a secret under color.ui=always" "secret-shaped"
-git -C "$E" reset -q; rm -f "$E/config.txt"
-printf 'clean\n' > "$E/clean.md"; git -C "$E" add clean.md
-run_hook "$HOOKS/commit-gate.sh" "$E" "$(bash_payload 'git commit -m "clean"')"
-expect_allow "RC2 e twin: the advisory commit gate allows clean content under color.ui=always"
-
 # --- f. the lifecycle detector under color.ui=always --------------------------
 F="$(rc2_mk f)"; git -C "$F" config color.ui always
 printf '# Spec 0001 - thing\n\nStatus: BUILT\n\n## Goal\n\nx\n' > "$F/specs/0001-thing.md"
@@ -187,18 +177,6 @@ rc2_clean "$G"; rm -f "$G/.gitattributes"; git -C "$G" config --unset diff.broke
 if rc2_commit "$G" docs/notes.txt "clean prose" "$WORK/rc2g2.out"; then
   ok "RC2 g twin: with the driver removed, the same content commits"
 else bad "RC2 g twin: with the driver removed, the same content commits" "$(tr '\n' ' ' < "$WORK/rc2g2.out" | cut -c1-200)"; fi
-
-# --- h. git DIES at the render under the advisory gate ---------------------------
-H="$WORK/rc2-h"; rm -rf "$H"; git_init "$H"; sdd_json "$H"; rc2_break_render "$H"
-printf 'clean\n' > "$H/clean.md"; git -C "$H" add clean.md
-run_hook "$HOOKS/commit-gate.sh" "$H" "$(bash_payload 'git commit -m "clean"')"
-RC2H_CODE="$(printf '%s' "$HOOK_OUT" | jq -r '.setlistAdvisory.code // "<absent>"' 2>/dev/null)"
-if [[ "$RC2H_CODE" == "CM-NO-GIT" ]]; then
-  ok "RC2 h: the advisory commit gate reports CM-NO-GIT when git cannot render the staged diff"
-else
-  bad "RC2 h: the advisory commit gate reports CM-NO-GIT when git cannot render the staged diff" \
-      "code=[$RC2H_CODE]: the probe saw git run, the render died, and the gate read empty as clean"
-fi
 
 # --- i. git DIES at the render under the push-time walk --------------------------
 I="$(rc2_mk i)"
@@ -290,20 +268,6 @@ if git -C "$M" commit -qm "flip" >"$WORK/rc2m.out" 2>&1; then
   bad "RC2 m: the lifecycle detector ignores diff.external and still sees the Status flip" \
       "it committed: the external driver died, the detector read nothing, and the flip went through without STATUS.md"
 else rc2_refused "RC2 m: the lifecycle detector ignores diff.external and still sees the Status flip" "$WORK/rc2m.out" SLH-STATUS-MISSING; fi
-
-# --- n. the same driver at the advisory gate's two sites -------------------------
-N="$WORK/rc2-n"; rm -rf "$N"; git_init "$N"; sdd_json "$N"; mkdir -p "$N/specs"
-printf '# Spec 0001 - thing\n\nStatus: ACTIVE\n' > "$N/specs/0001-thing.md"
-printf '# inv\n\n| Spec | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | thing | ACTIVE | |\n' > "$N/specs/STATUS.md"
-git -C "$N" add -A >/dev/null 2>&1; git -C "$N" commit -qm "spec" >/dev/null 2>&1
-git -C "$N" config diff.external false
-printf '# Spec 0001 - thing\n\nStatus: BUILT\n' > "$N/specs/0001-thing.md"; git -C "$N" add specs/0001-thing.md
-run_hook "$HOOKS/commit-gate.sh" "$N" "$(bash_payload 'git commit -m "flip"')"
-expect_deny "RC2 n: the advisory gate ignores diff.external and still demands STATUS.md for a Status flip" "STATUS.md"
-git -C "$N" reset -q; git -C "$N" checkout -q -- specs/0001-thing.md
-printf '%s\n' "$RC2_SECRET" > "$N/config.txt"; git -C "$N" add config.txt
-run_hook "$HOOKS/commit-gate.sh" "$N" "$(bash_payload 'git commit -m "config"')"
-expect_deny "RC2 n2: the advisory gate ignores diff.external and still sees a secret" "secret-shaped"
 
 # --- o. prefix settings, measured harmless and pinned as such ---------------------
 O="$(rc2_mk o)"; git -C "$O" config diff.noprefix true; git -C "$O" config diff.mnemonicPrefix true
@@ -433,40 +397,20 @@ jc_hook() { # jc_hook <bin> <hook-file> <project-dir> <payload>
 }
 
 # --- F6 at the four advisory hooks: a quiet jq is a broken jq --------------
-JCL="$WORK/jc-close"; close_fixture "$JCL" no no answered yes no true   # healthy verdict: a deny (no Closing report)
 JCC="$WORK/jc-commit"; git_init "$JCC"; sdd_json "$JCC" true main true
 JSC="$WORK/jc-scope"; git_init "$JSC"; sdd_json "$JSC" true main true; mkdir -p "$JSC/src"; printf 'x\n' > "$JSC/src/app.js"
 mkdir -p "$JCC/specs" "$JSC/specs"; printf '# inv\n' > "$JCC/specs/STATUS.md"; printf '# inv\n' > "$JSC/specs/STATUS.md"
 
-jc_hook "$JC_HEALTHY" "$HOOKS/close-gate.sh" "$JCL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "0130 F6 control: the close gate denies the unauthored close under a healthy jq" "Closing report"
-jc_hook "$JC_QUIETJQ" "$HOOKS/close-gate.sh" "$JCL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "0130 F6 a: the close gate names CG-JQ-BROKEN under a jq that exits 0 printing nothing" "CG-JQ-BROKEN"
-jc_hook "$JC_QUIETJQ" "$HOOKS/commit-gate.sh" "$JCC" "$(bash_payload 'git commit -m "clean"')"
-expect_deny "0130 F6 b: the commit gate names CM-JQ-BROKEN under a quiet jq" "CM-JQ-BROKEN"
 jc_hook "$JC_QUIETJQ" "$HOOKS/scope-hook.sh" "$JSC" "$(edit_payload "$JSC/src/app.js")"
 expect_deny "0130 F6 c: the scope hook names SH-JQ-BROKEN under a quiet jq, not a config code" "SH-JQ-BROKEN"
 jc_hook "$JC_QUIETJQ" "$HOOKS/regrounding-hook.sh" "$JCC" '{"source":"startup"}'
 expect_context "0130 F6 d: the regrounding hook still emits valid JSON carrying the jq warning under a quiet jq" "jq is not usable"
-# The controls that keep a through d honest: a payload the gate does not govern stays silent.
-jc_hook "$JC_QUIETJQ" "$HOOKS/close-gate.sh" "$JCL" "$(bash_payload 'ls -la')"
-expect_allow "0130 F6 e: under a quiet jq a command the close gate does not govern is still silent"
-jc_hook "$JC_QUIETJQ" "$HOOKS/commit-gate.sh" "$JCC" "$(bash_payload 'apt-get install -y jq')"
-expect_allow "0130 F6 f: under a quiet jq the command that repairs jq is not gated"
 
 # --- F12: the input is read by the shell, and an empty input is reported ----
-jc_hook "$JC_NOCAT" "$HOOKS/close-gate.sh" "$JCL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "0130 F12 a: the close gate judges the merge on a PATH with no cat" "Closing report"
-jc_hook "$JC_NOCAT" "$HOOKS/commit-gate.sh" "$JCC" "$(bash_payload 'git add -A && git commit -m "x"')"
-expect_deny "0130 F12 b: the commit gate judges the compound commit on a PATH with no cat" "one step"
 jc_hook "$JC_NOCAT" "$HOOKS/scope-hook.sh" "$JSC" "$(edit_payload "$JSC/src/app.js")"
 expect_deny "0130 F12 c: the scope hook judges the trunk write on a PATH with no cat, not SH-NO-PATH" "SH-TRUNK-WRITE"
 jc_hook "$JC_NOCAT" "$HOOKS/regrounding-hook.sh" "$JCC" '{"source":"startup"}'
 expect_context "0130 F12 d: the regrounding hook delivers the pointer on a PATH with no cat" "STATUS.md"
-jc_hook "$JC_HEALTHY" "$HOOKS/close-gate.sh" "$JCL" ""
-expect_deny "0130 F12 e: an EMPTY payload at the close gate is reported as CG-NO-INPUT, not exit 0 in silence" "CG-NO-INPUT"
-jc_hook "$JC_HEALTHY" "$HOOKS/commit-gate.sh" "$JCC" ""
-expect_deny "0130 F12 f: an EMPTY payload at the commit gate is reported as CM-NO-INPUT" "CM-NO-INPUT"
 jc_hook "$JC_HEALTHY" "$HOOKS/scope-hook.sh" "$JSC" ""
 expect_deny "0130 F12 g: an EMPTY payload at the scope hook keeps SH-NO-PATH" "SH-NO-PATH"
 

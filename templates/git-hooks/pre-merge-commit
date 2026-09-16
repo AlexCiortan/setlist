@@ -110,7 +110,7 @@ fi
 # The expensive half, and the reason this lives at merge time. It can be the
 # project's full suite: the `close` tier of the gates block (P2, 2.6.0), which
 # reads the single gate_command when no block is declared. Run ONCE per close,
-# here, since 2.6.0: the session-layer close gate no longer runs it.
+# here, since 2.6.0: no session hook runs it.
 # fail-open-ok: same reason; the refusal is recorded in SLH_REFUSED and the
 # decision is taken by the check below, which is the only exit that matters.
 slh_run_gate_command "$PROJ" close || true

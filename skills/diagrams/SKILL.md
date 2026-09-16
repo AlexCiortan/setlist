@@ -1,6 +1,6 @@
 ---
 name: diagrams
-description: "Diagrams as close-gated source: the routing test that picks a type, the drawing and truthfulness rules, altitude and layout, node evidence, the Design sketch at creation and the sync at close"
+description: "Diagrams as source checked at the close: the routing test that picks a type, the drawing and truthfulness rules, altitude and layout, node evidence, the Design sketch at creation and the sync at close"
 ---
 
 Condensed binding of Part 4's architecture-diagram section and the diagram
@@ -50,6 +50,26 @@ of its own, never a side effect of an upgrade.
   `components/` directory beneath it, so the only way down to twelve is to cut a
   node, and cutting is the work. Cut the node whose absence costs the reader
   least, and say in the prose that it is not drawn.
+- **Edge labels use the pipe form, and only the pipe form: `-->|"text"|`, never
+  `a -- text --> b`.** In the inline form the text sits where a declaration's
+  label sits, so a path written inside it (`a -- reads(src/gone.json) --> b`) is
+  read as a node and can refuse your close for a node you never drew. No reader
+  here can tell the two apart; the pipe form has no such hazard, and every type
+  reference teaches it. It is the one mitigation for that refusal, which is why
+  it is stated here and not only in a reference.
+- **Legible, not only true: four ceilings beside the twelve nodes.** At most
+  **twelve edges**. No arrow label over **45 characters**, counting the text
+  between the quotes. At most **400 characters** of arrow-label text across the
+  whole figure. **No subgraph as an edge endpoint**: an arrow starts and ends on
+  a node, never on a box, or it lands on the box's border with nothing under it.
+  And **a label that needs a clause belongs in the prose under the figure**: the
+  arrow carries its verb and its object (the command, the read, the event), and
+  a condition, a consequence or an exception after it goes in the sentences that
+  say what the figure encodes. The numbers were set by measuring every Mermaid
+  block drawn under this skill: all of them sit under all four except the one
+  that prompted them, which drew 12 nodes, 15 edges, a 118-character label, 682
+  characters of label text and 3 arrows ending on a box. Nothing mechanical reads
+  these ceilings; the drawer holds them, as the one-sense rule is held.
 
 ## The routing test
 
@@ -129,11 +149,9 @@ them by being believed when you should not have been: the rhombus and hexagon
 (`a ["src/a"]`). Use the shapes the type references show, with the bracket
 against the id.
 
-**Label your edges with the pipe form**, `-->|"text"|`, which every type reference
-here teaches. Mermaid's other spelling, `a -- text --> b`, puts the text where
-the reader cannot tell it from a declaration, so a path written inside it
-(`a -- reads(src/gone.json) --> b`) is still read as a node and can refuse your
-close for a node you never drew. The pipe form has no such hazard.
+**The pipe form is the rule for edge labels** (the opening list above): the
+inline `a -- text --> b` spelling is the one place a drawn name can be read out
+of an edge label, and the pipe form is the whole mitigation.
 
 ## At creation
 

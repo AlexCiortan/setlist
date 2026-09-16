@@ -1,7 +1,9 @@
 # stateDiagram-v2: what states can this thing be in
 
 Invent no topology, keep exact names, label every arrow, one figure one claim, no
-line ranges as evidence, no rendered image as source.
+line ranges as evidence, no rendered image as source; and hold the skill's four
+ceilings: twelve edges, 45 characters a label, 400 characters of label text, no
+subgraph as an endpoint, with any clause moved into the prose under the figure.
 
 This is the type for a lifecycle: the states a record, a job or a branch can
 hold, the events that move between them, the retries, and the terminal outcomes.

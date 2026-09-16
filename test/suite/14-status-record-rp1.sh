@@ -25,29 +25,17 @@ RP1_LOCK_BAD=""
 for RP1_NAME in $RP1_JQ_NAMES; do
   RP1_REF="$(grep -m1 -E "^[[:space:]]*${RP1_NAME}=" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed 's/^[[:space:]]*//')"
   [[ -n "$RP1_REF" ]] || RP1_LOCK_BAD="$RP1_LOCK_BAD lib:$RP1_NAME:absent"
-  for RP1_F in "$SCRIPTS/trunk-audit.sh" "$HOOKS/close-gate.sh"; do
+  for RP1_F in "$SCRIPTS/trunk-audit.sh"; do
     RP1_GOT="$(grep -m1 -E "^[[:space:]]*${RP1_NAME}=" "$RP1_F" | sed 's/^[[:space:]]*//')"
     # fail-open-ok: an absent line is recorded as a mismatch, not skipped.
     [[ "$RP1_GOT" == "$RP1_REF" && -n "$RP1_GOT" ]] || RP1_LOCK_BAD="$RP1_LOCK_BAD $(basename "$RP1_F"):$RP1_NAME"
   done
 done
 if [[ -z "$RP1_LOCK_BAD" ]]; then
-  ok "record lockstep: all seven SLH_RECORD_*_JQ readers are byte-identical across the hook library, trunk-audit.sh and close-gate.sh"
+  ok "record lockstep: all seven SLH_RECORD_*_JQ readers are byte-identical across the hook library and trunk-audit.sh"
 else
-  bad "record lockstep: all seven SLH_RECORD_*_JQ readers are byte-identical across the hook library, trunk-audit.sh and close-gate.sh" \
+  bad "record lockstep: all seven SLH_RECORD_*_JQ readers are byte-identical across the hook library and trunk-audit.sh" \
       "mismatched or absent:$RP1_LOCK_BAD"
-fi
-
-# The advisory commit gate keeps its OWN copy rather than sourcing the library
-# (the KL4-A1 ruling: the trees are separate, the RULE is shared and the suite
-# is what asserts it). Compare VALUES after stripping the differing names.
-RP1_CM_VAL="$(grep -m1 -E '^[[:space:]]*CM_RECORD_CHECK_JQ=' "$HOOKS/commit-gate.sh" | sed 's/^[[:space:]]*CM_RECORD_CHECK_JQ=//')"
-RP1_LIB_VAL="$(grep -m1 -E '^[[:space:]]*SLH_RECORD_CHECK_JQ=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed 's/^[[:space:]]*SLH_RECORD_CHECK_JQ=//')"
-if [[ -n "$RP1_CM_VAL" && "$RP1_CM_VAL" == "$RP1_LIB_VAL" ]]; then
-  ok "record lockstep: commit-gate's CM_RECORD_CHECK_JQ carries the library's grammar byte for byte"
-else
-  bad "record lockstep: commit-gate's CM_RECORD_CHECK_JQ carries the library's grammar byte for byte" \
-      "the advisory copy drifted from the library's, so the two layers would disagree about what parses"
 fi
 
 # --- the frozen readers, byte-identical to the PRE-RECORD blob --------------
@@ -59,8 +47,7 @@ else
   for RP1_AWKNAME in QA_PASS1_AWK TEMPLATE_FENCE_AWK LIVE_TEXT_AWK; do
     for RP1_PAIR in \
       "templates/git-hooks/setlist-hook-lib.sh:setlist-hook-lib.sh" \
-      "scripts/trunk-audit.sh:trunk-audit.sh" \
-      "templates/hooks/close-gate.sh:close-gate.sh"; do
+      "scripts/trunk-audit.sh:trunk-audit.sh"; do
       RP1_CUR="$ROOT/${RP1_PAIR%%:*}"; RP1_OLD="$RP1_PRE/${RP1_PAIR#*:}"
       RP1_CURL="$(grep -m1 -E "^[[:space:]]*(SLH_)?${RP1_AWKNAME}=" "$RP1_CUR" | sed -e 's/^[[:space:]]*//' -e 's/^SLH_//')"
       RP1_OLDL="$(grep -m1 -E "^[[:space:]]*(SLH_)?${RP1_AWKNAME}=" "$RP1_OLD" | sed -e 's/^[[:space:]]*//' -e 's/^SLH_//')"
@@ -69,9 +56,9 @@ else
     done
   done
   if [[ -z "$RP1_FROZEN_BAD" ]]; then
-    ok "record frozen readers: the three frozen awk programs are byte-identical to the pre-record generation in all three carriers (the absence path is RETAINED, proven against the pinned blob)"
+    ok "record frozen readers: the three frozen awk programs are byte-identical to the pre-record generation in both carriers that remain (the absence path is RETAINED, proven against the pinned blob)"
   else
-    bad "record frozen readers: the three frozen awk programs are byte-identical to the pre-record generation in all three carriers (the absence path is RETAINED, proven against the pinned blob)" \
+    bad "record frozen readers: the three frozen awk programs are byte-identical to the pre-record generation in both carriers that remain (the absence path is RETAINED, proven against the pinned blob)" \
         "drifted:$RP1_FROZEN_BAD; the frozen readers are never repaired and never removed"
   fi
 fi
@@ -203,8 +190,6 @@ else
         "refused for another reason: $(tr '\n' ' ' < "$WORK/rp1-lc.out")"
   fi
 fi
-run_hook "$HOOKS/commit-gate.sh" "$RP1L" "$(bash_payload 'git commit -m "flip"')"
-expect_deny "record lifecycle b: the advisory gate mirrors the record-without-page demand" "CM-STATUS-MISSING"
 git -C "$RP1L" reset -q --hard HEAD 2>/dev/null
 
 # The ADOPTION commit: a legacy instance gains the record; the addition is an
@@ -237,6 +222,50 @@ if printf '%s' "$RP1B_OUT" | grep -q '\[SLH-RECORD-NO-CLOSE\]'; then
 else
   bad "record audit a: a record flip to closed without close facts is a VIOLATION named SLH-RECORD-NO-CLOSE" \
       "audit said: $(printf '%s' "$RP1B_OUT" | tail -2 | tr '\n' ' ')"
+fi
+
+# --- the same refusal at the MERGE, which nothing asserted until spec 0143 ----
+# The kill watch of spec 0143 turned SLH-RECORD-NO-CLOSE's guard in the hook
+# library off and the whole suite stayed GREEN: the refusal was asserted only
+# against the trunk audit (above) and, as CG-RECORD-NO-CLOSE, against the close
+# gate, which 2.8.0 deletes. So a spec branch whose record closes without its
+# facts must be REFUSED at pre-merge-commit, by that code, with nothing landing
+# on the trunk; and its twin, the same close WITH the facts, must merge, so the
+# case refuses the defect and not the close. Watched red first on a library
+# with the guard turned off (spec 0143, Progress): the factless merge landed.
+rp1_merge_close() { # rp1_merge_close <dir> <facts: yes|no> -> merge rc in RP1MC_RC, output in <dir>.out
+  local d="$1"
+  rp1_fixture "$d"
+  git -C "$d" checkout -qb spec/0001-thing
+  printf 'feature\n' > "$d/src/feature.js"
+  printf '# Spec 0001\n\nStatus: CLOSED\n\n## Goal\n\nthing\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$d/specs/0001-thing.md"
+  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n' > "$d/specs/STATUS.md"
+  if [[ "$2" == "yes" ]]; then
+    printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$d/.claude/status.json"
+  else
+    printf '{"setlist_status":1,"specs":{"0001":{"status":"closed"}},"chores":{}}\n' > "$d/.claude/status.json"
+  fi
+  git -C "$d" add -A >/dev/null 2>&1
+  git -C "$d" -c core.hooksPath=/dev/null commit -qm "close 0001" >/dev/null 2>&1
+  git -C "$d" checkout -q main
+  git -C "$d" merge --no-ff -q -m "merge spec/0001-thing" spec/0001-thing > "$d.out" 2>&1
+  RP1MC_RC=$?
+}
+RP1MC="$WORK/rp1-merge-noclose"
+rp1_merge_close "$RP1MC" no
+if [[ "$RP1MC_RC" -ne 0 ]] && ! git -C "$RP1MC" cat-file -e main:src/feature.js 2>/dev/null && grep -q 'SLH-RECORD-NO-CLOSE' "$RP1MC.out"; then
+  ok "record merge a: pre-merge-commit REFUSES a spec whose record closes without its close facts (SLH-RECORD-NO-CLOSE), and nothing lands on the trunk"
+else
+  bad "record merge a: pre-merge-commit REFUSES a spec whose record closes without its close facts (SLH-RECORD-NO-CLOSE), and nothing lands on the trunk" \
+      "rc=$RP1MC_RC landed=$(git -C "$RP1MC" cat-file -e main:src/feature.js 2>/dev/null && echo yes || echo no): $(tr '\n' ' ' < "$RP1MC.out" | cut -c1-200)"
+fi
+RP1MT="$WORK/rp1-merge-close"
+rp1_merge_close "$RP1MT" yes
+if [[ "$RP1MC_RC" -eq 0 ]] && git -C "$RP1MT" cat-file -e main:src/feature.js 2>/dev/null; then
+  ok "record merge b (twin): the same close WITH its facts merges, so the refusal is the facts and not the close"
+else
+  bad "record merge b (twin): the same close WITH its facts merges, so the refusal is the facts and not the close" \
+      "rc=$RP1MC_RC: $(tr '\n' ' ' < "$RP1MT.out" | cut -c1-200)"
 fi
 
 RP1C="$WORK/rp1-audit-nospec"
@@ -312,53 +341,6 @@ else
       "audit said: $(printf '%s' "$RP1F_OUT" | tail -2 | tr '\n' ' ')"
 fi
 
-# --- the session mirror at close-gate ----------------------------------------
-RP1CG="$WORK/rp1-cg"
-rp1_fixture "$RP1CG"
-git -C "$RP1CG" checkout -qb spec/0001-thing
-printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$RP1CG/specs/0001-thing.md"
-sed -e 's/| ACTIVE |/| CLOSED |/' "$RP1CG/specs/STATUS.md" > "$RP1CG/specs/STATUS.md.new" && mv "$RP1CG/specs/STATUS.md.new" "$RP1CG/specs/STATUS.md"
-printf '{"setlist_status":1,"specs":{"0001":{"status":"closed"}},"chores":{}}\n' > "$RP1CG/.claude/status.json"
-printf 'code\n' > "$RP1CG/src/f.js"
-git -C "$RP1CG" add -A >/dev/null 2>&1
-git -C "$RP1CG" -c core.hooksPath=/dev/null commit -qm "record without facts" >/dev/null 2>&1
-git -C "$RP1CG" checkout -q main
-run_hook "$HOOKS/close-gate.sh" "$RP1CG" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
-expect_deny "record close-gate a: a branch record without close facts is warned CG-RECORD-NO-CLOSE (prose fully compliant, so the record is the only reader that can see it)" "CG-RECORD-NO-CLOSE"
-
-git -C "$RP1CG" checkout -q spec/0001-thing
-printf '{"setlist_status":1,"specs":{},"chores":{}}\n' > "$RP1CG/.claude/status.json"
-git -C "$RP1CG" add -A >/dev/null 2>&1
-git -C "$RP1CG" -c core.hooksPath=/dev/null commit -qm "entry removed" >/dev/null 2>&1
-git -C "$RP1CG" checkout -q main
-run_hook "$HOOKS/close-gate.sh" "$RP1CG" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
-expect_deny "record close-gate b: a spec with no record entry is warned CG-RECORD-NO-SPEC" "CG-RECORD-NO-SPEC"
-
-git -C "$RP1CG" checkout -q spec/0001-thing
-printf 'not json at all\n' > "$RP1CG/.claude/status.json"
-git -C "$RP1CG" add -A >/dev/null 2>&1
-git -C "$RP1CG" -c core.hooksPath=/dev/null commit -qm "record garbage" >/dev/null 2>&1
-git -C "$RP1CG" checkout -q main
-run_hook "$HOOKS/close-gate.sh" "$RP1CG" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
-expect_deny "record close-gate c: a malformed branch record is warned CG-RECORD-MALFORMED, in the git hooks' own words" "CG-RECORD-MALFORMED"
-
-git -C "$RP1CG" checkout -q spec/0001-thing
-printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RP1CG/.claude/status.json"
-git -C "$RP1CG" add -A >/dev/null 2>&1
-git -C "$RP1CG" -c core.hooksPath=/dev/null commit -qm "facts complete" >/dev/null 2>&1
-git -C "$RP1CG" checkout -q main
-run_hook "$HOOKS/close-gate.sh" "$RP1CG" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
-expect_allow "record close-gate d: the compliant recorded close is allowed in silence"
-
-# --- the advisory commit gate's malformed mirror ------------------------------
-RP1CM="$WORK/rp1-cm"
-rp1_fixture "$RP1CM"
-printf 'not json at all\n' > "$RP1CM/.claude/status.json"
-printf 'x\n' >> "$RP1CM/specs/STATUS.md"
-git -C "$RP1CM" add -A >/dev/null 2>&1
-run_hook "$HOOKS/commit-gate.sh" "$RP1CM" "$(bash_payload 'git commit -m x')"
-expect_deny "record commit-gate: a staged malformed record is warned CM-RECORD-MALFORMED at the earliest layer that sees it" "CM-RECORD-MALFORMED"
-
 # --- feature code without a record flip: the structured SLH-CLOSES-NO-SPEC ----
 RP1N="$WORK/rp1-noflip"
 rp1_fixture "$RP1N"
@@ -407,7 +389,7 @@ if [[ ! -d "$RP1_PRE" ]]; then
 else
   RP1DD="$WORK/rp1-diff"; rm -rf "$RP1DD"; mkdir -p "$RP1DD"
   RP1_DIFF_N=0; RP1_DIFF_BAD=""
-  for RP1_CASE in clean lifecycle emdash close-merge close-gate-deny commit-gate-lc audit-close; do
+  for RP1_CASE in clean lifecycle emdash close-merge audit-close; do
     for RP1_GEN in pre now; do
       d="$RP1DD/$RP1_CASE-$RP1_GEN"
       rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude" "$d/.githooks"
@@ -419,10 +401,10 @@ else
       printf '# Spec 0001\n\nStatus: ACTIVE\n\n## Goal\n\nthing\n' > "$d/specs/0001-thing.md"
       if [[ "$RP1_GEN" == "pre" ]]; then
         cp "$RP1_PRE/pre-commit" "$RP1_PRE/pre-merge-commit" "$RP1_PRE/setlist-hook-lib.sh" "$d/.githooks/"
-        RP1_CG="$RP1_PRE/close-gate.sh"; RP1_CM="$RP1_PRE/commit-gate.sh"; RP1_TA="$RP1_PRE/trunk-audit.sh"
+        RP1_TA="$RP1_PRE/trunk-audit.sh"
       else
         cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
-        RP1_CG="$HOOKS/close-gate.sh"; RP1_CM="$HOOKS/commit-gate.sh"; RP1_TA="$SCRIPTS/trunk-audit.sh"
+        RP1_TA="$SCRIPTS/trunk-audit.sh"
       fi
       chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
       printf 'seed\n' > "$d/seed.txt"
@@ -459,14 +441,6 @@ else
           # The merge subject line embeds nothing generation-specific; strip
           # the object names git prints, which differ per repo by hash.
           sed -e 's/[0-9a-f]\{7,40\}/HASH/g' "$RP1DD/$RP1_CASE-$RP1_GEN.out" > "$RP1DD/$RP1_CASE-$RP1_GEN.out.n" && mv "$RP1DD/$RP1_CASE-$RP1_GEN.out.n" "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
-        close-gate-deny)
-          printf '%s' "$(bash_payload 'git merge --no-ff spec/0009-none')" | CLAUDE_PROJECT_DIR="$d" bash "$RP1_CG" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
-          printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
-        commit-gate-lc)
-          printf '# Spec 0001\n\nStatus: BUILT\n\n## Goal\n\nthing\n' > "$d/specs/0001-thing.md"
-          git -C "$d" add -A >/dev/null 2>&1
-          printf '%s' "$(bash_payload 'git commit -m flip')" | CLAUDE_PROJECT_DIR="$d" bash "$RP1_CM" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
-          printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
         audit-close)
           git -C "$d" checkout -qb spec/0001-thing 2>/dev/null
           printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\na: PASS\n```\n' > "$d/specs/0001-thing.md"
@@ -490,11 +464,11 @@ else
       RP1_DIFF_BAD="$RP1_DIFF_BAD $RP1_CASE"
     fi
   done
-  if [[ "$RP1_DIFF_N" -eq 7 && -z "$RP1_DIFF_BAD" ]]; then
-    ok "record differential: with NO record present, all 7 cases are byte-identical between the pre-record and current generations, at every layer"
+  if [[ "$RP1_DIFF_N" -eq 5 && -z "$RP1_DIFF_BAD" ]]; then
+    ok "record differential: with NO record present, all 5 cases are byte-identical between the pre-record and current generations, at every layer"
   else
-    bad "record differential: with NO record present, all 7 cases are byte-identical between the pre-record and current generations, at every layer" \
-        "$RP1_DIFF_N of 7 cases compared, differing:${RP1_DIFF_BAD:- none}; absent must mean today's behaviour exactly"
+    bad "record differential: with NO record present, all 5 cases are byte-identical between the pre-record and current generations, at every layer" \
+        "$RP1_DIFF_N of 5 cases compared, differing:${RP1_DIFF_BAD:- none}; absent must mean today's behaviour exactly"
   fi
 
   # THE DISCRIMINATION CONTROL: a structured input where the generations MUST
@@ -528,7 +502,7 @@ else
     bad "record differential control: a structured input DIVERGES between the generations" \
         "the generations agreed on a malformed record, so the identity cases above may be identical because the harness compares nothing"
   else
-    ok "record differential control: a structured input DIVERGES between the generations, so the 7-case identity is evidence about absence"
+    ok "record differential control: a structured input DIVERGES between the generations, so the 5-case identity is evidence about absence"
   fi
 fi
 

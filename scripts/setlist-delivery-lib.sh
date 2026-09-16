@@ -81,6 +81,9 @@
 # that really is ours, which is the failure the content-hash design exists to
 # avoid.
 KNOWN_SETLIST_HOOK_BLOBS="
+  b8516f7f298b57eb1f3a501c58b8d584f5eaead3
+  604e2df8e3e312ed3c29989c72afdce9ec78a7f5
+  4e64547f79a4a70c5093e3e542dba26f5d7e7325
   b585923532edfffee7e7912863524d61e28d31a9
   c6435acaf6f4fa7f8c40b1e6d7d6a61ea8e16cf5
   626cef5fcb43d9206a7099749dfc2c9df1d71ca5

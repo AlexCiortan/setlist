@@ -673,134 +673,10 @@ else
   bad "coaching leak: the three hooks' header comments still document the whole-hook escape (documentation is where the human reads)" "$BD_HDR of 3 headers name it"
 fi
 
-# --- the deny half ------------------------------------------------------------
-BDC="$WORK/bypass-deny"; git_init "$BDC"; sdd_json "$BDC"
-printf 'clean content with nothing to find\n' > "$BDC/ok.md"; git -C "$BDC" add ok.md
-bd_out() { printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$BDC" bash "$HOOKS/commit-gate.sh" 2>/dev/null; }
-bd_deny() { # bd_deny <name> <command> <code>
-  local out dec code
-  out="$(bd_out "$2")"
-  dec="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
-  code="$(printf '%s' "$out" | jq -r '.setlistAdvisory.code // empty' 2>/dev/null)"
-  if [[ "$dec" == "deny" && "$code" == "$3" ]]; then
-    ok "bypass deny $1: [$2] is DENIED (permissionDecision deny) as $3"
-  else
-    bad "bypass deny $1: [$2] is DENIED (permissionDecision deny) as $3" "decision=[${dec:-none}] code=[${code:-none}]"
-  fi
-}
-bd_allow() { # bd_allow <name> <command>
-  local out dec
-  out="$(bd_out "$2")"
-  dec="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.permissionDecision // "silent"' 2>/dev/null)"
-  if [[ "$dec" != "deny" ]]; then
-    ok "bypass allow $1: [$2] is NOT denied ($dec)"
-  else
-    bad "bypass allow $1: [$2] is NOT denied" "denied as $(printf '%s' "$out" | jq -r '.setlistAdvisory.code // empty' 2>/dev/null)"
-  fi
-}
-bd_deny a 'SETLIST_SKIP_HOOKS=1 git commit -m x' CM-BYPASS-SPELLED
-bd_deny b 'SETLIST_SKIP_TRUNK_AUDIT=1 git push origin main' CM-BYPASS-SPELLED
-bd_deny c 'export SETLIST_SKIP_HOOKS=1' CM-BYPASS-SPELLED
-bd_deny d 'git commit --no-verify -m x' CM-BYPASS-SPELLED
-bd_deny e 'git push --no-verify origin main' CM-BYPASS-SPELLED
-bd_deny f 'git -c core.hooksPath=/dev/null commit -m x' CM-HOOKSPATH-MOVED
-bd_deny g 'git  -c   core.hooksPath=.nothing merge --no-ff spec/0001-thing' CM-HOOKSPATH-MOVED
-bd_deny h 'cd repo && git commit -m "x" --no-verify' CM-BYPASS-SPELLED
-
-# THE FOUR SPELLINGS THAT DEFEAT THE ONE HARD DENY (DE13, measured by the 2.7.0
-# adversarial review, each with a replay). Pinned as ALLOWED on purpose, the way
-# the pathspec hole is: this is a documented boundary, so the day one of them
-# starts denying, the suite says so instead of the docs quietly going stale.
-#
-# The first is the one that matters and the reason the public bullet does not say
-# "crafted spellings": `-m ${MSG}` is how a shell script writes a message, so a
-# cooperating developer meets it while doing nothing unusual. The parser freeze of
-# 2026-08-04 is why none of the four is repaired; the git hooks are unaffected by
-# all of them, which is where the guarantee lives.
-bd_allow de13a 'git commit -m ${MSG} --no-verify'
-bd_allow de13b "git commit \$'--no-verify' -m x"
-bd_allow de13c 'git --attr-source HEAD commit -n -m x'
-bd_allow de13d 'EV=/tmp/nohooks git --config-env=core.hooksPath=EV commit -m x'
-
-# F2 OF THE SECOND 2.7.0 LEG, fix round 2: the one hard veto stopped firing on
-# data. All four of these were DENIED on the shipped 2.7.0 candidate, and two of
-# them are read-only commands: the veto read every word of the segment for the
-# assignment spelling, and read the operand of a value-taking option as a flag.
-# Pinned in the ALLOWING direction, because a veto that fires on a grep is a false
-# denial at the only place in the session layer that can actually stop you.
-bd_allow f2a 'git commit -m "SETLIST_SKIP_HOOKS=1"'
-bd_allow f2b 'grep -rn SETLIST_SKIP_HOOKS=1 .'
-bd_allow f2c 'echo "SETLIST_SKIP_HOOKS=1"'
-bd_allow f2d 'git log --grep "--no-verify"'
-# And the escapes they are NOT allowed to have freed: assignment position, in all
-# three spellings the shell gives it, plus the flag forms on both sides of -m.
-bd_deny f2e 'SETLIST_SKIP_HOOKS=1 git commit -m x' CM-BYPASS-SPELLED
-bd_deny f2f 'env SETLIST_SKIP_TRUNK_AUDIT=1 git push origin main' CM-BYPASS-SPELLED
-bd_deny f2g 'git commit -m x --no-verify' CM-BYPASS-SPELLED
-# The 2.6.0 leg's F2, F3, F10, F11 (fix round 1, 2026-09-08), watched RED on the
-# candidate 2217acea: the span-deleting un-quoter missed every spelling git honours
-# that a quote touched, and sed paired quotes ACROSS segments. The deny is a word
-# test over a deny-local lexer now; these are the evasions.
-bd_deny i 'git commit "--no-verify" -m x' CM-BYPASS-SPELLED
-bd_deny j "git commit '--no-verify' -m x" CM-BYPASS-SPELLED
-bd_deny k 'git commit --no-veri"f"y -m x' CM-BYPASS-SPELLED
-bd_deny l 'echo "a \" b" && git commit --no-verify -m x && echo "c \" d"' CM-BYPASS-SPELLED
-bd_deny m 'git commit -n -m x' CM-BYPASS-SPELLED
-bd_deny n 'git commit -an -m x' CM-BYPASS-SPELLED
-bd_deny o 'git commit --no-veri -m x' CM-BYPASS-SPELLED
-bd_deny p 'git push --no-verif origin main' CM-BYPASS-SPELLED
-bd_deny q 'git -c "core.hooksPath=/dev/null" commit -m x' CM-HOOKSPATH-MOVED
-bd_deny r 'git -ccore.hooksPath=/dev/null commit -m x' CM-HOOKSPATH-MOVED
-bd_deny s 'SETLIST_SKIP_HOOKS="1" git commit -m x' CM-BYPASS-SPELLED
-bd_deny t 'env SETLIST_SKIP_TRUNK_AUDIT=1 git push' CM-BYPASS-SPELLED
-# THE FALSE-DENIAL SURFACE, pinned in the allowing direction: a spelling inside
-# quotes is prose, a flag word without git is not a git flag, and the variable's
-# NAME without an assignment is a grep.
-bd_allow a 'git commit -m "never use SETLIST_SKIP_HOOKS=1 here"'
-bd_allow b "git commit -m 'the flag --no-verify is refused by the gate'"
-bd_allow c 'grep -r core.hooksPath .'
-bd_allow d 'echo --no-verify'
-bd_allow e 'grep -n SETLIST_SKIP_HOOKS templates/git-hooks/pre-push'
-bd_allow f 'git commit -m x'
-# The 2.6.0 leg's F8 and F9: the same detector HARD-DENIED prose. A message is one
-# word to the lexer and never matches; a filename carrying the spelling is not
-# the spelling; -n on push is a dry run; these are the false-denial surface,
-# pinned in the allowing direction beside the evasions above.
-bd_allow g 'git commit -m "he said \"use --no-verify\" once"'
-bd_allow h "git commit -m \"it's about --no-verify\""
-bd_allow i 'echo "a \" b" && git commit -m "prose --no-verify prose" && echo "c \" d"'
-bd_allow j 'git add notes/--no-verify.md'
-bd_allow k 'git push -n origin main'
-bd_allow l 'git commit -m "SETLIST_SKIP_HOOKS=1 is documented, not coached"'
-bd_allow m 'git log --grep=--no-verify'
-# The deny reaches the MODEL: the reason is on permissionDecisionReason (deny
-# reasons are delivered verbatim, unlike allow reasons, RP5) and repeated in
-# systemMessage and setlistAdvisory.reason, the frozen contract's three fields.
-BD_OUT="$(bd_out 'SETLIST_SKIP_HOOKS=1 git commit -m x')"
-if [[ "$(printf '%s' "$BD_OUT" | jq -r '.hookSpecificOutput.permissionDecisionReason' 2>/dev/null)" == *"CM-BYPASS-SPELLED"* ]] \
-   && [[ "$(printf '%s' "$BD_OUT" | jq -r '.systemMessage' 2>/dev/null)" == *"CM-BYPASS-SPELLED"* ]] \
-   && [[ "$(printf '%s' "$BD_OUT" | jq -r '.setlistAdvisory.reason' 2>/dev/null)" == *"run the command yourself in a terminal"* ]]; then
-  ok "bypass deny: the reason carries the code in all three contract fields and says how a person proceeds"
-else
-  bad "bypass deny: the reason carries the code in all three contract fields and says how a person proceeds" "$(printf '%s' "$BD_OUT" | cut -c1-200)"
-fi
-# ABOVE THE PARSERS: the detection precedes the heredoc lexer and the wrapper
-# stripper in the file, so no parser byte is between the payload and the deny.
-BD_DENY_LINE="$(grep -n 'CM-BYPASS-SPELLED' "$HOOKS/commit-gate.sh" | grep -v '^[0-9]*:#' | head -1 | cut -d: -f1)"
-BD_LEXER_LINE="$(grep -n "^HEREDOC_AWK=" "$HOOKS/commit-gate.sh" | head -1 | cut -d: -f1)"
-BD_STRIP_LINE="$(grep -n "^strip_wrappers()" "$HOOKS/commit-gate.sh" | head -1 | cut -d: -f1)"
-if [[ -n "$BD_DENY_LINE" && -n "$BD_LEXER_LINE" && -n "$BD_STRIP_LINE" && "$BD_DENY_LINE" -lt "$BD_LEXER_LINE" && "$BD_DENY_LINE" -lt "$BD_STRIP_LINE" ]]; then
-  ok "bypass deny sits ABOVE the parsers (line $BD_DENY_LINE, before the heredoc lexer at $BD_LEXER_LINE and strip_wrappers at $BD_STRIP_LINE)"
-else
-  bad "bypass deny sits ABOVE the parsers" "deny=$BD_DENY_LINE lexer=$BD_LEXER_LINE strip=$BD_STRIP_LINE"
-fi
-# And the contract paragraph names the exception, so the header and the bytes
-# say the same thing (the repository's signature defect is a header that lies).
-if grep -q 'ALWAYS "allow", with ONE exception' "$HOOKS/commit-gate.sh" && grep -q '^# THE ONE DENY' "$HOOKS/commit-gate.sh"; then
-  ok "bypass deny: the advisory contract at the gate's head names its one exception and why"
-else
-  bad "bypass deny: the advisory contract at the gate's head names its one exception and why" "the header still promises ALWAYS allow without the exception"
-fi
+# --- the deny half: its 47 cases drove commit-gate.sh and left with it in 2.8.0
+# (spec 0144). Every deny and allow case, the three-field reason and the
+# minimality tests run against templates/hooks/bypass-deny.sh in region
+# bypass-deny-0143, which is their floor.
 
 fi; shard_region_end
 # <<< SHARD-END bypass-deny-0132
@@ -1224,26 +1100,6 @@ ar_code_of() {
 # >>> SHARD-BEGIN advisory-ruling-0132 cost=6
 if shard_region advisory-ruling-0132; then
 
-# --- the removal, asserted absent -----------------------------------------------
-if ! grep -q 'CG-GATE-COMMAND-RED\|CG-NO-GATE-COMMAND' "$HOOKS/close-gate.sh" && ! grep -q 'bash -c "\$GATE_CMD"' "$HOOKS/close-gate.sh"; then
-  ok "advisory ruling: the close gate carries neither retired code nor the gate-command run"
-else
-  bad "advisory ruling: the close gate carries neither retired code nor the gate-command run" "$(grep -n 'CG-GATE-COMMAND-RED\|CG-NO-GATE-COMMAND\|bash -c \"\$GATE_CMD\"' "$HOOKS/close-gate.sh" | head -3 | cut -c1-100 | tr '\n' ' ')"
-fi
-if grep -q 'WHAT LEFT IN 2.6.0, AND WHY' "$HOOKS/close-gate.sh" && grep -q 'THE GATE COMMAND IS NOT RUN HERE' "$HOOKS/close-gate.sh"; then
-  ok "advisory ruling: the contract at the gate's head names what left and why, and the green path says where the run went"
-else
-  bad "advisory ruling: the contract at the gate's head names what left and why, and the green path says where the run went" "one of the two sentences is missing"
-fi
-AR_TMPL="$(grep -v '^{{IF:' "$ROOT/templates/claude/settings.json.tmpl")"
-AR_CLOSE_T="$(printf '%s' "$AR_TMPL" | jq -r '[.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[] | select(.command | test("close-gate")) | .timeout] | .[0]' 2>/dev/null)"
-AR_COMMIT_T="$(printf '%s' "$AR_TMPL" | jq -r '[.hooks.PreToolUse[] | select(.matcher == "Bash") | .hooks[] | select(.command | test("commit-gate")) | .timeout] | .[0]' 2>/dev/null)"
-if [[ "$AR_CLOSE_T" == "300" && "$AR_COMMIT_T" == "300" ]]; then
-  ok "advisory ruling: the template's close-gate timeout fell to 300, the commit gate's figure"
-else
-  bad "advisory ruling: the template's close-gate timeout fell to 300, the commit gate's figure" "close=$AR_CLOSE_T commit=$AR_COMMIT_T"
-fi
-
 # --- ONE gate-command invocation per close across both layers --------------------
 # The measurement the ruling was priced on: through 2.5.0 a close ran the suite
 # twice (the close gate's PreToolUse run, verdict discarded; pre-merge-commit's
@@ -1255,15 +1111,12 @@ AR1_CNT="$WORK/ar-once.count"; rm -f "$AR1_CNT"
 jq --arg c "printf x >> $AR1_CNT" '.gate_command = $c' "$AR1/.claude/sdd.json" > "$AR1/.claude/sdd.json.n" && mv "$AR1/.claude/sdd.json.n" "$AR1/.claude/sdd.json"
 git -C "$AR1" add -A >/dev/null 2>&1; git -C "$AR1" commit -qm "gate command" >/dev/null 2>&1
 git -C "$AR1" config core.hooksPath .githooks
-printf %s "$(jq -nc '{tool_name:"Bash",tool_input:{command:"git merge --no-ff spec/0001-thing"}}')" \
-  | CLAUDE_PROJECT_DIR="$AR1" bash "$HOOKS/close-gate.sh" >/dev/null 2>&1
-AR1_SESSION="$( { [[ -f "$AR1_CNT" ]] && wc -c < "$AR1_CNT" || printf 0; } | tr -d ' ')"
 git -C "$AR1" merge --no-ff -q -m "close 0001" spec/0001-thing >/dev/null 2>&1; AR1_MRC=$?
 AR1_TOTAL="$( { [[ -f "$AR1_CNT" ]] && wc -c < "$AR1_CNT" || printf 0; } | tr -d ' ')"
-if [[ "$AR1_MRC" -eq 0 && "$AR1_TOTAL" == "1" && "$AR1_SESSION" == "0" ]]; then
-  ok "advisory ruling: a close runs the gate command ONCE, at the git hook, and never in the session layer (measured 1 where 2.5.0 measured 2)"
+if [[ "$AR1_MRC" -eq 0 && "$AR1_TOTAL" == "1" ]]; then
+  ok "advisory ruling: a close runs the gate command ONCE, at the git hook (measured 1 where 2.5.0 measured 2)"
 else
-  bad "advisory ruling: a close runs the gate command ONCE, at the git hook, and never in the session layer (measured 1 where 2.5.0 measured 2)" "merge rc=$AR1_MRC, runs after the session layer=$AR1_SESSION, runs after the merge=$AR1_TOTAL"
+  bad "advisory ruling: a close runs the gate command ONCE, at the git hook (measured 1 where 2.5.0 measured 2)" "merge rc=$AR1_MRC, runs after the merge=$AR1_TOTAL"
 fi
 
 # --- KL11: the code survives a silent sed, in all three gates ----------------------
@@ -1288,24 +1141,11 @@ ar_kl11_case() { # ar_kl11_case <hook> <payload-json> <label>
     bad "KL11 $3: under a silent sed the deny carries its code in setlistAdvisory.code, read back equal to the reason's bracket" "verdict=$verdict code=[$code] reason-bracket=[$want]: sed extracted the code through 2.5.0 and a silent sed emptied the field (the 2.5.0 leg's F12)"
   fi
 }
-ar_kl11_case commit-gate '{"tool_name":"Bash","tool_input":{"command":"git commit -m x"}}' "commit gate"
-ar_kl11_case close-gate  '{"tool_name":"Bash","tool_input":{"command":"git merge --no-ff spec/0001-thing"}}' "close gate"
 ar_kl11_case scope-hook  "$(jq -nc --arg p "$AR2/src/x.js" '{tool_name:"Write",tool_input:{file_path:$p}}')" "scope hook"
-# The no-jq path is the one the fix was filed against (advise_literal cannot
-# escape through jq, and could not extract through sed either): the commit
-# gate's no-input deny under the same silent sed.
-ar_kl11_case commit-gate '' "commit gate, the literal path (no payload)"
-# The healthy direction: with a working sed nothing about the field changed.
-AR_H_OUT="$(printf '%s' '{"tool_name":"Bash","tool_input":{"command":"git commit -m x"}}' | CLAUDE_PROJECT_DIR="$AR2" bash "$HOOKS/commit-gate.sh" 2>/dev/null)"
-if [[ -z "$AR_H_OUT" ]] || [[ "$(printf '%s' "$AR_H_OUT" | jq -r '.setlistAdvisory.code // ""' 2>/dev/null)" =~ ^[A-Z][A-Z0-9-]*$ ]]; then
-  ok "KL11 control: with a healthy sed the commit gate's verdict is unchanged (an allow, or a deny with a well-formed code)"
+if ! grep -q "sed -n 's/\.\*\\\[" "$HOOKS/scope-hook.sh" 2>/dev/null; then
+  ok "KL11: the scope hook does not extract the code with sed any more (the expression is gone)"
 else
-  bad "KL11 control: with a healthy sed the commit gate's verdict is unchanged" "$(printf '%s' "$AR_H_OUT" | cut -c1-160)"
-fi
-if ! grep -q "sed -n 's/\.\*\\\[" "$HOOKS/commit-gate.sh" "$HOOKS/close-gate.sh" "$HOOKS/scope-hook.sh" 2>/dev/null; then
-  ok "KL11: no advisory hook extracts the code with sed any more (the expression is gone from all three)"
-else
-  bad "KL11: no advisory hook extracts the code with sed any more (the expression is gone from all three)" "$(grep -c "sed -n 's/\.\*\\\[" "$HOOKS/commit-gate.sh" "$HOOKS/close-gate.sh" "$HOOKS/scope-hook.sh" | tr '\n' ' ')"
+  bad "KL11: the scope hook does not extract the code with sed any more (the expression is gone)" "$(grep -c "sed -n 's/\.\*\\\[" "$HOOKS/scope-hook.sh" | tr '\n' ' ')"
 fi
 
 # --- the two public bullets that named the run ------------------------------------
@@ -1322,12 +1162,16 @@ AR_README="$ROOT/publish/README.public.md"
 # Both files are read where they are: the source paths here, the export's at the root.
 AR_LIM="$ROOT/publish/LIMITATIONS.md"
 [[ -f "$AR_LIM" ]] || AR_LIM="$ROOT/LIMITATIONS.md"
-if grep -qF -- '- **A `<<\EOF` heredoc body is read as code by the session gates.**' "$AR_README" && ! grep -q 'can run your whole gate command' "$AR_README"; then
-  ok "advisory ruling: the heredoc bullet lost its gate-command clause and keeps its title (the ledger keys on it)"
+# 2.8.0 (spec 0146): the heredoc bullet LEFT with its subject, the close gate's command
+# parser, so this pins its absence from both layers and from the ledger instead of its
+# wording; a bullet re-added without its subject is the stale-claim class this watches.
+if ! grep -qF -- 'heredoc body is read as code' "$AR_README" && ! grep -qF -- 'heredoc body is read as code' "$AR_LIM" \
+   && ! sed -n '/LEDGER-BEGIN/,/LEDGER-END/p' "$ROOT/test/run-tests.sh" | grep -qF -- 'heredoc body is read as code'; then
+  ok "advisory ruling: the heredoc bullet left with the close gate in 2.8.0, from both layers and the ledger"
 else
-  bad "advisory ruling: the heredoc bullet lost its gate-command clause and keeps its title (the ledger keys on it)" "$(grep -n 'heredoc body' "$AR_README" | cut -c1-120)"
+  bad "advisory ruling: the heredoc bullet left with the close gate in 2.8.0, from both layers and the ledger" "$(grep -n 'heredoc body' "$AR_README" "$AR_LIM" | cut -c1-120)"
 fi
-if grep -q '300 seconds for each Bash gate since 2.6.0' "$AR_LIM" && ! grep -q '30 minutes for the close gate, which re-runs' "$AR_LIM"; then
+if grep -q '300 seconds for each Bash hook since 2.6.0' "$AR_LIM" && ! grep -q '30 minutes for the close gate, which re-runs' "$AR_LIM"; then
   ok "advisory ruling: the timed-out-hook bullet names 300 and no longer promises a 30-minute suite run in the hook"
 else
   bad "advisory ruling: the timed-out-hook bullet names 300 and no longer promises a 30-minute suite run in the hook" "$(grep -n 'timed-out hook' "$AR_LIM" | cut -c1-120)"
@@ -1637,10 +1481,10 @@ else
 fi
 SHW="$WORK/stop-wired"; instance_fixture "$SHW" 2.5.0 current; git_init "$SHW" >/dev/null 2>&1
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$SHW"
-if [[ "$SCRIPT_RC" -eq 0 ]] && printf '%s' "$SCRIPT_OUT" | grep -q 'refreshed the five stamped hooks'; then
-  ok "stop hook wiring: the template's Stop entry certifies WIRED and the refresh completes (five hooks)"
+if [[ "$SCRIPT_RC" -eq 0 ]] && printf '%s' "$SCRIPT_OUT" | grep -q 'refreshed the four stamped hooks'; then
+  ok "stop hook wiring: the template's Stop entry certifies WIRED and the refresh completes (four hooks)"
 else
-  bad "stop hook wiring: the template's Stop entry certifies WIRED and the refresh completes (five hooks)" "rc=$SCRIPT_RC: $(printf '%s' "$SCRIPT_OUT" | tail -3 | tr '\n' ' ' | cut -c1-200)"
+  bad "stop hook wiring: the template's Stop entry certifies WIRED and the refresh completes (four hooks)" "rc=$SCRIPT_RC: $(printf '%s' "$SCRIPT_OUT" | tail -3 | tr '\n' ' ' | cut -c1-200)"
 fi
 
 fi; shard_region_end

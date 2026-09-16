@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.15 (the diagram edition)**
+**Edition v1.16 (the deletion edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -268,7 +268,7 @@ Two harness realities the loop must bind to explicitly:
   wrong as a whole personality, because this framework's value rests on the human REVIEWING
   rather than typing. If the agent's default is agreement, approval degrades into the human
   approving their own idea reflected back, and the claim is hollow at exactly the moments it
-  exists for: spec approval, criteria wording, QA judgments, the close gate's honesty about
+  exists for: spec approval, criteria wording, QA judgments, the Closing report's honesty about
   what actually passed, and post-mortems that smooth over what went wrong. An agreeable
   agent produces the same artifact as a rigorous one right up until the artifact is wrong.
   So: be evidence-first, say plainly when a proposal is weak, and name bad judgement when it
@@ -289,12 +289,14 @@ Two harness realities the loop must bind to explicitly:
 ### Enforcement
 
 Convention first: the role boundary above plus the golden rules in CLAUDE.md, backed by the
-permission rules in `settings.json` (Part 3). As of v1.14, five hooks are stamped into
-every instance (Part 6): three PreToolUse gates (the scope hook, the commit gate, and the
-close gate), each enforcing a grep-decidable predicate whose drift the field observed
-under prompting alone, one SessionStart re-grounding hook that injects the read-budget
-pointer instead of trusting every session to remember it, and one Stop hook that refuses to
-end a turn while a spec or `specs/STATUS.md` change sits unstaged, once per turn. The rule for anything further is
+permission rules in `settings.json` (Part 3). As of v1.16, four session hooks are stamped
+into every instance (Part 6), beside the three git hooks that carry the refusals: two
+PreToolUse hooks (the scope hook, which reports on writes, and the bypass deny, which refuses
+a command that would disarm the git hooks), each deciding a predicate from the tool call alone
+whose drift the field observed under prompting alone, one SessionStart re-grounding hook that
+injects the read-budget pointer instead of trusting every session to remember it, and one Stop
+hook that refuses to end a turn while a spec or `specs/STATUS.md` change sits unstaged, once
+per turn. The rule for anything further is
 unchanged: add a hook
 only after observing the drift it prevents, never preemptively, and never hook a judgment
 gate. **The status file is the baton passed between the two roles.**
@@ -329,9 +331,10 @@ project-root/
 │   │                              #   (checkpoint and validate ship as plugin commands:
 │   │                              #    /setlist:checkpoint v1.5, /setlist:validate v1.6)
 │   ├── agents/                    # optional: QA verifier subagent (Part 5 QA loop)
-│   └── hooks/                     # the five stamped hooks (Part 6): three gates, session
-│                                  #   re-grounding, the Stop hook (v1.14), enabled; beside
-│                                  #   them the trunk audit and the forge check (v1.14)
+│   └── hooks/                     # the four stamped session hooks (Part 6): the scope
+│                                  #   hook, the bypass deny (v1.16), session re-grounding,
+│                                  #   the Stop hook (v1.14), enabled; beside them the
+│                                  #   trunk audit and the forge check (v1.14)
 │
 ├── .github/                       # the team edition's forge side (v1.14, Part 6)
 │   ├── workflows/setlist-forge-check.yml   # runs the stamped forge check on every pull
@@ -432,8 +435,8 @@ supplies the entire chain. Degradation is not escalation (Part 2): a degraded tu
 harness routing around an outage, and a degraded planning turn is worth a journal line so
 escalation patterns stay readable.
 Since v1.5 the stamp emits this file complete with a `hooks` block wiring the stamped
-hooks (scope hook on the file-writing tools, commit gate and close gate on Bash, all
-PreToolUse, since v1.6 the re-grounding hook on SessionStart, and since v1.14 the Stop hook
+hooks (the scope hook on the file-writing tools and, since v1.16, the bypass deny on Bash,
+both PreToolUse, since v1.6 the re-grounding hook on SessionStart, and since v1.14 the Stop hook
 on the Stop event, no matcher), each entry carrying
 an explicit `timeout` because a hook the harness cancels is a gate that did not run; the
 wiring is never hand-maintained, and the template is the authority on the exact matcher
@@ -679,7 +682,7 @@ STATUS.md *in the same commit*. Stale STATUS.md is worse than none: it confident
   the **L2 container view** of the system as it exists on `main`, with the core-model diagram
   beside its prose. It is one of the altitudes "The living diagrams" defines below, and the
   rules that govern all of them are stated there once. What is local to this file:
-  - **The principle: diagram source must be diffable text, and it must be close-gated.**
+  - **The principle: diagram source must be diffable text, and it must be checked at the close.**
     The format is a binding. Mermaid is the default (renders on GitHub, agent-native,
     cleanest diffs). `.drawio.svg` is a documented alternative where non-engineers must edit
     diagrams in a UI and the platform renders SVG natively: it is XML-in-SVG, less reviewable
@@ -775,6 +778,13 @@ validate REPORTS the count and refuses nothing, so a thirteenth node is a decisi
 rather than one the tooling makes for you. **Where there is no child to split into, the bound
 is HARD**: an L2 view inline in a README has no `components/` directory beneath it, so the
 only way down to twelve is to cut a node, and cutting is what the drawer must do.
+
+**Four legibility ceilings beside the twelve nodes (new in v1.16).** A figure carries at most
+twelve edges. No arrow label runs over 45 characters, counting the text between the quotes. A
+figure carries at most 400 characters of arrow-label text in all. No subgraph is an edge
+endpoint: an arrow starts and ends on a node, never on a box. A label that needs a clause
+belongs in the prose under the figure, and nothing mechanical reads these ceilings: the drawer
+holds them, as the one-sense rule below is held.
 
 **One sense per ARROW, named in its label.** An honest container view mixes senses: one
 arrow is an invocation, the next is a read of a file. What is forbidden is an arrow whose
@@ -1037,11 +1047,11 @@ CLOSED
 <!-- SDD-LIFECYCLE-STATES:END -->
 
 **That block is the canonical enumeration, not an illustration of one.**
-`scripts/part.sh lifecycle-states` extracts it; the commit gate's staged-transition check
+`scripts/part.sh lifecycle-states` extracts it; `pre-commit`'s staged-transition check
 carries the same list and the test suite asserts the two are identical; and `STATUS.md`'s
-legend is checked against it too. This matters because the gate enumerates the vocabulary
-literally: a state that exists in the protocol and not in the gate is not a loose end, it is
-a lifecycle transition the gate silently fails to notice, which is the one failure mode a
+legend is checked against it too. This matters because the hook enumerates the vocabulary
+literally: a state that exists in the protocol and not in the hook is not a loose end, it is
+a lifecycle transition the hook silently fails to notice, which is the one failure mode a
 gate must never have. Adding a state here and nowhere else turns the suite red rather than
 turning a check off.
 
@@ -1367,15 +1377,16 @@ A feature-branch model where "feature" means "spec."
   working retreat point; spec-scoped messages make history self-documenting.
 - **Closing a spec** = gates + QA loop pass, Closing report completed (including the diagram
   field), STATUS.md one-line update, merge `--no-ff`. Never feature code directly on `main`.
-- **The close gate has four bindings, and one of them is the boundary.** Solo:
+- **The close verification has three bindings, and one of them is the boundary.** Solo:
   `/setlist:checkpoint` refuses the merge. Team: CI refuses the merge (the same checks moved
-  into the pipeline, which is stricter because it cannot be skipped). Agent, advisory: the
-  stamped PreToolUse close-gate hook warns before the command runs. Agent and human alike,
-  and this is the one the guarantee rests on since v1.7: the stamped **git hooks** refuse the
-  operation itself, from git's own state, after the shell has finished with it. Within that
-  layer, the guarantee is the push-time trunk audit; the per-merge hooks are its early
-  warning (see "The enforcement boundary" below for why the fourth binding is different in
-  kind from the other three, and where the guarantee sits inside it).
+  into the pipeline as the forge check, which is stricter because it cannot be skipped).
+  Agent and human alike, and this is the one the guarantee rests on since v1.7: the stamped
+  **git hooks** refuse the operation itself, from git's own state, after the shell has
+  finished with it. Within that layer, the guarantee is the push-time trunk audit; the
+  per-merge hooks are its early warning (see "The enforcement boundary" below for why the
+  third binding is different in kind from the other two, and where the guarantee sits inside
+  it). A fourth binding, an advisory session hook that warned before the merge command ran,
+  left in v1.16.
 - **The agent does all Git** under the `/setlist:checkpoint` mandate; the human never types
   Git commands. The mandate binds duties, not the invocation: a session may run a
   checkpoint duty inline (a Builder opening its spec branch, a close merging once the
@@ -1536,10 +1547,10 @@ The pattern: cut `release/x.y` from the trunk at submission, keep developing on 
 on the trunk FIRST and cherry-pick to the release branch, tag the shipped build on the release
 branch. Everything else in the same repo stays tag-on-trunk.
 
-**Nothing ships in v1.7 to support it**: no protected-branch list in `sdd.json`, no close-gate
+**Nothing ships in v1.7 to support it**: no protected-branch list in `sdd.json`, no close-check
 awareness of promotion or cherry-pick flows, no checkpoint verbs. The position is written now
 so the planning session that needs it has the vocabulary, and the bill is deferred rather than
-avoided: when the trigger fires, the close gate (which today recognizes only `spec/*` and
+avoided: when the trigger fires, the close checks (which today recognize only `spec/*` and
 `chore/*` merging into a single trunk), the `sdd.json` shape, and checkpoint all move.
 Mechanizing an unobserved workflow is how the plausible-but-wrong gets baked into a hook.
 
@@ -1580,8 +1591,8 @@ the boundary in advance ("the WSL2 half parks as 0002b if the session overruns")
 Builder never has to invent a scope boundary under pressure at the exact moment its judgment
 is worst.
 
-**The STATUS.md inventory row uses the SUFFIXED number.** The close gate's row check greps
-for the spec number literally, so a `0002b` spec with a `0002` row does not close.
+**The STATUS.md inventory row uses the SUFFIXED number.** The close verification's row check
+matches the spec number literally, so a `0002b` spec with a `0002` row does not close.
 
 **ONE FILE PER SPEC NUMBER, and the guarantee layer now enforces it.** Exactly one
 `specs/<number>-*.md` may exist for a given number. A companion document beside it,
@@ -1590,8 +1601,8 @@ at merge time, because which of the two carries the Closing report is not someth
 can decide. Until 2026-08-08 it decided by SORT ORDER, and both git commands feeding it
 emit sorted paths, so the companion always won: a non-compliant spec merged clean once a
 compliant-looking companion existed, and a fully compliant close was refused with a message
-that was false about the file it named. The advisory close gate has refused this input by
-name since 1.0.x; the layer carrying the guarantee had not.
+that was false about the file it named. The advisory close gate refused this input by
+name from 1.0.x until it left in v1.16; the layer carrying the guarantee had not.
 
 Put design notes, research and scratch material anywhere except that namespace:
 `docs/design/0002-notes.md`, `specs/notes/0002.md`, or a suffixed sibling with its own
@@ -1718,7 +1729,7 @@ skill of their own (upgrading repos remove them; the Changelog is the delta list
   exactly one framework edition file is present, STATUS.md has its bounded sections AND
   passes row discipline (inventory notes and chore archive lines are single lines; no
   resolved items linger under Open questions), structure.md has a diagram, `.gitignore`
-  does not exclude `.claude/`, the five stamped hooks are present and wired (a disabled
+  does not exclude `.claude/`, the four stamped session hooks are present and wired (a disabled
   hook is a finding, reported with the settings line that would re-enable it),
   `.claude/sdd.json` parses and names the role paths and, once scaffolded, a gate
   command, and no phase-2 slot marker survives anywhere in the instance. Reports
@@ -1747,7 +1758,7 @@ skill of their own (upgrading repos remove them; the Changelog is the delta list
   Project facts come from `.claude/sdd.json`: the src and tests role paths and the gate
   command.
 - The mechanical sweeps on staged new content (no em-dashes, no secret-shaped strings:
-  tokens, connection strings, passwords) are enforced by the stamped commit-gate hook
+  tokens, connection strings, passwords) are enforced by the stamped `pre-commit` git hook
   (below). Both failure classes were observed repeatedly in the field; a scan at commit
   time costs less than the cleanup commits it prevents. Fix findings rather than argue
   with the hook.
@@ -1772,8 +1783,8 @@ skill of their own (upgrading repos remove them; the Changelog is the delta list
 - **At spec close, it is the gatekeeper.** It refuses to merge unless: the full test suite
   passes; the Closing report is complete, including the pasted Pass 1 QA report and the
   answered architecture-diagram field; and STATUS.md carries the one-line inventory update
-  (and nothing more) in the same commit. The stamped close-gate hook verifies the same
-  conditions independently on any merge attempt; passing this checklist is what satisfies
+  (and nothing more) in the same commit. The stamped `pre-merge-commit` git hook verifies the
+  same conditions independently on any merge; passing this checklist is what satisfies
   it.
 - **It drafts the diagram sync, and names the files (new in v1.15).** On an opted-in
   instance checkpoint drafts the edit the living diagrams need from what the spec's Design
@@ -1805,7 +1816,7 @@ per edition the same way the anti-pattern table does.
 ### The enforcement boundary (new in v1.7; narrowed to the audit in the B2 refactor)
 
 **The guarantee lives in the push-time trunk audit. The per-merge git hooks are early
-refusal inside the same boundary, and the PreToolUse gates are advisory.** v1.7 moved the
+refusal inside the same boundary, and no session hook carries any part of the guarantee.** v1.7 moved the
 boundary from the session gates to the git hooks as a set; the B2 refactor narrows where
 the GUARANTEE inside that set lives, because the cycle measured the difference: six
 guarantee defects arrived through the per-merge checks' routes in one cycle, the fifth
@@ -1873,9 +1884,10 @@ left to spell around: a merge is a merge whether it was written `git merge spec/
 since v1.13 a jq that is present is RUN on a known document before any hook reads
 `.claude/sdd.json`, and one that exits nonzero or exits 0 printing nothing refuses under
 `SLH-JQ-BROKEN`, naming the toolchain; only once jq is known good does a read that fails
-point at the file (`SLH-UNREADABLE-CONFIG`). The three session gates report their verdict
-and PERMIT under the same breakage, because they are advisory; a broken jq stops work at
-the git hooks rather than quietly ungating it, and that is deliberate.
+point at the file (`SLH-UNREADABLE-CONFIG`). The session hooks PERMIT under the same
+breakage: the scope hook reports and allows, and the bypass deny says nothing, because a deny
+it cannot attribute to a command would deny every Bash call, the repair included; a broken jq
+stops work at the git hooks rather than quietly ungating it, and that is deliberate.
 
 **THE DIAGRAM FIELD IS READ AS AN ANSWER, AND THE FIRST ONE DECIDES.** Until plugin 2.3.0
 both the merge hook and the trunk audit took the LAST line matching `Architecture diagram:`
@@ -1900,9 +1912,7 @@ under review: a refusal for the closing spec's own node, a report for an earlier
 Part 3). A sixth is a report and never a refusal: `SLH-DIAGRAM-NODE-SKIPPED`, every drawn name
 that is not path-shaped, listed with what it is (a node, a subgraph id, a subgraph title), so
 a label meant as a path and spelled as prose is printed rather than passed over in silence.
-There is no advisory twin: the session gates gained no byte this edition, which is why their
-close gate still asks the v1.14 question of the field and is described under Known limitations
-below. Every one of these names three things in its message, on this edition's standing rule
+There is no advisory twin: no session hook reads the diagram field. Every one of these names three things in its message, on this edition's standing rule
 for any refusal: the subject, the measured evidence, and the one edit that fixes it.
 
 **THE GUARANTEE IS A DISCIPLINE CONTROL FOR COOPERATING USE, NOT A SECURITY BOUNDARY, and six rounds of
@@ -1953,9 +1963,12 @@ command runs, so the agent is told the rule at the moment it is about to break i
 it can act on. That is a teaching surface and a fast feedback loop. It is simply not the
 thing standing between unreviewed work and the trunk, and the edition no longer says it is.
 
-**And since 2026-08-04 it is advisory in MECHANISM, not only in name.** The three PreToolUse
-gates permit every command and report what they would have decided: the reason, the refusal
-code, and a machine-readable verdict. They no longer veto a tool call. This paragraph
+**And since 2026-08-04 it is advisory in MECHANISM, not only in name.** From that date the
+PreToolUse gates permitted every command and reported what they would have decided: the
+reason, the refusal code, and a machine-readable verdict. Since v1.16 the scope hook is the one
+advisory hook left, and the bypass deny, which refuses a command that would disarm the git
+hooks, is the one PreToolUse refusal: its reason is delivered, and it guards the boundary
+rather than standing in for it. This paragraph
 described a warning for an entire edition while the gates actually denied, and the gap had a
 price that was measured rather than guessed: across four hostile reviews, five of six blocking
 findings and three majors were in parser code written the same day to fix the previous review,
@@ -1965,19 +1978,27 @@ The trade is stated rather than sold, and half of it did not survive contact wit
 harness. A parser false positive is now noise instead of a blocked command. But **on current
 Claude Code versions the advisory reason is not delivered to the model when the decision is
 `allow`**: measured on 2.1.221, with the control that makes it a harness finding rather than a
-wiring one, since a hook returning `deny` has its reason delivered verbatim. So the gates do
-not in fact warn the agent today.
+wiring one, since a hook returning `deny` has its reason delivered verbatim. So the scope hook
+does not in fact warn the agent today.
 
 What that leaves is honest and still useful. The in-session feedback surface is the git hooks'
 refusal messages, which arrive as ordinary command output at the moment of the attempt, and
-which is where the guarantee lives. The advisory verdict stays machine-readable for tooling,
-CI and the suite. The gap is filed upstream and re-checked at every release gate by the
-maintainer's probe, run in the source repository; if the harness begins rendering reasons on
-allow, the warning value returns with no decision to re-take.
+which is where the guarantee lives. The advisory verdict is still emitted in a machine-readable
+`setlistAdvisory` field, and nothing in the shipped plugin reads it: no skill, script or
+template consumes it, and the framework's own test suite is its only reader. The gap is filed upstream and re-checked at every release gate by the
+maintainer's probe, run in the source repository. The vendor documents the drop on `allow` as
+intended rather than as a defect, so it is not waiting to lift by itself; a sibling field on the
+same event, `additionalContext`, is documented to carry context to the model, and Setlist has not
+measured it.
 
 The parsers and their test corpus are FROZEN together from that date. A newly discovered
 spelling they read wrongly is a documented limitation, not a fix: the review that priced this
-also showed that changing them is what generates the next defect.
+also showed that changing them is what generates the next defect. One exception was taken by
+decision, in v1.16: that edition's own adversarial review found the bypass deny's lexer refusing
+ordinary work that only mentions a disarming spelling (heredoc prose, read-only searches), and
+those false denials were fixed inside the pinned lexer for every spelling git itself accepts and,
+for a heredoc, for the spaced spelling (<< EOF) rather than the no-space one (<<EOF), which is
+still refused; the spellings that defeat it stay documented rather than chased.
 
 **What each hook can and cannot see.** Git fires different hooks for different merge forms,
 and the shape of this section follows from measurement rather than from the documentation:
@@ -2201,19 +2222,13 @@ where that layer ends. Everything below is a real hole, known and accepted, not 
   design; hooks bind the agent, and for teams the same checks move into CI.
 - **The secret scan is a first cut.** Token-shaped, connection-string-shaped and
   password-shaped strings. It will miss things. It is a seatbelt, not a vault.
-- **The pathspec hole.** `git commit <file>` commits the working-tree copy of that file
-  without staging it, so the staged-content scan has nothing to look at. The suite
-  asserts this hole deliberately rather than hiding it, so the day it closes, the suite
-  says so.
-- **The scans read this project's own index.** A commit aimed somewhere else is not
-  scanned: `git -C some/nested/repo commit ...` commits THAT repository's index (the
-  nested-repo hole), and `GIT_INDEX_FILE=...` names a different index outright (the
-  index-scope hole). These are distinct from the pathspec hole above, and the fix for
-  one is not the fix for another: that one is about what git STAGES, these two are
-  about WHICH INDEX is read. Following the target index instead would mean re-deriving
-  which repository each command line means, in every spelling, which is parser-chasing
-  this project has priced and refused. A nested repository is a different project; if
-  it should be governed it wants its own instance.
+- **The scans read this project's own index.** A commit aimed at another repository is not
+  scanned: `git -C some/nested/repo commit ...` commits THAT repository's index and runs
+  THAT repository's hooks (the nested-repo hole). A commit made in this repository through
+  `GIT_INDEX_FILE=...` IS scanned, because `pre-commit` reads the index git is committing,
+  measured for v1.16; through v1.15 this bullet called it a second hole, which was the retired
+  commit gate's alone. A nested repository is a different project; if it should be governed
+  it wants its own instance.
 - **The set of tested platforms is a list, not a proof.** The suite runs on Linux and on
   macOS under bash 3.2 with the BWK awk, which is where the 1.0.8 fault would have been
   caught. A platform absent from that list is untested, and the release notes say which list
@@ -2383,7 +2398,7 @@ already shipped a fix for once. The test suite pins both directions of that trap
 
 ### What counts as a QA verdict (new in v1.7)
 
-The close conditions require a QA Pass 1 verdict, and both the close gate and the trunk audit
+The close conditions require a QA Pass 1 verdict, and both the merge hook and the trunk audit
 have to decide mechanically whether one is present. Until 2026-08-05 that decision was a
 regular expression over English, and the rule read:
 
@@ -2472,9 +2487,8 @@ token, so an empty result is a refusal by construction. The codes:
 | an undeclared role-path file in a declaring spec's single-parent close | `SLH-OWNS-UNDECLARED` |
 | a spec declared `Tier: lite` whose `Owns:` set exceeds five files, at any close (v1.14) | `SLH-LITE-OVERSIZED` |
 
-The session gates mirror these as warnings in the same words (`CG-RECORD-*`,
-`CM-RECORD-MALFORMED`), because that layer has no deny mechanic; the git hooks are what
-refuse. Present-and-malformed is never a pass and never a fallback.
+The session layer carries none of these: the two advisory gates that mirrored them as
+warnings left in v1.16, and the git hooks are what refuse. Present-and-malformed is never a pass and never a fallback.
 
 **The ownership question (the single-parent close arm).** A spec declares the role-path
 files it owns as `Owns:` header lines (Appendix C), written by checkpoint as the spec
@@ -2501,10 +2515,15 @@ landed. A spec without the line is read exactly as before.
 ### The stamped hooks (`.claude/hooks/`)
 
 A gate becomes a hook exactly when its predicate is decidable by a grep or an exit code;
-judgment gates stay with the human. Five hooks are stamped into every instance, enabled,
-wired in `settings.json`: three PreToolUse gates (new in v1.5, **advisory since v1.7**, see
-"The enforcement boundary" above), one SessionStart re-grounding hook (new in v1.6), and one
-Stop hook (new in v1.14):
+judgment gates stay with the human. Four session hooks are stamped into every instance,
+enabled, wired in `settings.json`: two PreToolUse hooks (the scope hook, new in v1.5 and
+**advisory since v1.7**, see "The enforcement boundary" above, and the bypass deny, new in
+v1.16), one SessionStart re-grounding hook (new in v1.6), and one Stop hook (new in v1.14).
+The two Bash advisory gates, the commit gate and the close gate, left in v1.16: every question
+they asked is answered by the git hooks or by `/setlist:validate` (the declared-identity
+comparison is its item 15, a report at the health check rather than a warning at commit
+time), or was a question about a command's text that leaves with the parser that asked it.
+Part 8c's v1.16 delta says how an existing instance learns that.
 
 - **The Stop hook** (the Stop event): refuses to end a turn that leaves `specs/STATUS.md`
   or a spec file, tracked or untracked, changed and unstaged, because a session ending with
@@ -2513,7 +2532,7 @@ Stop hook (new in v1.14):
   question; a repository with no `sdd.json` is not an instance. It refuses ONCE per end of
   turn and allows the continuation the harness marks, so a change the session cannot stage
   is a nudge, never a lock; and it is the one session hook whose reason the harness renders
-  (the three gates' reasons are dropped on `allow`, Known limitations). A session killed
+  (the scope hook's reason is dropped on `allow`, Known limitations). A session killed
   from outside fires no Stop, which is the boundary it does not reach.
 
 - **The scope hook** (Write and Edit): REPORTS a verdict on writes under the src and tests role paths and permits them
@@ -2527,41 +2546,15 @@ Stop hook (new in v1.14):
   docs-only trunk commits the loop depends on). This mechanizes "never feature code
   directly on the trunk" and gives the role boundary a branch-shaped enforcement that
   holds where plan mode does not exist (Part 7c).
-- **The commit gate** (Bash, `git commit`): staged-content checks, each VERDICT naming the
-  specific failure so the agent can fix and retry: the em-dash scan, the secret scan
-  (token-shaped, connection-string-shaped, password-shaped strings), and
-  STATUS-in-the-same-commit when the staged diff transitions a spec's lifecycle state.
-  A command that writes the index and commits in one step (`git add ... && git commit`,
-  or `git commit` with an auto-staging flag such as `-a`) gets a deny VERDICT and is permitted (the git hooks are the layer that refuses): the hook
-  decides before the command runs, so only content already staged is scannable. Stage
-  first, then commit; the split is what makes the scan real. "Writes the index" is the
-  full set, not just `add`: `stash pop`, `restore --staged`, `reset`, a pathspec
-  `checkout`, a `--no-commit` merge or cherry-pick and the plumbing verbs all leave an
-  index the scan did not see, and enumerating only `add`, `rm` and `mv` let every other
-  one through until 1.0.7.
-- **The close gate** (Bash, `git merge` into the trunk): independently verifies the
-  close conditions before any merge from a `spec/` or `chore/` branch: a complete
-  Closing report with the pasted QA Pass 1 block and the answered diagram field, the
-  CLOSED inventory row in STATUS.md, and a fresh green run of the gate command from
-  `sdd.json`. Every content check reads the branch being merged
-  (`git show <ref>:specs/...`), never the working tree, so the Closing report and the
-  CLOSED row count only once committed on the branch. Reading the branch settles what
-  the artifacts say but not who wrote them, so the gate also requires the branch to
-  have MODIFIED its own spec file relative to the merge base: a branch cut after spec
-  NNNN closed inherits that spec entire, and reusing a CLOSED number would otherwise
-  carry unreviewed work onto the trunk against somebody else's Closing report. Writing
-  the Closing report into the spec is what closing a spec IS, so an honest close always
-  satisfies this. The merge target is derived from
-  the command plus repo state, so the compound `git checkout <trunk> && git merge ...`
-  form is gated exactly like the split form.
-- **The commit gate also checks GIT IDENTITY, when the project declares one** (new in
-  v1.7). An optional `identity.user_email` in `sdd.json` is compared against
-  `git config user.email`, and a mismatch is WARNED about by the advisory commit gate and refused by nothing: no git hook and not the trunk audit reads `user.email`, so a declared identity has no enforcing layer (v1.7 claims audit), naming both values and
-  the remedy. It is opt-in by construction: no key means no check, so every existing
-  instance is unaffected, and nothing infers the identity from the machine, because the
-  value of the check is that somebody DECLARED which identity this repo commits under.
-  One machine holding a work identity and a personal one is the ordinary case, and
-  catching the wrong one at commit time costs an amend rather than a rebase.
+- **The bypass deny** (Bash, new in v1.16): denies a command that would disarm the git hooks
+  for its own run (an assignment of `SETLIST_SKIP_HOOKS=1` or `SETLIST_SKIP_TRUNK_AUDIT=1` at
+  assignment position, `--no-verify` or a spelling git reads as it in a git command, or
+  `-c core.hooksPath` in a git command), and prints nothing for any other command. It answers
+  that one question, reads no repository state, and emits a deny or nothing. Its one reader,
+  a lexer carried over verbatim, is not extended, and the framework's own suite pins its
+  bytes, so a new spelling is a visible decision rather than a drift. Its deny reason is
+  delivered to the agent; ordinary variable expansion defeats it, so it is a nudge and never
+  a boundary, and the git hooks are unaffected either way.
 - **The re-grounding hook** (SessionStart, new in v1.6): injects the read-budget pointer
   at session start: read `specs/STATUS.md`, then the active spec, before anything else
   (Part 2). It fires on fresh starts, resumes, and post-compaction restarts alike (the
@@ -2578,8 +2571,8 @@ uninstall. Each has a one-line disable (remove its entry from `settings.json`), 
 later `/setlist:validate` run reports. Hooks load at session start: a session that stamps or
 rewires them runs to its end without them, and enforcement binds from the next session
 onward. Hooks bind the agent; the human remains sovereign in their
-own terminal, and for teams the same checks move into CI (the close gate's team binding,
-above). A hook denial is a finding, not an obstacle to argue with: fix the named item and
+own terminal, and for teams the same checks move into CI (the close verification's
+team binding, above). A hook denial is a finding, not an obstacle to argue with: fix the named item and
 retry. What stays prompted, deliberately: QA Pass 2, the interview stopping rule,
 override honoring, the ADR economy, the spec-vs-chore test, park-do-not-improvise, and
 honest PARTIAL verdicts. None of these are grep-decidable; hooking them would replace
@@ -2629,7 +2622,8 @@ project's `RUNBOOK.md` with the concrete commands for that stack.
    against the locked mock (Part 5c).
 6. **Close.** Complete the Closing report (deviations, test counts, diagram field, follow-up
    chores or parking-lot rows). Journal entry if the session was substantive.
-   `/setlist:checkpoint` runs the close gate and merges `--no-ff`. STATUS.md names the next action.
+   `/setlist:checkpoint` runs the close checks and merges `--no-ff`, and the merge hook refuses
+   an incomplete close. STATUS.md names the next action.
    Under a declared release model, this is also where a version bump rides the close commit
    (`version-file`) or where the release notes learn what this spec added (`tags`); under
    `none`, neither applies and nothing is owed. If the close pushed to the trunk, the CI run
@@ -2854,12 +2848,13 @@ to flip, no human watching mid-turn. The roles still hold, because they never de
 on the TUI. How they bind:
 
 - **The role boundary binds to branches and paths, not to plan mode.** The stamped scope
-  hook (Part 6) denies src and tests writes on the trunk, which is the plan-mode
-  substitute: a headless session on the trunk can only work the planning artifacts, and
-  building requires the spec branch `/setlist:checkpoint` opens. PreToolUse hooks fire under
+  hook (Part 6) reports a verdict on src and tests writes on the trunk and permits them, and
+  the trunk audit at `pre-push` refuses the commits they become, which is the plan-mode
+  substitute: a headless session on the trunk can work the planning artifacts, and role-path
+  work reaches a shared trunk only through the spec branch `/setlist:checkpoint` opens. PreToolUse hooks fire under
   `claude -p` before and independent of permission checks, including when permissions
-  are bypassed, so the three gate hooks are the discipline that survives when nobody is
-  watching. SessionStart fires under `claude -p` as well (startup, resume, and
+  are bypassed, so the scope hook and the bypass deny are the session discipline that
+  survives when nobody is watching. SessionStart fires under `claude -p` as well (startup, resume, and
   post-compaction restarts alike), so headless runs re-ground by mechanism too.
 - **Name the permission stance explicitly.** Bare `claude -p` denies most tools by
   default and a scripted run stalls on the first Bash call; the usual non-interactive
@@ -2984,8 +2979,9 @@ wiring**;
 stamped instance is structured from birth**: born with `setlist_status: 1` and empty
 maps, born valid against the grammar the gates read, with `/setlist:checkpoint` its one
 writer from the first spec on (tell the user this file exists and that checkpoint owns
-it, one sentence in the hand-off); **the five stamped hooks in `.claude/hooks/`,
-enabled** (three gates, session re-grounding, and the Stop hook, v1.14), beside them the
+it, one sentence in the hand-off); **the four stamped session hooks in
+`.claude/hooks/`, enabled** (the scope hook, the bypass deny, v1.16, session re-grounding,
+and the Stop hook, v1.14), beside them the
 trunk audit and **the forge check (v1.14)**, with its workflow under `.github/workflows/`
 and **`.github/CODEOWNERS` carrying the four protected paths under an `@OWNER` slot that
 phase 2 fills** (a required check whose bytes any pull request can edit protects nothing);
@@ -3242,6 +3238,21 @@ action.
   gains the Design sketch block through the ordinary unmodified-copy refresh; a spec written
   before the block existed is not rewritten to have one. Until the chore lands, the
   instance's diagram field answers exactly as it did and every reader behaves as v1.14.
+- **The v1.16 delta: two session hooks LEAVE, and the upgrade REPORTS rather than removes
+  (new in v1.16).** This is the first delta whose subject is a removal: every earlier delta
+  added files to an instance, and this one takes two away. The commit gate and the close gate,
+  the two Bash advisory gates, are no longer stamped; the bypass deny is stamped in their
+  place as the one PreToolUse refusal on Bash, and its `settings.json` entry is restored from
+  the template like any other. **A new instance gets the deletion; an existing instance gets a
+  REPORT until its owner takes it.** `refresh-instance.sh` never removes a file from someone's
+  repository on its own authority, on the same precedent as its refusal to displace another
+  hook manager: in report mode and under `--apply` alike it names
+  `.claude/hooks/commit-gate.sh` and `.claude/hooks/close-gate.sh` where they are still
+  present, names the `settings.json` entries that still run them, and prints the exact edit
+  that removes exactly those, which the owner runs. The report changes no exit status, because
+  a stale advisory gate permits and the git hooks carry every refusal; until the edit is taken
+  the two gates keep running on every Bash call. A fork of a retired hook is reported and left
+  alone. Record the edit, taken or deferred, under the umbrella ADR.
 - **Accepted deviations are recorded, not erased.** If the repo keeps a non-canonical
   layout (paths are roles), say so inside the umbrella ADR; a future chore can relocate.
 - **Close like any chore:** gates pass (docs-only, so results must match pre-migration), a
@@ -3580,6 +3591,52 @@ judgment. Appendix A is the part worth keeping; everything else is implementatio
 ---
 
 ## Changelog
+
+- **v1.16 (the deletion edition).** This delta list is authoritative for
+  `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases
+  (this edition ships as plugin 2.8.0), the edition counts revisions of this document.
+  v1.16 moves because the PROTOCOL loses its two Bash advisory gates: the stamped tree is
+  four session hooks and three git hooks, and this is the first edition whose delta removes
+  files from an instance.
+
+  **THE COMMIT GATE AND THE CLOSE GATE LEAVE (Parts 2, 3, 5, 6, 7, 7c, 8).** 1,735 lines of
+  frozen command-text parser whose verdicts the harness does not deliver on `allow`. Every
+  question they asked is answered by the git hooks, which refuse where the gates warned, or by
+  `/setlist:validate` (the declared-identity comparison, its item 15, a report at the health
+  check rather than a warning at commit time), or was a question about a command's text that
+  leaves with the parser that asked it. The close verification has three bindings where it had
+  four, and no session hook carries any part of the guarantee.
+
+  **THE BYPASS DENY (Parts 2, 3, 6).** The one refusal the session layer made moves into a
+  hook of its own at a new path, `.claude/hooks/bypass-deny.sh`, on Bash: a command that would
+  disarm the git hooks for its own run is denied, and every other command draws nothing. One
+  question, one verdict shape, and one reader carried over verbatim and pinned by digest in the
+  framework's own suite, so widening it is a visible decision. It was changed once, by that kind
+  of decision, after this edition's own adversarial review: its lexer no longer refuses a heredoc
+  body written through cat, tee or git in the spaced spelling (<< EOF), a read-only search whose
+  pattern is a disarming spelling in any spelling git itself accepts, or a combined short-flag
+  commit whose message is one; the no-space heredoc (<<EOF) is still refused, and the spellings
+  that defeat it stay documented.
+
+  **THE FIRST REMOVAL DELTA (Part 8c).** A new instance gets the deletion; an existing instance
+  gets a report from `refresh-instance.sh` naming the two stale files and the `settings.json`
+  entries that run them, with the exact edit, until its owner takes it. Nothing is removed
+  silently.
+
+  **FOUR LEGIBILITY CEILINGS (Part 4).** Beside the twelve-node bound: at most twelve edges, no
+  arrow label over 45 characters, at most 400 characters of arrow-label text, and no subgraph as
+  an edge endpoint, with a label that needs a clause moved into the prose. The diagrams skill
+  carries the same numbers, and nothing mechanical reads them.
+
+  **ONE RESIDUE RETIRES WITH ITS SUBJECT (Part 6).** The v1.15 sentence that the advisory close
+  gate still asked the v1.14 question of the diagram field leaves with the gate.
+
+  **TWO LIMITATIONS OF THE MECHANICAL LAYER MOVE WITH THEIR SUBJECT (Part 6).** The pathspec
+  hole leaves the list: `pre-commit` reads the index git builds for `git commit <file>` and
+  refuses what it finds, so the hole belonged to the retired commit gate alone. The own-index
+  bullet narrows to the nested repository, because a commit made through `GIT_INDEX_FILE` in
+  this repository is scanned. Both were measured on a scratch instance armed with the stamped
+  git hooks.
 
 - **v1.15 (the diagram edition).** This delta list is authoritative for
   `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases

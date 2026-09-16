@@ -91,9 +91,9 @@ When the instance predates this plugin, also:
   version, rather than falling through to the copy. Read its report before
   applying: any file listed as differing may be a deliberate instance edit, and
   Part 8c is explicit that a customized stamped copy is a fork to surface in
-  the umbrella ADR, never a file to silently overwrite. On --apply the five
-  hooks (scope-hook, commit-gate, close-gate, regrounding-hook, and since 2.6.0
-  stop-hook) are copied byte for byte, the trunk audit and the forge check
+  the umbrella ADR, never a file to silently overwrite. On --apply the four
+  session hooks (scope-hook, regrounding-hook, since 2.6.0 stop-hook, and since
+  2.8.0 bypass-deny) are copied byte for byte, the trunk audit and the forge check
   beside them, the git-hook boundary is delivered (`.githooks/` plus
   `core.hooksPath` and `merge.ff`, see the boundary bullet below), the two
   wiring files (`.github/workflows/setlist-forge-check.yml`,
@@ -102,6 +102,12 @@ When the instance predates this plugin, also:
   name `/.github/` is told so by path), the `gates` block is written on an
   instance that lacks it (see the v1.14 bullet below), and the plugin
   version is recorded in `.claude/sdd.json`.
+  **Since 2.8.0 the refresh also REPORTS the two retired hooks**
+  (`.claude/hooks/commit-gate.sh`, `.claude/hooks/close-gate.sh`) and the
+  `settings.json` entries that still run them, and prints the exact edit that
+  removes exactly those; it never removes them itself, and the report changes no
+  exit status. Show the human the report and let them run the printed edit, then
+  re-run the refresh; a fork of a retired hook is reported and left alone.
   **Exit code 3 means the refresh applied INCOMPLETELY**: the hook bytes and the
   version record are current, but `.claude/settings.json` still needs an edit the
   script named and deliberately did not make (that file carries the instance's own
@@ -111,8 +117,9 @@ When the instance predates this plugin, also:
   exit code is that it cannot be read past. Wire the hooks in
   `.claude/settings.json` exactly as
   `${CLAUDE_PLUGIN_ROOT}/templates/claude/settings.json.tmpl` shows (scope
-  hook on Write|Edit|MultiEdit|NotebookEdit and commit gate and close gate on
-  Bash, both PreToolUse; regrounding hook on SessionStart, no matcher; every
+  hook on Write|Edit|MultiEdit|NotebookEdit and bypass deny on Bash, both
+  PreToolUse; regrounding hook on SessionStart, no matcher; stop hook on Stop,
+  no matcher; every
   hook entry carries an explicit `timeout`, since a timed-out hook is a
   skipped gate). An instance whose settings still carry the pre-1.0.3 matcher
   `Write|Edit` or hook entries with no timeout takes both updates as part of
@@ -214,8 +221,9 @@ When the instance predates this plugin, also:
   than one that says so.
 - **Optionally declare a git identity** (BL-007, plugin 1.1.0). If this machine
   holds more than one git identity, add `"identity": {"user_email": "..."}` to
-  `.claude/sdd.json` and the commit gate will WARN about a commit made under the
-  wrong one. Do NOT add it silently: no key means no check, which is the correct
+  `.claude/sdd.json` and `/setlist:validate` reports a mismatch with the machine's
+  `git config user.email` at each health check (since 2.8.0 nothing warns at
+  commit time, and nothing refuses). Do NOT add it silently: no key means no check, which is the correct
   default, and writing whatever `git config user.email` currently returns would
   ratify a possibly-wrong value rather than declare an intended one. Ask.
 - **Mention the new `Spec-hash:` field, and migrate NOTHING** (BL-005, edition

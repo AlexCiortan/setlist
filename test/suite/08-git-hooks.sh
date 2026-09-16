@@ -820,43 +820,6 @@ if gh_landed "$GH"; then
   bad "git hooks j: a hook that cannot find its library REFUSES rather than passing" "it passed with no library"
 else ok "git hooks j: a hook that cannot find its library REFUSES rather than passing"; fi
 
-# THE DIAGRAM FIELD IS FIRST-LINE-WINS (KL1, ruled 2026-08-29 and shipped in
-# 2.3.0; the public bullet left the list in spec 0126's public-list commit,
-# worded fix-plus-correction because the bullet still described last-wins a
-# day after the mechanics shipped first-wins). This replaces the old
-# either-way "documented hole" pin, whose fixture named the field MID-LINE
-# and so never exercised the anchored reader in either generation: a pin that
-# passes both ways on an input the reader cannot see is the vacuous-comparison
-# class, recorded here so it is not reinvented. Both directions, ANCHORED:
-# a later bullet that repeats the label neither unanswers a real field nor
-# answers a placeholder one.
-DIAGN="$WORK/diag-note"; rm -rf "$DIAGN"; close_fixture "$DIAGN" yes yes answered yes no true
-git -C "$DIAGN" checkout -q spec/0001-thing
-printf -- '- Architecture diagram: <updated in this commit | no impact>\n' >> "$DIAGN/specs/0001-thing.md"
-git -C "$DIAGN" add -A >/dev/null 2>&1
-git -C "$DIAGN" commit -qm "an anchored later bullet repeating the label" >/dev/null 2>&1
-git -C "$DIAGN" checkout -q main
-run_hook "$HOOKS/close-gate.sh" "$DIAGN" "$(bash_payload "$MERGE_CMD")"
-if [[ -z "$HOOK_OUT" ]]; then
-  ok "diagram first-wins a: an anchored later placeholder bullet cannot UNANSWER a real field (KL1's refuse direction, closed)"
-else
-  bad "diagram first-wins a: an anchored later placeholder bullet cannot UNANSWER a real field (KL1's refuse direction, closed)" \
-      "the merge was denied, so a later line is deciding the field again; KL1's class is back"
-fi
-DIAGN2="$WORK/diag-note2"; rm -rf "$DIAGN2"; close_fixture "$DIAGN2" yes yes unanswered yes no true
-git -C "$DIAGN2" checkout -q spec/0001-thing
-printf -- '- Architecture diagram: no impact\n' >> "$DIAGN2/specs/0001-thing.md"
-git -C "$DIAGN2" add -A >/dev/null 2>&1
-git -C "$DIAGN2" commit -qm "an anchored later bullet answering for the field" >/dev/null 2>&1
-git -C "$DIAGN2" checkout -q main
-run_hook "$HOOKS/close-gate.sh" "$DIAGN2" "$(bash_payload "$MERGE_CMD")"
-if [[ -z "$HOOK_OUT" ]]; then
-  bad "diagram first-wins b: an anchored later answering bullet cannot ANSWER a placeholder field (KL1's publish direction, closed)" \
-      "the merge was allowed, so a later line answered a field nobody answered; KL1's class is back"
-else
-  ok "diagram first-wins b: an anchored later answering bullet cannot ANSWER a placeholder field (KL1's publish direction, closed)"
-fi
-
 # THE ESCAPE pre-push READS (the 2.5.0 leg, F7; the case was written at the v1.7
 # second bound leg for the OPPOSITE fact and then, when 2.2.0's pre-push started
 # honouring the variable, was left reporting ok on BOTH arms, so for four
@@ -905,6 +868,49 @@ fi
 # The third case is the one that matters most: merging the trunk INTO a spec
 # branch is ordinary work, and a fix that refused it would be the false denial
 # this repository treats as worse than the bypass.
+
+# THE SCANS AND THE ALIAS AT THE GIT-HOOK LAYER (spec 0146, 0144's escalation E-g). Two
+# public bullets were pinned only through the session gates 2.8.0 removed; these cases
+# pin what the git hooks themselves do, measured first on a scratch instance. Each is
+# decided by the refusal code AND by whether the commit or merge landed, so a hook that
+# refuses for an unrelated reason cannot pass it.
+OIX="$WORK/gh-own-index"; gh_fixture "$OIX" no
+git -C "$OIX" config core.hooksPath .githooks
+cp "$OIX/.git/index" "$WORK/gh-own-index-alt.index"
+printf 'a %s b\n' "$(printf '\342\200\224')" > "$OIX/alt.md"
+GIT_INDEX_FILE="$WORK/gh-own-index-alt.index" git -C "$OIX" add alt.md >/dev/null 2>&1
+OIX_OUT="$(GIT_INDEX_FILE="$WORK/gh-own-index-alt.index" git -C "$OIX" commit -qm "alt index" 2>&1)"
+if [[ "$(git -C "$OIX" log -1 --format=%s)" != "alt index" ]] && printf '%s' "$OIX_OUT" | grep -q 'SLH-EMDASH'; then
+  ok "own index a: a commit through GIT_INDEX_FILE is scanned by pre-commit and refused (SLH-EMDASH)"
+else
+  bad "own index a: a commit through GIT_INDEX_FILE is scanned by pre-commit and refused (SLH-EMDASH)" \
+      "last commit: $(git -C "$OIX" log -1 --format=%s); output: $(printf '%s' "$OIX_OUT" | head -c 200)"
+fi
+git_init "$OIX/nested" >/dev/null 2>&1
+printf 'a %s b\n' "$(printf '\342\200\224')" > "$OIX/nested/n.md"
+git -C "$OIX/nested" add n.md >/dev/null 2>&1
+if git -C "$OIX/nested" commit -qm "nested" >/dev/null 2>&1; then
+  ok "own index b: a git -C commit into a nested repository runs that repository's hooks, so this project's scan does not read it (documented hole, still open)"
+else
+  bad "own index b: a git -C commit into a nested repository runs that repository's hooks, so this project's scan does not read it (documented hole, still open)" \
+      "the nested commit was refused, which CLOSES the hole the bullet names; update the bullet and this ledger entry"
+fi
+ALX="$WORK/gh-alias"; gh_fixture "$ALX" no
+git -C "$ALX" config core.hooksPath .githooks
+git -C "$ALX" branch alias-of-thing spec/0001-thing
+git -C "$ALX" checkout -q spec/0001-thing
+printf 'more\n' > "$ALX/src/MORE.txt"
+git -C "$ALX" add -A >/dev/null 2>&1; git -C "$ALX" commit -qm "spec advances" >/dev/null 2>&1
+git -C "$ALX" checkout -q main
+ALX_OUT="$(cd "$ALX" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m "merge the alias" alias-of-thing 2>&1)"
+if ! git -C "$ALX" cat-file -e main:src/FEATURE.txt 2>/dev/null && printf '%s' "$ALX_OUT" | grep -q 'SLH-CLOSES-NO-SPEC'; then
+  ok "alias close a: an alias of an unclosed spec branch, merged after the branch advances, is refused by pre-merge-commit (SLH-CLOSES-NO-SPEC)"
+else
+  bad "alias close a: an alias of an unclosed spec branch, merged after the branch advances, is refused by pre-merge-commit (SLH-CLOSES-NO-SPEC)" \
+      "main carries src/FEATURE.txt: $(git -C "$ALX" cat-file -e main:src/FEATURE.txt 2>/dev/null && echo yes || echo no); output: $(printf '%s' "$ALX_OUT" | head -c 200)"
+fi
+( cd "$ALX" && git merge --abort >/dev/null 2>&1 ) || true
+
 fi; shard_region_end
 # <<< SHARD-END scan-ref-refusal
 chain_fixture() { # chain_fixture <dir>
@@ -936,114 +942,6 @@ if bash "$SCRIPTS/trunk-audit.sh" "$CHA" >/dev/null 2>&1; then
   ok "chain a: KNOWN HOLE, a chained merge past a compliant close is reported clean, as Known limitations records"
 else
   ok "chain a: a chained merge is refused again, which CLOSES a documented hole; re-run the two-clone assertion below and the ordinary-work controls, then move the bullet in the same commit"
-fi
-
-# A `<<\EOF` HEREDOC BODY IS READ AS CODE (leg F10), documented not fixed.
-#
-# The owner's decision on 2026-08-08 was to hold the v1.7 parser freeze and
-# correct the documentation instead of widening hd_scan's delimiter class. This
-# assertion exists because the ledger entry says "asserted", and because the day
-# the freeze lifts, somebody needs to be told this closed.
-#
-# What made it worth a bullet rather than a shrug: it is not merely an absent
-# warning. Through plugin 2.5.0 it RAN the project's gate command,
-# synchronously, inside the PreToolUse hook, before an ordinary `git commit`,
-# under the template's timeout 1800 for that entry.
-#
-# THE OBSERVABLE MOVED IN 2.6.0 (spec 0132 cluster C, the owner's ruling 1 on
-# the 2.6.0 strategy): the close gate runs NO gate command in PreToolUse any
-# more, so "ran the gate command" can no longer be the evidence that a body was
-# read as code. The evidence is now the ADVISORY itself: a <<\EOF body naming a
-# merge of a NON-compliant spec draws the close gate's verdict
-# (CG-NO-CLOSING-REPORT) on a commit that merges nothing, and the quoted
-# spelling draws none. The marker is asserted UNTOUCHED on every spelling, the
-# real merge included, which is cluster C's own pin (watched red on 5825267,
-# where the real merge touched it), and the public bullet lost its second
-# clause in the same commit as this block.
-#
-# FOUR FIXTURES were needed to measure this, and the first three would each have
-# produced a confidently wrong bullet: a non-existent merge operand
-# short-circuited at CG-UNNAMEABLE-REF, a chore branch never reached the
-# gate-command path at all, and a non-compliant spec was denied at
-# CG-NO-CLOSING-REPORT first. Only a COMPLIANT spec reached the gate command, so
-# only that fixture could see the run; the non-compliant branch is what sees
-# the misreading now. The controls below are the reason that was caught rather
-# than written up.
-hd_fixture() { # hd_fixture <dir> <marker-path>
-  local d="$1" mk="$2"; rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude"
-  git_init "$d"
-  printf '{"trunk":"main","scaffolded":true,"gate_command":"touch %s","roles":{"src":"src"}}\n' "$mk" > "$d/.claude/sdd.json"
-  printf 'x\n' > "$d/src/app.js"
-  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0100 | G | ACTIVE | a |\n| 0101 | B | ACTIVE | b |\n' > "$d/specs/STATUS.md"
-  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm i >/dev/null 2>&1
-  git -C "$d" checkout -q -b spec/0100-good
-  printf 'export const g = 1\n' > "$d/src/g.js"
-  printf '# Spec 0100\n\nStatus: CLOSED\n\n## Closing report\n\n- QA Pass 1 verdicts:\n\n```qa-pass-1\ncrit: PASS\n```\n\n- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n' > "$d/specs/0100-good.md"
-  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0100 | G | CLOSED | done |\n| 0101 | B | ACTIVE | b |\n' > "$d/specs/STATUS.md"
-  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm w >/dev/null 2>&1
-  git -C "$d" checkout -q main
-  # The NON-compliant sibling: CLOSED with no Closing report, so a merge of it
-  # (real or misread from a heredoc body) draws CG-NO-CLOSING-REPORT.
-  git -C "$d" checkout -q -b spec/0101-bad
-  printf 'export const b = 1\n' > "$d/src/b.js"
-  printf '# Spec 0101\n\nStatus: CLOSED\n' > "$d/specs/0101-bad.md"
-  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm b >/dev/null 2>&1
-  git -C "$d" checkout -q main
-}
-# hd_ran <dir> <marker> <command> -> "YES"/"no": did the close gate run the gate command?
-hd_ran() {
-  rm -f "$2"
-  printf %s "$(jq -nc --arg c "$3" '{tool_name:"Bash",tool_input:{command:$c}}')" \
-    | CLAUDE_PROJECT_DIR="$1" bash "$HOOKS/close-gate.sh" >/dev/null 2>&1
-  [[ -f "$2" ]] && printf 'YES' || printf 'no'
-}
-# hd_code <dir> <command> -> the advisory code the close gate emitted, or "allow"
-hd_code() {
-  local out
-  out="$(printf %s "$(jq -nc --arg c "$2" '{tool_name:"Bash",tool_input:{command:$c}}')" \
-    | CLAUDE_PROJECT_DIR="$1" bash "$HOOKS/close-gate.sh" 2>/dev/null)"
-  [[ -n "$out" ]] || { printf 'allow'; return 0; }
-  printf '%s' "$out" | jq -r '.setlistAdvisory.code // "allow"' 2>/dev/null || printf 'unreadable'
-}
-HDD="$WORK/heredoc"; HDM="$WORK/heredoc-gate-ran"; hd_fixture "$HDD" "$HDM"
-HD_CTL=""
-[[ "$(hd_code "$HDD" 'git merge --no-ff spec/0101-bad')" == "CG-NO-CLOSING-REPORT" ]] || HD_CTL="$HD_CTL real-merge-of-the-bad-spec-not-advised"
-[[ "$(hd_code "$HDD" 'git merge --no-ff spec/0100-good')" == "allow" ]] || HD_CTL="$HD_CTL real-merge-of-the-good-spec-not-allowed"
-[[ "$(hd_code "$HDD" 'git commit -m "ordinary message"')" == "allow" ]] || HD_CTL="$HD_CTL plain-commit-advised"
-if [[ -z "$HD_CTL" ]]; then
-  ok "heredoc control: a real merge of a non-compliant spec is advised, a compliant one and a plain commit are not"
-else
-  bad "heredoc control: a real merge of a non-compliant spec is advised, a compliant one and a plain commit are not" \
-      "the fixture proves nothing:$HD_CTL; the misreading is only visible on a NON-compliant merge target, which is what three earlier fixtures missed"
-fi
-# CLUSTER C's OWN PIN (2.6.0, ruling 1): no spelling runs the gate command in
-# PreToolUse, the real merge of the compliant spec included. Red on 5825267:
-# the real merge touched the marker there.
-HD_RUN=""
-[[ "$(hd_ran "$HDD" "$HDM" 'git merge --no-ff spec/0100-good')" == "no" ]] || HD_RUN="$HD_RUN real-merge-ran-it"
-[[ "$(hd_ran "$HDD" "$HDM" 'git commit -m "ordinary message"')" == "no" ]] || HD_RUN="$HD_RUN plain-commit-ran-it"
-[[ "$(hd_ran "$HDD" "$HDM" 'git commit -F - <<\EOF
-git merge --no-ff spec/0100-good was reverted
-EOF')" == "no" ]] || HD_RUN="$HD_RUN heredoc-body-ran-it"
-if [[ -z "$HD_RUN" ]]; then
-  ok "close gate (2.6.0, cluster C): the gate command is not run in PreToolUse on any spelling, the real merge included"
-else
-  bad "close gate (2.6.0, cluster C): the gate command is not run in PreToolUse on any spelling, the real merge included" \
-      "the marker was touched by:$HD_RUN; the run left the close gate under the owner's ruling 1 and the git hook runs the close tier once"
-fi
-HD_BS="$(hd_code "$HDD" 'git commit -F - <<\EOF
-git merge --no-ff spec/0101-bad was reverted
-EOF')"
-HD_Q="$(hd_code "$HDD" "git commit -F - <<'EOF'
-git merge --no-ff spec/0101-bad was reverted
-EOF")"
-if [[ "$HD_BS" == "CG-NO-CLOSING-REPORT" && "$HD_Q" == "allow" ]]; then
-  ok "heredoc: KNOWN HOLE, a <<\\EOF body is still read as a merge and draws the close verdict, as Known limitations records"
-elif [[ "$HD_BS" == "allow" && "$HD_Q" == "allow" ]]; then
-  ok "heredoc: a <<\\EOF body is no longer read as a merge, which CLOSES a documented hole; move the bullet and this ledger entry in the same commit"
-else
-  bad "heredoc: the quoted spelling must NOT be read as a merge" \
-      "backslash=$HD_BS quoted=$HD_Q; the quoted form regressing means the parser got broader, not narrower, which is the direction the freeze exists to prevent"
 fi
 
 # THE REFRESH DISPLACES A FOREIGN HOOK LAYER IN SILENCE (leg F8 and F12).

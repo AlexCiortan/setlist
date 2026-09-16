@@ -112,97 +112,10 @@ run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPE' && CLAUDE_PLUGIN_ROOT='$
 expect_script "pre-push reviewref: a push to a namespace this hook does not read is REPORTED by code and still allowed" 0 "SLH-REF-NOT-AUDITED"
 
 # =============================================================================
-# NO TEST MAY MATCH A DENY ON ITS PROSE (cut worklist 4.5)
-#
-# Every denial carries a stable bracketed code precisely so the MESSAGE can be
-# reworded without breaking a test. Item 8's promoted rider rewords the
-# CG-SPEC-NOT-AUTHORED text to name the chore route, and the cut called that
-# "cheap and safe because every denial now carries a stable code, so prose can
-# move without breaking a test that was matching it".
-#
-# That was not true when it was written. `close-gate reuse a` matched the phrase
-# "does not modify", straight out of the deny message, so the safe rewording
-# would have gone red for a reason having nothing to do with behaviour. This
-# check is what makes the claim true rather than aspirational.
-#
-# SCOPED TO CG-SPEC-NOT-AUTHORED, which is what the worklist names and what item
-# 8 is about to reword. A first draft scanned EVERY deny message and reported 19
-# hits, but nearly all of them are assertions on a domain term that happens to
-# appear in the text ("em-dash", "CLOSED", "Closing report") rather than on the
-# message's phrasing. Forcing all of those onto codes is a large unrelated
-# refactor that no section-4 bullet authorises, so it is not done here; the
-# narrow check that the cut actually promoted is, and the general version is
-# noted as a candidate rather than smuggled in.
+# NO TEST MAY MATCH A DENY ON ITS PROSE (cut worklist 4.5): the scan that stood
+# here was scoped to CG-SPEC-NOT-AUTHORED's message and left with the close gate
+# in 2.8.0 (spec 0144), with the three cases that tested its own verdict rule.
 # =============================================================================
-PROSE_VIOLATIONS=0
-PROSE_CHECKED=0
-# The verdict rule, hoisted into a function so BOTH directions of it can be
-# asserted (F4/F10, 2026-08-11). A scan that read no input has not passed, and
-# that has to be a property something can test rather than the shape of one
-# branch nobody exercises.
-prose_verdict() { # prose_verdict <checked> <violations> -> vacuous|ok|violations
-  if [[ "$1" -eq 0 ]]; then printf 'vacuous'
-  elif [[ "$2" -eq 0 ]]; then printf 'ok'
-  else printf 'violations'; fi
-}
-# The one deny message this check governs, code stripped.
-DENY_PROSE="$(grep -ho 'deny "close gate \[CG-SPEC-NOT-AUTHORED\][^"]*"' "$HOOKS"/close-gate.sh 2>/dev/null \
-  | sed -e 's/^deny "//' -e 's/"$//')"
-assert_true "deny-prose scan: the CG-SPEC-NOT-AUTHORED message was actually located" \
-  "the deny text could not be extracted, so the scan below would compare against an empty string and pass" \
-  test -n "$DENY_PROSE"
-# Every substring an expect_deny asserts on.
-while IFS= read -r want; do
-  [[ -n "$want" ]] || continue
-  PROSE_CHECKED=$((PROSE_CHECKED + 1))
-  # A code is the contract; anything else has to be justified.
-  case "$want" in
-    CG-*|CM-*|SH-*|SLH-*) continue ;;
-  esac
-  # Only a phrase UNIQUE to this deny is dangerous. "Closing report" appears in
-  # this message and in three others, and a test keyed to it is asserting on the
-  # message that owns it, not on this one. Rewording CG-SPEC-NOT-AUTHORED cannot
-  # break those; it can only break a test keyed to a phrase found nowhere else.
-  OTHER_PROSE="$(grep -ho 'deny "[^"]*"' "$HOOKS"/*.sh 2>/dev/null \
-    | sed -e 's/^deny "//' -e 's/"$//' | grep -vF 'CG-SPEC-NOT-AUTHORED')"
-  if printf '%s\n' "$DENY_PROSE" | grep -qF -- "$want" \
-     && ! printf '%s\n' "$OTHER_PROSE" | grep -qF -- "$want"; then
-    PROSE_VIOLATIONS=$((PROSE_VIOLATIONS + 1))
-    printf '       matches deny PROSE, not a code: [%s]\n' "$want"
-  fi
-done < <(grep -hoE 'expect_deny "[^"]*" "[^"]*"' "${SUITE_FILES[@]}" 2>/dev/null \
-         | sed -E 's/.*" "([^"]*)"$/\1/')
-
-assert_true "deny-prose scan: the scan actually found expect_deny assertions to check" \
-  "it parsed zero assertions, so a clean result would mean nothing" \
-  test "$PROSE_CHECKED" -gt 20
-# F4/F10 of the 2026-08-11 leg: this printed
-# "PASS ... (0 assertions scanned)" whenever the scan read nothing, which is a
-# check reporting success having evaluated no input. Zero scanned is now its
-# own FAILURE of this check rather than a pass sitting beside a separate red.
-case "$(prose_verdict "$PROSE_CHECKED" "$PROSE_VIOLATIONS")" in
-  vacuous)
-    bad "no test matches CG-SPEC-NOT-AUTHORED on prose rather than on its stable code" \
-        "the scan evaluated ZERO assertions, so this is not a pass: it is a check that ran over nothing" ;;
-  ok)
-    ok "no test matches CG-SPEC-NOT-AUTHORED on prose rather than on its stable code ($PROSE_CHECKED assertions scanned)" ;;
-  *)
-    bad "no test matches CG-SPEC-NOT-AUTHORED on prose rather than on its stable code" \
-        "$PROSE_VIOLATIONS assertion(s) match that deny's text; item 8 rewords it, so they would go red for no behavioural reason" ;;
-esac
-
-# THE VACUITY RULE ITSELF, asserted in both directions. The rule is what the
-# leg found missing, so it gets pinned rather than left as a shape in one
-# branch of one case statement.
-assert_true "suite F10a: zero assertions scanned is NOT a clean deny-prose result" \
-  "prose_verdict called a scan of nothing clean, which is the vacuous-pass class this suite exists to catch" \
-  test "$(prose_verdict 0 0)" = "vacuous"
-assert_true "suite F10b: a real scan with no violations IS clean" \
-  "prose_verdict refused a healthy scan, which is the false-denial direction" \
-  test "$(prose_verdict 85 0)" = "ok"
-assert_true "suite F10c: a real scan WITH violations is not clean" \
-  "prose_verdict swallowed a violation" \
-  test "$(prose_verdict 85 3)" = "violations"
 
 # F4: THE SUITE MUST GIVE THE SAME VERDICT FROM ANY CWD, which line 9 of this
 # file states as its usage. One read of its own path was relative, so run from
@@ -261,26 +174,150 @@ else
   ok "appendix C structure: no Closing-report field label begins with the block terminator"
 fi
 
-ACO="$WORK/appendixc-order"; close_fixture "$ACO" yes no answered yes no true
-git -C "$ACO" checkout -q spec/0001-thing
-insert_before "$ACO/specs/0001-thing.md" '- QA Pass 2 (human): done' \
-  '- QA Pass 2 criterion blocked: STRUCTURALLY BLOCKED (no Mac reachable this session)'
-printf -- '- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n' > "$WORK/qa-blk.txt"
-insert_block_before "$ACO/specs/0001-thing.md" '- QA Pass 2 criterion blocked: STRUCTURALLY BLOCKED (no Mac reachable this session)' "$WORK/qa-blk.txt"
-git -C "$ACO" add -A >/dev/null 2>&1; git -C "$ACO" commit -qm "field between the anchors" >/dev/null 2>&1
-git -C "$ACO" checkout -q main
-run_hook "$HOOKS/close-gate.sh" "$ACO" "$(bash_payload "$MERGE_CMD")"
-expect_allow "appendix C ordering: a verdict BEFORE a QA-Pass-2-prefixed field still closes"
+# The public README edition invariant and its publish gate, moved here from shard
+# 05 in spec 0144 when that shard left with commit-gate.sh; neither reads a gate.
+# =============================================================================
+# THE PUBLIC README NAMES EXACTLY ONE EDITION (found in external review)
+#
+# publish/README.public.md line 12 said "edition v1.6" while four other lines in
+# the same file said v1.7, so a publish would have named the shipping edition
+# wrong in its opening paragraph. The staged export passed anyway, and THAT is
+# the finding: publish-setlist.sh checked the README CONTAINS "edition v1.7" and
+# never checked for the absence of a prior one, while CLAUDE.md describes the
+# script as refusing "if publish/README.public.md still names a prior edition
+# version". The description claimed more than the check did.
+#
+# Same class as the lifecycle-list drift this branch already caught: a fix that
+# covered every copy somebody thought of. Two assertions, because they fail for
+# different reasons: the INVARIANT (the file names one edition) runs on every
+# commit and would have caught the defect the day it was written, and the GATE
+# (the publish script refuses a stale one) is what stops it reaching a publish.
+# =============================================================================
+PUBR="$ROOT/publish/README.public.md"
+if [[ ! -f "$PUBR" ]]; then
+  ok "public README edition: SKIPPED, publish/ is absent (expected in the public repo, which does not carry the publish tooling)"
+else
+  ED_V="$(grep -oE '^\*\*Edition v[0-9]+\.[0-9]+' "$ROOT/setlist.md" | head -n1 | grep -oE 'v[0-9]+\.[0-9]+' || true)"
+  assert_true "public README edition: the edition version was resolved from setlist.md" \
+    "the Edition header could not be parsed, so the comparison below would compare against nothing" \
+    test -n "$ED_V"
+  # THE CLAIM LIVES ON ONE LINE, and the invariant is anchored there (narrowed
+  # 2026-08-29 by owner ruling; the gate in publish-setlist.sh carries the full
+  # reasoning and the cost). The self-description is the document's statement
+  # about which edition users are getting; a provenance citation elsewhere
+  # ("since v1.7") is a statement about when a claim was first made, and the
+  # old whole-file rule could not tell those apart.
+  PUB_SELF="$(grep -n 'The current edition of the framework document is' "$PUBR" | head -n1 || true)"
+  PUB_SELF_EDS="$(printf '%s\n' "$PUB_SELF" | sed -E 's/v[0-9]+\.[0-9]+\.[0-9]+/ /g' | grep -oE 'v[0-9]+\.[0-9]+' | sort -u || true)"
+  PUB_SELF_STALE="$(printf '%s\n' "$PUB_SELF_EDS" | grep -v '^$' | grep -vx "$ED_V" || true)"
+  if [[ -n "$PUB_SELF" && -z "$PUB_SELF_STALE" && -n "$PUB_SELF_EDS" ]]; then
+    ok "public README edition: the self-description names $ED_V and no other edition"
+  else
+    bad "public README edition: the self-description names $ED_V and no other edition" \
+        "line=[${PUB_SELF:-<absent>}] stale=[$(printf '%s' "$PUB_SELF_STALE" | tr '\n' ' ')]; an absent line is a failure, not a pass, because a check that cannot find its subject has not checked it"
+  fi
 
-ACO2="$WORK/appendixc-order-bad"; close_fixture "$ACO2" yes no answered yes no true
-git -C "$ACO2" checkout -q spec/0001-thing
-# The trap, made concrete: the new field sits BETWEEN the anchors and ahead of
-# the verdict, so the extraction ends before the verdict is ever seen.
-insert_before "$ACO2/specs/0001-thing.md" '- QA Pass 2 (human): done' 'criterion 1: PASS'
-insert_before "$ACO2/specs/0001-thing.md" 'criterion 1: PASS' \
-  '- QA Pass 2 criterion blocked: STRUCTURALLY BLOCKED (no Mac reachable this session)'
-git -C "$ACO2" add -A >/dev/null 2>&1; git -C "$ACO2" commit -qm "field ahead of the verdict" >/dev/null 2>&1
-git -C "$ACO2" checkout -q main
-run_hook "$HOOKS/close-gate.sh" "$ACO2" "$(bash_payload "$MERGE_CMD")"
-expect_deny "appendix C ordering: a QA-Pass-2-prefixed field AHEAD of the verdict truncates the block (the 1.0.2 false denial)" "CG-NO-QA-VERDICT"
+  # THE SECOND CHECK, weaker and stated as such: every OTHER two-component
+  # version must sit in a provenance construction. A bare stale version
+  # anywhere in the file still fails, so the narrowing bought the ratified
+  # boundary sentence and not a general exemption. Two-component versions only,
+  # and never part of a three-component one, so a plugin version like v1.1.0 is
+  # not mistaken for an edition.
+  PUB_EDS="$(sed -E 's/v[0-9]+\.[0-9]+\.[0-9]+/ /g' "$PUBR" | sed -E 's/(since|in) v[0-9]+\.[0-9]+/ /g' | grep -oE 'v[0-9]+\.[0-9]+' | sort -u || true)"
+  PUB_STALE="$(printf '%s\n' "$PUB_EDS" | grep -v '^$' | grep -vx "$ED_V" || true)"
+  if [[ -z "$PUB_STALE" ]]; then
+    ok "public README edition: no BARE stale edition version outside a provenance citation"
+  else
+    bad "public README edition: no BARE stale edition version outside a provenance citation" \
+        "it also names: $(printf '%s' "$PUB_STALE" | tr '\n' ' ')"
+  fi
 
+  # THE NARROWING IS NOT A HOLE, asserted rather than promised: a stale edition
+  # planted BARE in the file must still fail the second check. Without this the
+  # narrowing above is a claim about what the gate still catches, made by the
+  # person who narrowed it.
+  PUBN="$WORK/pub-narrow.md"; sed -e 's/$/ /' "$PUBR" > "$PUBN"
+  printf 'This project has been on edition v0.9 for a while.\n' >> "$PUBN"
+  PUBN_EDS="$(sed -E 's/v[0-9]+\.[0-9]+\.[0-9]+/ /g' "$PUBN" | sed -E 's/(since|in) v[0-9]+\.[0-9]+/ /g' | grep -oE 'v[0-9]+\.[0-9]+' | sort -u || true)"
+  if printf '%s\n' "$PUBN_EDS" | grep -qx 'v0.9'; then
+    ok "public README edition control: a BARE stale version planted in the file is still caught after the narrowing"
+  else
+    bad "public README edition control: a BARE stale version planted in the file is still caught after the narrowing" \
+        "the narrowing let a bare stale edition through, which is a hole and not a scoping decision"
+  fi
+fi
+
+# The GATE itself, extracted verbatim from publish-setlist.sh and driven against
+# a seeded stale README. Extracted rather than reimplemented, for the reason the
+# CI scope check gives: a copy drifts, and then the test asserts things about a
+# gate that is no longer the one running.
+PUBSH="$ROOT/publish/publish-setlist.sh"
+if [[ ! -f "$PUBSH" ]]; then
+  ok "public README gate: SKIPPED, publish/ is absent (expected in the public repo)"
+else
+  PG="$WORK/pubgate"; rm -rf "$PG"; mkdir -p "$PG"
+  awk '/# >>> EDITION-STRING-GATE-BEGIN/{f=1;next} /# <<< EDITION-STRING-GATE-END/{f=0} f' "$PUBSH" > "$PG/gate.sh"
+  if [[ ! -s "$PG/gate.sh" ]]; then
+    bad "public README gate: the EDITION-STRING-GATE markers exist in publish-setlist.sh" \
+        "could not extract the gate; missing or renamed markers mean this check cannot run, which is a failure rather than a pass"
+  else
+    # THE SELF-DESCRIPTION LINE IS NOW THE GATE'S SUBJECT, so every fixture
+    # carries one. That is not fixture bookkeeping: the gate anchors there
+    # structurally (narrowed 2026-08-29), and a fixture without the line would
+    # exercise only the absent-subject refusal and say nothing about the rule.
+    SELF='The current edition of the framework document is setlist.md (edition v9.9).'
+
+    # Clean: only the current edition. Must PASS.
+    printf '%s\nSetlist, the current one.\n' "$SELF" > "$PG/README.public.md"
+    if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
+      ok "public README gate: a README naming only the current edition is accepted"
+    else
+      bad "public README gate: a README naming only the current edition is accepted" "it refused a clean file"
+    fi
+    # Stale: names a prior edition too, BARE. Must REFUSE.
+    printf '%s\nBut this line still says edition v9.8.\n' "$SELF" > "$PG/README.public.md"
+    if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
+      bad "public README gate: a README still naming a PRIOR edition is refused" \
+          "it accepted a file naming v9.8 alongside v9.9, which is the defect this gate exists for"
+    else
+      ok "public README gate: a README still naming a PRIOR edition is refused"
+    fi
+    # THE SELF-DESCRIPTION ITSELF NAMING A STALE EDITION. This is the defect the
+    # gate was written for and the one the narrowing must not have loosened.
+    printf 'The current edition of the framework document is setlist.md (edition v9.8).\n' > "$PG/README.public.md"
+    if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
+      bad "public README gate: a SELF-DESCRIPTION naming a stale edition is refused" \
+          "the narrowing let the gate's own founding defect through, which would be a hole and not a scoping decision"
+    else
+      ok "public README gate: a SELF-DESCRIPTION naming a stale edition is refused"
+    fi
+    # ABSENT SUBJECT IS A REFUSAL, NOT A PASS. A check that cannot find the line
+    # it judges has not judged it, which is this project's own rule about its
+    # own checks and the reason the narrowing is safe to make at all.
+    printf 'Setlist, edition v9.9, with no self-description anywhere.\n' > "$PG/README.public.md"
+    if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
+      bad "public README gate: a README with NO self-description line is refused" \
+          "the gate passed a file whose subject it could not find, which is the empty-result-as-verdict class"
+    else
+      ok "public README gate: a README with NO self-description line is refused"
+    fi
+    # A PROVENANCE CITATION IS NOT A CLAIM ABOUT THE CURRENT EDITION. This is
+    # what the narrowing bought, asserted rather than assumed, and it is the
+    # ratified boundary sentence's exact shape.
+    printf '%s\nwhere this project has said the real boundary lives since v1.7.\n' "$SELF" > "$PG/README.public.md"
+    if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
+      ok "public README gate: a 'since vX.Y' provenance citation is accepted, which is what the narrowing bought"
+    else
+      bad "public README gate: a 'since vX.Y' provenance citation is accepted, which is what the narrowing bought" \
+          "the gate still cannot tell a citation of when a claim was made from a claim about what users are getting"
+    fi
+    # A three-component plugin version must not be read as an edition.
+    printf '%s\nplugin v9.8.1 is irrelevant here.\n' "$SELF" > "$PG/README.public.md"
+    if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
+      ok "public README gate: a three-component plugin version is not mistaken for an edition"
+    else
+      bad "public README gate: a three-component plugin version is not mistaken for an edition" \
+          "it refused on v9.8.1, so the gate would block ordinary publishes"
+    fi
+  fi
+fi

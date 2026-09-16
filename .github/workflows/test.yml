@@ -97,7 +97,26 @@ jobs:
     # this number is to catch the ninety-minute silent hang rather than to be
     # the tightest value that happened to pass once. A cap that fails an honest
     # run is a green nobody can trust, twice over.
-    timeout-minutes: 40
+    #
+    # 75, 2026-09-15 (spec 0143, the owner's ruling on its escalation 7). The
+    # mutation check doubled from eight suite runs to sixteen when it was
+    # re-pointed at the subjects that survive 2.8.0's deletion, and run
+    # 34918086786 was CANCELLED at 40 on the Linux leg mid mutation-check with
+    # every completed step green, the 2026-08-30 shape exactly. MEASURED on that
+    # run: 13m27s before the mutation step, a control of about 2m48s and about
+    # 2m27s per mutation, so sixteen need about 42m and the leg about 60m. 75 is
+    # about 1.25x of that projection, below the 1.6x this history argues for; the
+    # owner set the figure, and 0144 removes the eight old-gate mutations, which
+    # brings the leg back near 40m and the ratio back near 1.9x.
+    #
+    # 45, 2026-09-15 (spec 0147, the owner's ruling on spec 0144's cap). 0144
+    # removed the eight old-gate mutations and MEASURED the Linux leg at 14m51s
+    # (run 34962106467, the mutation step 8m40s, 8 of 8 caught). 45 is about 3x
+    # of that: well above the 1.6x this history argues for, so a slow shared host
+    # does not cancel an honest run, and well below 75, which let a hung runner
+    # cost an hour before anyone saw it. 40 is the value sixteen mutations blew
+    # through, which is why the figure is not 40.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:

@@ -668,45 +668,9 @@ else
       "$KL4_CALLERS of 3 call slh_scan_added; a layer that scans its own way is a layer the exclusion set does not govern"
 fi
 
-# --- THE ADVISORY SESSION GATE IS NOT PATH-SCOPED, AND THAT IS MEASURED -----
-#
-# THIS IS A GAP, PINNED RATHER THAN CLOSED. templates/hooks/commit-gate.sh runs
-# its own em-dash and secret scans over the whole staged diff, in a different
-# tree, without sourcing this library, and spec 0122 does not name it: its Owner
-# docs list the git-hook layer, the delivery scripts, the suite, the edition and
-# the public bullet, and its design contract says anything beyond the declared
-# shape goes back to the owner rather than being decided at working time.
-#
-# So the consequence is asserted instead of fixed, because an unasserted gap is
-# the one that surprises somebody: inside a Claude Code session, a commit of
-# excluded content is still DENIED by the advisory gate, while the same commit
-# run outside a session (or after the advisory ALLOW) is accepted by the git
-# hooks. The feature works at the layer carrying the guarantee and does not yet
-# work at the layer carrying the convenience. Filed for the owner as KL4-A1.
-#
-# The assertion is written in the CURRENT direction on purpose. If somebody
-# later scopes the advisory gate too, this goes red and says so, which is the
-# right way for a pinned limitation to be reopened: by a decision, not by drift.
-CGX="$WORK/kl4-advisory-gate"; kl4_fixture "$CGX" '["vendor/**"]'
-printf '%s\n' "$KL4_SECRET" >> "$CGX/vendor/dep/lib.js"
-git -C "$CGX" add -A >/dev/null 2>&1
-CGX_OUT="$(printf '%s' "$(bash_payload 'git commit -m x')" | CLAUDE_PROJECT_DIR="$CGX" bash "$HOOKS/commit-gate.sh" 2>/dev/null)"
-CGX_V="$(printf '%s' "$CGX_OUT" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // empty' 2>/dev/null)"
-if [[ "$CGX_V" == "deny" ]]; then
-  ok "KL4 gap KL4-A1 (PINNED, not closed): the ADVISORY commit gate is not path-scoped, so it still denies excluded content inside a session"
-else
-  bad "KL4 gap KL4-A1 (PINNED, not closed): the ADVISORY commit gate is not path-scoped, so it still denies excluded content inside a session" \
-      "the advisory gate stopped denying. If that was deliberate, this is the assertion to update, in the commit that made the decision and with the ledger row and the public bullet moved with it; if it was not, the two layers have silently drifted apart on what the exclusion set governs"
-fi
-# The twin that keeps the pin honest: the GUARANTEE layer, same content, same
-# config, accepts it. Without this the assertion above is satisfied by a repo
-# where nothing works at all.
-if git -C "$CGX" -c core.hooksPath=.githooks commit -qm vendored >/dev/null 2>&1; then
-  ok "KL4 gap KL4-A1 twin: the guarantee layer accepts the same content the advisory gate denies, which is what makes the gap a gap rather than a feature that does not work"
-else
-  bad "KL4 gap KL4-A1 twin: the guarantee layer accepts the same content the advisory gate denies, which is what makes the gap a gap rather than a feature that does not work" \
-      "the git hooks refused too, so the feature is not working at the layer it was built for"
-fi
+# --- KL4-A1, the advisory gate's unscoped scan: its pin and its twin left with
+# commit-gate.sh in 2.8.0 (spec 0144). The guarantee layer's acceptance of
+# excluded content is KL4 cell 1a above.
 
 # --- delivery: the config surface is stamped and survives a refresh ---------
 KL4_TMPL="$ROOT/templates/claude/sdd.json.tmpl"

@@ -8,7 +8,7 @@
 # additionalContext JSON on stdout reaches the model verbatim, including
 # under claude -p, with observed sources startup, resume, and compact.
 # Requires jq. Without it this hook still delivers the pointer, and adds the
-# warning that the three PreToolUse gates are now failing closed; it is the one
+# warning that the two PreToolUse hooks are degraded (they permit); it is the one
 # hook that can report the condition before a deny surfaces it.
 # Disable with a one-line edit: remove this hook's entry from
 # .claude/settings.json.
@@ -38,7 +38,7 @@ PROJ="$(cd "${CLAUDE_PROJECT_DIR:-.}" && pwd)"
 #
 #     {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":}}
 #
-# which is not JSON. So on the one machine where the three gates have silently
+# which is not JSON. So on the one machine where the PreToolUse hooks have silently
 # stopped enforcing, the session start emitted a malformed object carrying no
 # warning at all, and the notice the README promises never arrived. The warning
 # is most needed in exactly the state that suppressed it.
@@ -49,7 +49,7 @@ PROJ="$(cd "${CLAUDE_PROJECT_DIR:-.}" && pwd)"
 # quoted above was emitted again, by a different route, one release after leg
 # 4's F1 closed the nonzero shape.
 if ! command -v jq >/dev/null 2>&1 || [[ "$(printf '{"probe":"x"}' | jq -r '.probe' 2>/dev/null)" != "x" ]]; then
-  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"SDD re-grounding (the read budget, framework Part 2): before anything else, read specs/STATUS.md, then the active spec it names. WARNING: jq is not usable on this machine (it is missing, or it is installed but exits nonzero or prints nothing), so the three PreToolUse gates (scope, commit, close) are degraded and will report their verdict while PERMITTING the writes, commits and merges they govern, because they are advisory since v1.7; the git hooks are the layer that refuses, and they will refuse the commits and merges they govern until this is fixed. Run jq --version to see which it is, then install or repair jq (apt-get install jq, brew install jq, or the package manager for this system) before continuing."}}'
+  printf '%s\n' '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"SDD re-grounding (the read budget, framework Part 2): before anything else, read specs/STATUS.md, then the active spec it names. WARNING: jq is not usable on this machine (it is missing, or it is installed but exits nonzero or prints nothing), so the two PreToolUse hooks are degraded: the scope hook will report its verdict while PERMITTING the writes it governs, and the bypass deny will say nothing and deny nothing; the git hooks are the layer that refuses, and they will refuse the commits and merges they govern until this is fixed. Run jq --version to see which it is, then install or repair jq (apt-get install jq, brew install jq, or the package manager for this system) before continuing."}}'
   # fail-open-ok: not a pass; the pointer plus the jq warning was delivered.
   exit 0
 fi

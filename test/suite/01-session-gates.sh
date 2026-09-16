@@ -5,102 +5,9 @@
 # earlier shard, and the driver's verdict, TMPDIR and exit trap are its own.
 
 # =============================================================================
-# commit-gate.sh
-# =============================================================================
-
-CG="$WORK/commit-gate"
-git_init "$CG"
-sdd_json "$CG"
-
-# a. compound stage-and-commit
-run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git add -A && git commit -m "docs"')"
-expect_deny "commit-gate a: compound git add plus git commit is denied" "one step"
-
-# b. auto-staging flag
-run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -am "docs"')"
-expect_deny "commit-gate b: git commit -am is denied" "auto-staging"
-
-# c. staged em-dash. The fixture verifies its own bytes first, so the C6 trap
-# (hex escapes producing literal text under dash) can never hollow this out.
-printf 'a line with an %s in it\n' "$EMDASH" > "$CG/prose.md"
-if od -An -to1 "$CG/prose.md" | tr -s ' \n' ' ' | grep -q '342 200 224'; then
-  ok "commit-gate c0: fixture really contains the em-dash byte sequence"
-else
-  bad "commit-gate c0: fixture really contains the em-dash byte sequence" \
-      "od found no 342 200 224 in the fixture; the rest of case c proves nothing"
-fi
-git -C "$CG" add prose.md
-run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "prose"')"
-expect_deny "commit-gate c: staged em-dash is denied" "em-dash"
-git -C "$CG" reset -q
-
-# d. staged secret
-printf 'api_key = "EXAMPLE_NOT_A_REAL_SECRET_0123456789"\n' > "$CG/config.txt"
-git -C "$CG" add config.txt
-run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "config"')"
-expect_deny "commit-gate d: staged secret-shaped string is denied" "secret-shaped"
-git -C "$CG" reset -q
-rm -f "$CG/config.txt" "$CG/prose.md"
-
-# e. clean staged commit
-printf 'clean content, nothing to find\n' > "$CG/clean.md"
-git -C "$CG" add clean.md
-run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "clean"')"
-expect_allow "commit-gate e: a clean staged commit is allowed"
-
-# f. quote-stripping regression guard: "git add" inside the message only
-run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "explain why git add runs first"')"
-expect_allow "commit-gate f: the words git add inside a quoted message are allowed"
-
-# f2. THE SAME GUARD THROUGH THE ESCAPE PATH (leg 4, F31). Case f covers the
-# quoted spelling; an UNQUOTED message using backslash escapes was un-escaped
-# into live grammar, so a plain commit read as a compound stage-and-commit and
-# was denied. That is the false-positive twin of the close gate's F5, and it is
-# asserted here because a fix aimed only at the injection direction can pass
-# every one of those cases while breaking ordinary commits.
-git -C "$CG" add clean.md 2>/dev/null || true
-for esc_msg in 'git commit -m foo\;git\ add\ .' 'git commit -m explain\ why\ git\ add\ runs\ first' 'git commit -m fixup\&cleanup'; do
-  run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload "$esc_msg")"
-  expect_allow "commit-gate f2: [$esc_msg] is one commit, not a compound"
-done
-
-# f3. And the compound must STILL be seen, so f2 cannot pass by blinding the
-# separator test outright. This is the direction that would silently disarm the
-# gate if the escape fix went one step too far.
-for real_compound in 'git add . && git commit -m fixup' 'git add . ; git commit -m fixup' 'git add .; git commit -m fixup'; do
-  run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload "$real_compound")"
-  expect_deny "commit-gate f3: [$real_compound] is a real compound and is still denied" "one step"
-done
-git -C "$CG" commit -qm "clean"
-
-# g. spec lifecycle transition without specs/STATUS.md staged
-mkdir -p "$CG/specs"
-cat > "$CG/specs/0001-thing.md" <<'EOF'
-# Spec 0001 - thing
-Status: CLOSED
-EOF
-cat > "$CG/specs/STATUS.md" <<'EOF'
-| 0001 | Thing | ACTIVE | in flight |
-EOF
-git -C "$CG" add specs/0001-thing.md
-run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "close 0001"')"
-expect_deny "commit-gate g: a lifecycle change without STATUS.md is denied" "STATUS.md"
-git -C "$CG" add specs/STATUS.md
-run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "close 0001"')"
-expect_allow "commit-gate g2: the same change with STATUS.md staged is allowed"
-git -C "$CG" reset -q
-
-# h. KNOWN HOLE, documented rather than hidden: `git commit <pathspec>` commits
-# the working-tree copy without staging, so a staged-content scan sees nothing.
-# Named in the README's Known limitations section; asserted here so the day it
-# closes, this test fails and tells us.
-printf 'working tree %s not staged\n' "$EMDASH" > "$CG/hole.md"
-run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "msg" hole.md')"
-expect_allow "commit-gate h: KNOWN-HOLE, pathspec commit bypasses the staged scan"
-rm -f "$CG/hole.md"
-
-# =============================================================================
-# close-gate.sh
+# close_fixture and MERGE_CMD: the shared spec-close fixture. The close gate it was
+# written for left in 2.8.0 (spec 0144); the git-hook, audit and scope cases in
+# later shards build their instances with it.
 # =============================================================================
 
 # close_fixture <dir> <closing> <qa> <diag> <statusrow> <dup> <gate_command>
@@ -192,181 +99,6 @@ close_fixture() {
 
 MERGE_CMD='git merge --no-ff spec/0001-thing'
 
-# j. no Closing report
-# F2 of the 2.2.0 leg, a CONFIRMED FALSE DENIAL and F1's root cause on the READ
-# side. A fully compliant spec whose FILENAME carries a non-ASCII byte was
-# refused CG-SPEC-MISSING, the message naming a file that is present, because
-# `git ls-tree --name-only` emits the path QUOTED and the gate's
-# ^specs/NNNN-[^/]*\.md$ pattern could not match through the quotes and escapes.
-#
-# The CONTROL runs first and is the ASCII sibling of the same fixture, so a green
-# here is evidence about the FILENAME rather than about close_fixture.
-CL="$WORK/close-f2-ascii"; close_fixture "$CL" yes yes answered yes no true
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_allow "close-gate F2 control: a compliant spec with an ASCII filename merges"
-
-# THE RENAME MUST HAPPEN ON THE SPEC BRANCH, not on the trunk. The first cut of
-# this case renamed on main, because close_fixture leaves you there, so the gate
-# read the still-ASCII file from MERGED_REF and the case PASSED against pre-fix
-# bytes: a vacuous assertion that would have shipped as evidence for a fix it
-# never exercised. Caught by running it against the unfixed tree, which is the
-# only reason it is written this way.
-CL="$WORK/close-f2-utf8"; close_fixture "$CL" yes yes answered yes no true
-git -C "$CL" checkout -q spec/0001-thing
-git -C "$CL" mv "specs/0001-thing.md" "specs/0001-$(printf 'caf\303\251').md"
-git -C "$CL" add -A && git -C "$CL" commit -qm "the spec file carries a non-ASCII byte"
-git -C "$CL" checkout -q main
-# The fixture asserts its own shape: the branch must really carry the renamed
-# file, or the case below tests nothing.
-if ! git -C "$CL" ls-tree -r -z --name-only spec/0001-thing | tr '\0' '\n' | grep -q "^specs/0001-"; then
-  printf 'FIXTURE BROKEN: close-f2-utf8 has no specs/0001-* on the spec branch\n' >&2
-fi
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_allow "close-gate F2: a compliant spec whose FILENAME carries a non-ASCII byte still merges"
-
-CL="$WORK/close-j"; close_fixture "$CL" no no answered yes no true
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "close-gate j: a branch with no Closing report is denied" "Closing report"
-
-# k. Closing report, no QA verdict
-CL="$WORK/close-k"; close_fixture "$CL" yes no answered yes no true
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "close-gate k: a Closing report with no QA verdict is denied" "QA Pass 1"
-
-# l. unanswered architecture-diagram field
-CL="$WORK/close-l"; close_fixture "$CL" yes yes unanswered yes no true
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "close-gate l: an unanswered architecture-diagram field is denied" "architecture-diagram"
-
-# l2. a diagram field only inside a code fence is not live text (F6, plugin-2.0.0 leg)
-CL="$WORK/close-l2"; close_fixture "$CL" yes yes fenced yes no true
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "close-gate l2: a diagram field only inside a code fence does not answer the mandatory field and is denied (F6)" "diagram"
-
-# m. no CLOSED inventory row
-CL="$WORK/close-m"; close_fixture "$CL" yes yes answered no no true
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "close-gate m: a missing CLOSED inventory row is denied" "CLOSED"
-
-# n. compound checkout-then-merge from another branch: the target is derived
-# from the command text, not the current branch.
-CL="$WORK/close-n"; close_fixture "$CL" no no answered yes no true
-git -C "$CL" checkout -q spec/0001-thing
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git checkout main && git merge --no-ff spec/0001-thing')"
-expect_deny "close-gate n: the compound checkout-then-merge form is gated" "Closing report"
-
-# q. duplicate spec numbers
-CL="$WORK/close-q"; close_fixture "$CL" yes yes answered yes yes true
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "close-gate q: duplicate spec numbers on the branch are denied" "unique"
-
-# p. gate command fails: NOT this gate's question since 2.6.0 (spec 0132
-# cluster C, the owner's ruling 1). Through 2.5.0 this case expected a deny
-# with CG-GATE-COMMAND-RED; the run left PreToolUse and the git hook refuses
-# the same close under SLH-GATE-COMMAND-FAILED, pinned in the git-hook
-# sections. An otherwise compliant merge with a red gate command is ALLOWED
-# here, and the advisory-ruling region measures the single run.
-CL="$WORK/close-p"; close_fixture "$CL" yes yes answered yes no false
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_allow "close-gate p (2.6.0): a failing gate command is not judged by the session layer; the git hook refuses it"
-
-# o. fully compliant merge
-CL="$WORK/close-o"; close_fixture "$CL" yes yes answered yes no true
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_allow "close-gate o: a fully compliant merge is allowed"
-
-# The QA Pass 1 block is delimited by the Appendix C FIELD MARKERS, not by the
-# bare substring "QA Pass 2" anywhere in a line. The bare test ended the block
-# at the first line of QA-1 prose that cross-referenced QA Pass 2, dropping the
-# verdict out of the block and denying a compliant merge in the field (0112).
-CL="$WORK/close-crossref"; close_fixture "$CL" yes crossref answered yes no true
-CROSSREF_SPEC="$(git -C "$CL" show spec/0001-thing:specs/0001-thing.md)"
-XREF_LINE="$(printf '%s\n' "$CROSSREF_SPEC" | grep -n 'deferred to QA Pass 2' | head -n1 | cut -d: -f1)"
-VERDICT_LINE="$(printf '%s\n' "$CROSSREF_SPEC" | grep -n 'criterion 1: PASS' | head -n1 | cut -d: -f1)"
-MARKER_LINE="$(printf '%s\n' "$CROSSREF_SPEC" | grep -n '^[-*+[:space:]]*QA Pass 2' | head -n1 | cut -d: -f1)"
-if [[ -n "$XREF_LINE" && -n "$VERDICT_LINE" && -n "$MARKER_LINE" \
-      && "$XREF_LINE" -lt "$VERDICT_LINE" && "$VERDICT_LINE" -lt "$MARKER_LINE" ]]; then
-  ok "close-gate crossref0: the fixture really cross-references QA Pass 2 above the verdict"
-else
-  bad "close-gate crossref0: the fixture really cross-references QA Pass 2 above the verdict" \
-      "prose line '$XREF_LINE', verdict line '$VERDICT_LINE', field marker line '$MARKER_LINE'; the case below proves nothing unless prose precedes verdict precedes marker"
-fi
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_allow "close-gate crossref: QA-1 prose mentioning QA Pass 2 no longer truncates the verdict"
-
-# The other direction of the same fix: the end anchor must still terminate the
-# block, so a verdict-shaped word AFTER the QA Pass 2 field cannot satisfy a
-# Closing report whose QA-1 block is genuinely empty.
-CL="$WORK/close-stray"; close_fixture "$CL" yes stray answered yes no true
-STRAY_SPEC="$(git -C "$CL" show spec/0001-thing:specs/0001-thing.md)"
-STRAY_LINE="$(printf '%s\n' "$STRAY_SPEC" | grep -n 'regression suite came back PASS' | head -n1 | cut -d: -f1)"
-MARKER_LINE="$(printf '%s\n' "$STRAY_SPEC" | grep -n '^[-*+[:space:]]*QA Pass 2' | head -n1 | cut -d: -f1)"
-if [[ -n "$STRAY_LINE" && -n "$MARKER_LINE" && "$MARKER_LINE" -lt "$STRAY_LINE" ]]; then
-  ok "close-gate stray0: the fixture really places a PASS below the QA Pass 2 field marker"
-else
-  bad "close-gate stray0: the fixture really places a PASS below the QA Pass 2 field marker" \
-      "field marker line '$MARKER_LINE', stray PASS line '$STRAY_LINE'"
-fi
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "close-gate stray: a PASS below the QA Pass 2 field does not satisfy an empty QA-1 block" "QA Pass 1"
-
-# =============================================================================
-# Command spelling must not decide enforcement
-#
-# Both Bash gates used to decide whether they applied with a literal substring
-# test ("git commit", "git merge"). Every spelling below names the same
-# operation and every one of them walked straight past the gate in silence.
-# =============================================================================
-
-SP="$WORK/spelling-commit"
-git_init "$SP"
-sdd_json "$SP"
-printf 'staged prose with an %s in it\n' "$EMDASH" > "$SP/prose.md"
-git -C "$SP" add prose.md
-
-spell_deny() { # spell_deny <label> <command> <substring>
-  run_hook "$HOOKS/commit-gate.sh" "$SP" "$(bash_payload "$2")"
-  expect_deny "spelling (commit): $1" "$3"
-}
-spell_deny "two spaces between git and commit" 'git  commit -m x' "em-dash"
-spell_deny "a -C global option before commit"  'git -C . commit -m x' "em-dash"
-spell_deny "a --no-pager global option"        'git --no-pager commit -m x' "em-dash"
-spell_deny "a -c key=value global option"      'git -c user.name=z commit -m x' "em-dash"
-spell_deny "an absolute path to the binary"    '/usr/bin/git commit -m x' "em-dash"
-
-# The other direction matters just as much: a gate that denies everything
-# mentioning the word is a gate people rip out.
-run_hook "$HOOKS/commit-gate.sh" "$SP" "$(bash_payload 'git log --oneline')"
-expect_allow "spelling (commit): a git command that is not a commit is untouched"
-run_hook "$HOOKS/commit-gate.sh" "$SP" "$(bash_payload 'npm run build')"
-expect_allow "spelling (commit): an unrelated command is untouched"
-
-CL="$WORK/spelling-merge"; close_fixture "$CL" no no answered yes no true
-spell_merge_deny() { # spell_merge_deny <label> <command>
-  run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$2")"
-  expect_deny "spelling (merge): $1" "Closing report"
-}
-spell_merge_deny "a double-quoted branch name"  'git merge --no-ff "spec/0001-thing"'
-spell_merge_deny "a single-quoted branch name"  "git merge --no-ff 'spec/0001-thing'"
-spell_merge_deny "two spaces before merge"      'git  merge --no-ff spec/0001-thing'
-spell_merge_deny "a -C global option"           'git -C . merge --no-ff spec/0001-thing'
-spell_merge_deny "a fully qualified ref"        'git merge --no-ff refs/heads/spec/0001-thing'
-spell_merge_deny "a remote-tracking ref"        'git merge --no-ff origin/spec/0001-thing'
-spell_merge_deny "quoting inside the compound form" 'git checkout main && git merge --no-ff "spec/0001-thing"'
-
-# DISPOSITION CHANGED IN 1.0.3 (IN-1). This case used to assert that a merge
-# naming a non-spec branch passed untouched, on the reasoning that the gate
-# only governs spec and chore closes. That reasoning was the loophole: only
-# spec/ and chore/ branches enter the trunk through the ceremony, so a merge
-# into the trunk naming anything else is either a mistake or a way around the
-# gate, and "some-other-branch" is indistinguishable from a shell variable
-# that expanded to one. The gate now denies it, and the neighbouring cases
-# above pin the boundary: merges into a NON-trunk target stay ungated, and
-# --continue/--abort stay exempt.
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git merge --no-ff some-other-branch')"
-expect_deny "spelling (merge): a trunk merge naming a non-spec branch is denied" "literally"
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git status')"
-expect_allow "spelling (merge): a non-merge git command is untouched"
 
 # =============================================================================
 # scope-hook.sh
@@ -651,24 +383,11 @@ else
 fi
 
 # =============================================================================
-# i. jq absent: the three gates fail closed, the pointer still ships
+# i. jq absent: the scope hook fails closed, the pointer still ships
 # =============================================================================
-
-run_hook_nojq "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "clean"')"
-expect_deny "no-jq i1: the commit gate fails closed" "jq"
-
-CL="$WORK/close-o"
-run_hook_nojq "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "no-jq i2: the close gate fails closed even on a compliant merge" "jq"
 
 run_hook_nojq "$HOOKS/scope-hook.sh" "$SC" "$(edit_payload "$SC/specs/0001-thing.md")"
 expect_deny "no-jq i3: the scope hook fails closed" "jq"
-
-# The Bash blast radius stays narrow: without jq the commit gate cannot tell a
-# commit from anything else, so it must not deny every Bash call. The session
-# has to stay able to run the install command that fixes the condition.
-run_hook_nojq "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'apt-get install -y jq')"
-expect_allow "no-jq i4: unrelated Bash commands still run, so jq can be installed"
 
 run_hook_nojq "$HOOKS/regrounding-hook.sh" "$RG" "$(session_payload startup)"
 expect_context "no-jq i5: the pointer still ships and names the condition" "jq is not usable"
@@ -690,14 +409,6 @@ expect_context "no-jq i5: the pointer still ships and names the condition" "jq i
 # nothing. The controls are the assertions that make the fixture real.
 # =============================================================================
 
-run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "clean"')"
-CG_HEALTHY_RC="$HOOK_RC"; CG_HEALTHY_OUT="$HOOK_OUT"
-run_hook_brokenjq "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "clean"')"
-expect_deny "broken-jq j1: the commit gate fails CLOSED when jq runs and fails" "jq"
-
-run_hook_brokenjq "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "broken-jq j2: the close gate fails CLOSED even on a compliant merge" "jq"
-
 run_hook_brokenjq "$HOOKS/scope-hook.sh" "$SC" "$(edit_payload "$SC/specs/0001-thing.md")"
 expect_deny "broken-jq j3: the scope hook fails CLOSED" "jq"
 
@@ -712,21 +423,6 @@ else
       "the deny reason did not clear sdd.json: $HOOK_OUT"
 fi
 
-# THE REST OF THE TOOLCHAIN, one tool at a time (adversarial review F2).
-#
-# Asserted on the CODE rather than on "it denied", deliberately. The payload
-# below is a governed merge that the healthy gate already denies for an ordinary
-# reason, so an assertion that only checked for a denial would pass whether or
-# not the toolchain probe exists. Naming the code is what makes this test about
-# the probe.
-for bt in awk sed tr grep; do
-  build_brokentool_bin "$bt"
-  run_hook_brokentool "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-  expect_deny "toolchain t1: the close gate fails CLOSED when $bt is broken" "CG-NO-TOOLCHAIN"
-  run_hook_brokentool "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "clean"')"
-  expect_deny "toolchain t2: the commit gate fails CLOSED when $bt is broken" "CM-NO-TOOLCHAIN"
-done
-
 # GIT, THE ONE LOAD-BEARING DEPENDENCY THAT WAS NEVER PROBED (v1.9 leg, V19-F1
 # with F7; one fix, two gates, so two assertions).
 #
@@ -740,76 +436,15 @@ done
 # Asserted on the CODE, like its toolchain siblings above and for the same
 # reason: the merge payload is one the healthy gate denies anyway, so a bare
 # "did it deny" would pass with or without the probe.
+# The close gate's half of this fix (t3) left with that gate in 2.8.0 (spec 0144);
+# the scope hook's half is t4, below.
 build_brokentool_bin git
-run_hook_brokentool "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_deny "toolchain t3: the close gate names a no-git code when git is broken" "CG-NO-GIT"
 
 # The scope hook's fail-open was one level further in: a broken git makes the
 # branch read empty, empty never equals the trunk, and the gate exits 0 on a
 # write it exists to warn about.
 run_hook_brokentool "$HOOKS/scope-hook.sh" "$SC" "$(edit_payload "$SC/src/app.js")"
 expect_deny "toolchain t4: the scope hook names a no-git code when git is broken" "SH-NO-GIT"
-
-# CONTROL, and it is the one that keeps t3 honest: with git broken, a payload
-# this gate does NOT govern must stay silent. Without it the fix could have
-# turned every Bash call into a warning and t3 would still pass.
-run_hook_brokentool "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'ls -la')"
-expect_allow "toolchain t5 control: broken git, ungoverned payload, still silent"
-
-# F3-2026: THE THIRD SIBLING of the same probe, reinstated in the 2.3.0 cycle
-# from the patch parked with its backlog entry. V19-F1 fixed t3 and t4 in the
-# 2.2.0 cycle and left commit-gate.sh alone, so a broken git made ADDED read
-# empty, every grep over it miss, and a staged em-dash AND a staged secret both
-# report clean at exit 0 with no output.
-#
-# Asserted on the CODE for its siblings' reason: this gate denies an em-dash
-# anyway when git works, so "did it deny" would pass with or without the probe.
-run_hook_brokentool "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "x"')"
-expect_deny "toolchain t6 (F3-2026): the commit gate names a no-git code when git is broken" "CM-NO-GIT"
-
-# F11-2026: THE ADVISORY JSON CONTRACT, asserted on the FIELD and not on the
-# reason text, which is the whole reason this survived three adversarial legs.
-# advise_literal() hardcoded "code":"" while the gates' frozen header promises
-# setlistAdvisory {gate, verdict, code, reason}. It never blocked, so nothing
-# ever failed on it: 1.1.0 filed it as F21, 2.0.0 filed it as F12 with a full
-# reproduction, and both times it was rediscovered rather than fixed. The suite
-# could not notice a regression here at all until this assertion existed.
-#
-# The literal path is reached with jq ABSENT, which is what that path is for.
-run_hook_nojq "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "x"')"
-F11_CODE="$(printf '%s' "$HOOK_OUT" | jq -r '.setlistAdvisory.code // "<absent>"' 2>/dev/null)"
-if [[ -n "$F11_CODE" && "$F11_CODE" != "<absent>" && "$F11_CODE" =~ ^[A-Z][A-Z0-9-]*$ ]]; then
-  ok "F11-2026: a literal-reason deny carries a real setlistAdvisory.code ($F11_CODE), not the empty string"
-else
-  bad "F11-2026: a literal-reason deny carries a real setlistAdvisory.code, not the empty string" \
-      "code=[$F11_CODE]; the gates' own frozen header promises this field and the literal path has emitted an empty one since 1.1.0"
-fi
-
-# KL4-A1: the advisory gate is NOT path-scoped, it still is not, and it now SAYS
-# SO. The ruling of 2026-08-28 closed the divergence by honesty rather than by
-# coupling, so this asserts the SENTENCE and leaves the pinned divergence
-# assertion below exactly as it was: the entry does not close by drift and this
-# is not a claim that it did.
-KL4A1_OUT=0
-for kl4a1_case in "$EMDASH" 'api_key = "abcdefghijklmnop1234"'; do
-  run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "x"')" 2>/dev/null || true
-done
-printf 'a %s b\n' "$EMDASH" > "$CG/note.md"
-git -C "$CG" add -A >/dev/null 2>&1
-run_hook "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'git commit -m "x"')"
-if printf '%s' "$HOOK_OUT" | grep -q 'evaluated at the git-hook layer, and this advisory does not read them'; then
-  ok "KL4-A1: the advisory gate's refusal states that path exclusions are evaluated at the git-hook layer and not here"
-else
-  bad "KL4-A1: the advisory gate's refusal states that path exclusions are evaluated at the git-hook layer and not here" \
-      "the user still cannot tell from this message whether the commit will actually be blocked, which is the measured harm the ruling priced"
-fi
-git -C "$CG" rm -q -f --cached note.md >/dev/null 2>&1; rm -f "$CG/note.md"
-
-
-# The blast radius stays narrow in this state too: the session must still be
-# able to run the command that repairs jq.
-run_hook_brokenjq "$HOOKS/commit-gate.sh" "$CG" "$(bash_payload 'apt-get install -y jq')"
-expect_allow "broken-jq j4: unrelated Bash commands still run, so jq can be repaired"
 
 # The re-grounding hook emitted literally
 #   {"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":}}
@@ -836,10 +471,6 @@ run_hook "$HOOKS/scope-hook.sh" "$BARE" "$(edit_payload "$BARE/src/app.js")"
 expect_allow "no-sdd x1: the scope hook stays silent outside an instance"
 run_hook "$HOOKS/regrounding-hook.sh" "$BARE" "$(session_payload startup)"
 expect_allow "no-sdd x2: the regrounding hook stays silent outside an instance"
-run_hook "$HOOKS/close-gate.sh" "$BARE" "$(bash_payload "$MERGE_CMD")"
-expect_allow "no-sdd x3: the close gate stays silent outside an instance"
-run_hook "$HOOKS/commit-gate.sh" "$BARE" "$(bash_payload 'ls -la')"
-expect_allow "no-sdd x4: the commit gate ignores non-commit commands"
 
 # =============================================================================
 # y. stamp integrity: hooks are copied byte-verbatim (C2)
@@ -856,15 +487,15 @@ design_surface=no
 EOF
 if bash "$ROOT/scripts/stamp.sh" "$WORK/answers.txt" "$STAMP_TARGET" >/dev/null 2>&1; then
   STAMP_DIFF=""
-  for h in scope-hook commit-gate close-gate regrounding-hook stop-hook; do
+  for h in scope-hook regrounding-hook stop-hook bypass-deny; do
     if ! cmp -s "$HOOKS/$h.sh" "$STAMP_TARGET/.claude/hooks/$h.sh"; then
       STAMP_DIFF="$STAMP_DIFF $h.sh"
     fi
   done
   if [[ -z "$STAMP_DIFF" ]]; then
-    ok "stamp y: stamp.sh copies all five hooks byte-verbatim"
+    ok "stamp y: stamp.sh copies all four hooks byte-verbatim"
   else
-    bad "stamp y: stamp.sh copies all five hooks byte-verbatim" \
+    bad "stamp y: stamp.sh copies all four hooks byte-verbatim" \
         "these differ from templates/hooks:$STAMP_DIFF (substitution must never touch hook files)"
   fi
 else

@@ -260,7 +260,7 @@ rfi_snapshot() { # rfi_snapshot <dir> -> content+config fingerprint on stdout
   git -C "$1" config --get merge.ff 2>/dev/null || printf 'merge.ff-unset\n'
 }
 RFI="$WORK/rfi-nowrite"; rfi_fixture "$RFI" ""
-for h in scope-hook commit-gate close-gate regrounding-hook stop-hook; do
+for h in scope-hook regrounding-hook stop-hook bypass-deny; do
   printf '#!/bin/sh\n# PROJECT FORK of %s\nexit 0\n' "$h" > "$RFI/.claude/hooks/$h.sh"
 done
 mkdir -p "$RFI/.git/hooks"
@@ -280,7 +280,7 @@ fi
 # no-write property is the refusal's and not a general paralysis.
 SETLIST_ADOPT_HOOKSPATH=1 bash "$SCRIPTS/refresh-instance.sh" --apply "$RFI" >/dev/null 2>&1
 if [[ "$(git -C "$RFI" config --get core.hooksPath 2>/dev/null)" == ".githooks" ]] \
-   && cmp -s "$HOOKS/close-gate.sh" "$RFI/.claude/hooks/close-gate.sh"; then
+   && cmp -s "$HOOKS/scope-hook.sh" "$RFI/.claude/hooks/scope-hook.sh"; then
   ok "refresh F5 control: the adopted run still delivers both layers in full"
 else
   bad "refresh F5 control: the adopted run still delivers both layers in full" \
@@ -519,7 +519,7 @@ fi
 RFI_SUB="$WORK/rfi-subinst"; rm -rf "$RFI_SUB"; mkdir -p "$RFI_SUB/app/.claude/hooks"
 git_init "$RFI_SUB"
 printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$RFI_SUB/app/.claude/sdd.json"
-printf '#!/bin/sh\n# stale close gate\n' > "$RFI_SUB/app/.claude/hooks/close-gate.sh"
+printf '#!/bin/sh\n# stale scope hook\n' > "$RFI_SUB/app/.claude/hooks/scope-hook.sh"
 bash "$SCRIPTS/refresh-instance.sh" --apply "$RFI_SUB/app" >"$WORK/rfi-subinst.out" 2>&1
 RFI_SUB_RC=$?
 RFI_SUB_BAD=""
@@ -527,7 +527,7 @@ RFI_SUB_BAD=""
 grep -q 'NOT ARMED' "$WORK/rfi-subinst.out" || RFI_SUB_BAD="$RFI_SUB_BAD no-not-armed-note"
 [[ -z "$(git -C "$RFI_SUB" config --get core.hooksPath 2>/dev/null)" ]] || RFI_SUB_BAD="$RFI_SUB_BAD parent-config-touched"
 [[ ! -e "$RFI_SUB/app/.githooks" ]] || RFI_SUB_BAD="$RFI_SUB_BAD githooks-delivered-inert"
-cmp -s "$HOOKS/close-gate.sh" "$RFI_SUB/app/.claude/hooks/close-gate.sh" || RFI_SUB_BAD="$RFI_SUB_BAD advisory-not-refreshed"
+cmp -s "$HOOKS/scope-hook.sh" "$RFI_SUB/app/.claude/hooks/scope-hook.sh" || RFI_SUB_BAD="$RFI_SUB_BAD advisory-not-refreshed"
 if [[ -z "$RFI_SUB_BAD" ]]; then
   ok "refresh F6j: below the worktree top the advisory layer refreshes, the boundary skips loudly, exit 3"
 else
@@ -605,7 +605,7 @@ printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"
 bash "$SCRIPTS/refresh-instance.sh" --apply "$RFI_R51/app" >"$WORK/rfi-r51.out" 2>&1
 RFI_R51_RC=$?
 if [[ "$RFI_R51_RC" -eq 3 ]] && ! grep -q 'refusing to arm' "$WORK/rfi-r51.out" \
-   && cmp -s "$HOOKS/close-gate.sh" "$RFI_R51/app/.claude/hooks/close-gate.sh" \
+   && cmp -s "$HOOKS/scope-hook.sh" "$RFI_R51/app/.claude/hooks/scope-hook.sh" \
    && grep -q 'NOT ARMED' "$WORK/rfi-r51.out"; then
   ok "refresh R5a: below the top, a parent-layer foreign dir does not block the advisory refresh"
 else
@@ -868,9 +868,11 @@ fi
 # R9b: a Closing report inside an HTML comment is invisible to the gate the
 # way it is to every renderer; a one-line comment in a real section is inert.
 # Self-contained: qa_atx_run is defined in the qa corpus section BELOW this
-# point in the file, so the readers are extracted inline here.
-R9B_TF="$(grep -m1 -E '^[[:space:]]*TEMPLATE_FENCE_AWK=' "$HOOKS/close-gate.sh" | sed -e "s/^[[:space:]]*TEMPLATE_FENCE_AWK='//" -e "s/'$//")"
-R9B_QA="$(grep -m1 -E '^[[:space:]]*QA_PASS1_AWK=' "$HOOKS/close-gate.sh" | sed -e "s/^[[:space:]]*QA_PASS1_AWK='//" -e "s/'$//")"
+# point in the file, so the readers are extracted inline here. They are read from
+# the hook library since spec 0144: the close gate carried a byte-identical copy
+# and left in 2.8.0, and the rule is the library's.
+R9B_TF="$(grep -m1 -E '^[[:space:]]*SLH_TEMPLATE_FENCE_AWK=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed -e "s/^[[:space:]]*SLH_TEMPLATE_FENCE_AWK='//" -e "s/'$//")"
+R9B_QA="$(grep -m1 -E '^[[:space:]]*SLH_QA_PASS1_AWK=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed -e "s/^[[:space:]]*SLH_QA_PASS1_AWK='//" -e "s/'$//")"
 R9B_STATE="$(printf '# S\n\n<!--\n## Closing report\n\n```qa-pass-1\n1: PASS\n```\n-->\n' | awk "$R9B_TF" | awk "$R9B_QA")"
 R9B_CTL="$(printf '## Closing report\n\n<!-- reviewed -->\n\n```qa-pass-1\n1: PASS\n```\n' | awk "$R9B_TF" | awk "$R9B_QA")"
 if [[ "$R9B_STATE" == "none" && "$R9B_CTL" == "ok" ]]; then
@@ -1023,28 +1025,25 @@ printf 'export const s = 1\n' > "$GV/src/s.js"
 git -C "$GV" add -A >/dev/null 2>&1; git -C "$GV" commit -qm work >/dev/null 2>&1
 git -C "$GV" checkout -q main
 
-GV_MERGE="$(jq -nc --arg c 'git merge --no-ff spec/0001-thing' '{tool_name:"Bash",tool_input:{command:$c}}')"
 GV_WRITE="$(jq -nc --arg p "$GV/src/a.txt" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"}}')"
 
 # CONTROL: on modern git each gate reports its code. Without this the silence
 # below could mean "nothing to say" rather than "went blind".
 GV_CTL=""
-printf %s "$GV_MERGE" | CLAUDE_PROJECT_DIR="$GV" bash "$HOOKS/close-gate.sh" 2>&1 | grep -q 'CG-' || GV_CTL="$GV_CTL close-gate"
 printf %s "$GV_WRITE" | CLAUDE_PROJECT_DIR="$GV" bash "$HOOKS/scope-hook.sh" 2>&1 | grep -q 'SH-' || GV_CTL="$GV_CTL scope-hook"
 if [[ -z "$GV_CTL" ]]; then
-  ok "git version control: on current git both session gates report a code for this fixture"
+  ok "git version control: on current git the scope hook reports a code for this fixture"
 else
-  bad "git version control: on current git both session gates report a code for this fixture" \
+  bad "git version control: on current git the scope hook reports a code for this fixture" \
       "these said nothing even on modern git:$GV_CTL, so the shim cases below prove nothing"
 fi
 
 GV_BLIND=""
-printf %s "$GV_MERGE" | PATH="$GITOLD:$PATH" CLAUDE_PROJECT_DIR="$GV" bash "$HOOKS/close-gate.sh" 2>&1 | grep -q 'CG-' || GV_BLIND="$GV_BLIND close-gate"
 printf %s "$GV_WRITE" | PATH="$GITOLD:$PATH" CLAUDE_PROJECT_DIR="$GV" bash "$HOOKS/scope-hook.sh" 2>&1 | grep -q 'SH-' || GV_BLIND="$GV_BLIND scope-hook"
 if [[ -z "$GV_BLIND" ]]; then
-  ok "git version a: the session gates still report on a git too old for branch --show-current"
+  ok "git version a: the scope hook still reports on a git too old for branch --show-current"
 else
-  bad "git version a: the session gates still report on a git too old for branch --show-current" \
+  bad "git version a: the scope hook still reports on a git too old for branch --show-current" \
       "these went SILENT, zero bytes, no code and no reason:$GV_BLIND; absence reads as permission, which is the rule these hooks state and did not hold git to"
 fi
 
@@ -1171,6 +1170,42 @@ if [[ -z "$DIAG_LOOSE" ]]; then
 else
   bad "diagram value b: an UNANSWERED field is still refused, template placeholder included" \
       "these merged:$DIAG_LOOSE, so the fix for the false positive weakened the check instead of correcting it"
+fi
+
+# THE DIAGRAM FIELD IS FIRST-LINE-WINS, pinned at the MERGE (spec 0145, the
+# owner's ruling on 0144's escalation E-h). The pair lived in shard 08 against
+# the close gate and left with it in 0144; the reading it pins did not leave,
+# because the library's field reader takes the FIRST anchored label line
+# (`head -n1`) and pre-merge-commit, the trunk audit and the forge check all
+# read the field through it. So the pair is re-homed here, through a real
+# merge, both directions and ANCHORED: a later bullet repeating the label
+# neither unanswers a real field nor answers a placeholder one. Watched red
+# first on a library whose reader took the LAST line (spec 0145, Progress).
+DGFW="$WORK/diag-firstwins-a"; diag_fixture "$DGFW" "no impact"
+git -C "$DGFW" checkout -q spec/0005-diag
+printf -- '- Architecture diagram: <updated in this commit | no impact>\n' >> "$DGFW/specs/0005-diag.md"
+git -C "$DGFW" add -A >/dev/null 2>&1
+git -C "$DGFW" -c core.hooksPath=/dev/null commit -qm "an anchored later placeholder bullet" >/dev/null 2>&1
+git -C "$DGFW" checkout -q main
+( cd "$DGFW" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m m spec/0005-diag ) > "$DGFW.out" 2>&1
+if git -C "$DGFW" cat-file -e main:src/d.js 2>/dev/null; then
+  ok "diagram first-wins a: at pre-merge-commit, an anchored later placeholder bullet cannot UNANSWER a real field"
+else
+  bad "diagram first-wins a: at pre-merge-commit, an anchored later placeholder bullet cannot UNANSWER a real field" \
+      "the merge was refused, so a later line is deciding the field: $(tr '\n' ' ' < "$DGFW.out" | cut -c1-200)"
+fi
+DGFW2="$WORK/diag-firstwins-b"; diag_fixture "$DGFW2" "<updated in this commit | no impact>"
+git -C "$DGFW2" checkout -q spec/0005-diag
+printf -- '- Architecture diagram: no impact\n' >> "$DGFW2/specs/0005-diag.md"
+git -C "$DGFW2" add -A >/dev/null 2>&1
+git -C "$DGFW2" -c core.hooksPath=/dev/null commit -qm "an anchored later answering bullet" >/dev/null 2>&1
+git -C "$DGFW2" checkout -q main
+( cd "$DGFW2" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m m spec/0005-diag ) > "$DGFW2.out" 2>&1
+if ! git -C "$DGFW2" cat-file -e main:src/d.js 2>/dev/null && grep -q 'SLH-DIAGRAM-UNANSWERED' "$DGFW2.out"; then
+  ok "diagram first-wins b: at pre-merge-commit, an anchored later answering bullet cannot ANSWER a placeholder field (SLH-DIAGRAM-UNANSWERED)"
+else
+  bad "diagram first-wins b: at pre-merge-commit, an anchored later answering bullet cannot ANSWER a placeholder field (SLH-DIAGRAM-UNANSWERED)" \
+      "landed=$(git -C "$DGFW2" cat-file -e main:src/d.js 2>/dev/null && echo yes || echo no): $(tr '\n' ' ' < "$DGFW2.out" | cut -c1-200)"
 fi
 
 # THE REMOTE'S TRUNK RESOLVED FROM A CACHED CONVENIENCE REF (leg F7).
@@ -1581,14 +1616,6 @@ fi
 # DEFAULT, and the fast-forward shape is byte-for-byte what a forge merge button
 # produces, which for a pull-request team is the ordinary path rather than an
 # attack. So they were fixed rather than documented.
-GCE="$WORK/gate-empty"; rm -rf "$GCE"; close_fixture "$GCE" yes yes answered yes no ""
-git -C "$GCE" checkout -q main
-run_hook "$HOOKS/close-gate.sh" "$GCE" "$(bash_payload "$MERGE_CMD")" >/dev/null 2>&1 || true
-GCE_STATE="$(jq -r '.scaffolded' "$GCE/.claude/sdd.json" 2>/dev/null)" # fail-open-ok: an unreadable value fails the guard below, which skips a case rather than asserting on a broken fixture
-if [[ "$GCE_STATE" == "true" ]]; then
-  if bash -c "cd '$GCE' && printf '%s\n' \"\$(git -C '$GCE' log -1 --format=%H)\" >/dev/null"; then :; fi
-fi
-
 # The library function directly, which is what both git hooks call.
 GCLIB="$WORK/gate-lib"; rm -rf "$GCLIB"; mkdir -p "$GCLIB/.claude"
 printf '{"trunk":"main","scaffolded":true,"gate_command":"","roles":{"src":"src"}}\n' > "$GCLIB/.claude/sdd.json"

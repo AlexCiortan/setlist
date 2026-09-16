@@ -75,9 +75,9 @@ fi
 # The canonical spec-lifecycle enumeration, extracted rather than restated.
 #
 # This is what makes the lifecycle lockstep REAL rather than a convention. The
-# commit gate enumerates the lifecycle vocabulary literally, so a state the
-# protocol gains and the gate does not is a transition the gate silently fails
-# to notice. Binding the gate to the edition by grepping prose would be the same
+# pre-commit hook enumerates the lifecycle vocabulary literally, so a state the
+# protocol gains and the hook does not is a transition the hook silently fails
+# to notice. Binding the hook to the edition by grepping prose would be the same
 # defect one layer up (a check reporting a result it did not earn), so the
 # edition carries a marked, fenced block and THIS is the mechanism that reads
 # it, the same extractor that already builds every instance's specs/TEMPLATE.md

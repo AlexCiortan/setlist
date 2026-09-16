@@ -818,17 +818,6 @@ else
       "$(tr '\n' ' ' < "$WORK/scanhdr2.out")"
 fi
 
-# THE ADVISORY LAYER'S OWN COPY (leg F5), asserted on its code.
-SCANHDR2="$WORK/scan-hdr-adv"; rm -rf "$SCANHDR2"; mkdir -p "$SCANHDR2/src" "$SCANHDR2/specs" "$SCANHDR2/.claude"
-git_init "$SCANHDR2"
-printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$SCANHDR2/.claude/sdd.json"
-printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$SCANHDR2/specs/STATUS.md"
-printf 'seed\n' > "$SCANHDR2/seed.txt"
-git -C "$SCANHDR2" add -A >/dev/null 2>&1; git -C "$SCANHDR2" commit -qm seed >/dev/null 2>&1
-printf '++ b/x api_key = "abcdefghijklmnop1234"\n' > "$SCANHDR2/src/evil.txt"
-git -C "$SCANHDR2" add -A >/dev/null 2>&1
-run_hook "$HOOKS/commit-gate.sh" "$SCANHDR2" "$(bash_payload 'git commit -m x')"
-expect_deny "scan header F5: the advisory gate names a secret on an added line beginning '++ b/'" "CM-SECRET"
 
 # THE BLOB-PINNED DIFFERENTIAL: off is byte-identical, PROVEN rather than said.
 #

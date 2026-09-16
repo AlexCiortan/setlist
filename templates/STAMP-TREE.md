@@ -10,9 +10,9 @@ documentation, never copied into instances.
 
 - **`.tmpl` suffix = placeholder substitution.** Only files named `*.tmpl` are
   templated; the suffix is stripped at stamp time. Every other file is copied
-  byte-verbatim. In particular `hooks/` contains no `.tmpl` files and is never
-  templated (the commit gate builds its em-dash pattern from an escape sequence
-  that must survive untouched).
+  byte-verbatim. In particular `hooks/` and `git-hooks/` contain no `.tmpl` files
+  and are never templated (the git-hook library builds its em-dash pattern from an
+  escape sequence that must survive untouched).
 - **Placeholders**, filled from the answers file the command writes:
   `{{PROJECT_NAME}}`, `{{STACK}}`, `{{WORKING_MODE}}`, `{{SRC_ROLE}}`,
   `{{TESTS_ROLE}}`, `{{STAMP_DATE}}`, `{{EDITION_FILE}}`. Two exceptions are
@@ -70,10 +70,9 @@ documentation, never copied into instances.
 | `claude/skills/scaffold/SKILL.md.tmpl` | `.claude/skills/scaffold/SKILL.md` | new projects (retrofits get no generated skill; the health check ships as `/setlist:validate`) |
 | `claude/skills/browser-qa/SKILL.md` | `.claude/skills/browser-qa/SKILL.md` | ui = yes |
 | `hooks/scope-hook.sh` | `.claude/hooks/scope-hook.sh` | always, byte-verbatim |
-| `hooks/commit-gate.sh` | `.claude/hooks/commit-gate.sh` | always, byte-verbatim |
-| `hooks/close-gate.sh` | `.claude/hooks/close-gate.sh` | always, byte-verbatim |
 | `hooks/regrounding-hook.sh` | `.claude/hooks/regrounding-hook.sh` | always, byte-verbatim |
-| `hooks/stop-hook.sh` | `.claude/hooks/stop-hook.sh` | always, byte-verbatim (2.6.0, spec 0132 cluster H, the owner's ruling 5: the Stop hook refuses to end a turn that leaves a spec or `specs/STATUS.md` changed and unstaged, once per end of turn; wired on the Stop event, which takes no matcher; the fifth session hook the wiring check enumerates) |
+| `hooks/bypass-deny.sh` | `.claude/hooks/bypass-deny.sh` | always, byte-verbatim (2.8.0, spec 0143: the one hard deny in a hook of its own, a new path wired as the one PreToolUse entry on Bash since 2.8.0; it denies a command that disarms the git hooks and prints nothing for any other, and its lexer is pinned by digest in the suite; one of the four session hooks the wiring check enumerates) |
+| `hooks/stop-hook.sh` | `.claude/hooks/stop-hook.sh` | always, byte-verbatim (2.6.0, spec 0132 cluster H, the owner's ruling 5: the Stop hook refuses to end a turn that leaves a spec or `specs/STATUS.md` changed and unstaged, once per end of turn; wired on the Stop event, which takes no matcher; one of the four session hooks the wiring check enumerates) |
 | `git-hooks/pre-commit` | `.githooks/pre-commit` | always, byte-verbatim |
 | `git-hooks/pre-merge-commit` | `.githooks/pre-merge-commit` | always, byte-verbatim |
 | `git-hooks/pre-push` | `.githooks/pre-push` | always, byte-verbatim |

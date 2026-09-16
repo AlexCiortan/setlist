@@ -5,70 +5,6 @@
 # earlier shard, and the driver's verdict, TMPDIR and exit trap are its own.
 
 # =============================================================================
-# 1.0.4: a trunk merge that NAMES a resolvable non-spec ref is not a close.
-# 1.0.3 denied these, which broke syncing your own trunk while `git pull`
-# achieved the same result untouched: friction with no safety.
-# =============================================================================
-
-CL="$WORK/close-namedref"; close_fixture "$CL" yes yes answered yes no true
-git -C "$CL" branch -f release/2.0 HEAD
-git -C "$CL" update-ref refs/remotes/origin/main HEAD
-for spelling in 'git merge origin/main' 'git merge --no-ff release/2.0' 'git merge main'; do
-  run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$spelling")"
-  expect_allow "close-gate named: [$spelling] is a sync, not a close, and is allowed"
-done
-# A ref that does NOT resolve cannot vouch for the merge: message words must
-# not pose as branch names.
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git merge -m "closing spec" $B')"
-expect_deny "close-gate named: message words do not count as a named ref" "cannot be verified"
-# A compound must not donate the checkout's argument to the merge.
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git checkout main && git merge $B')"
-expect_deny "close-gate named: the compound form does not donate 'main' to the merge" "cannot be verified"
-# And the merge of a spec branch is still fully gated (0001 has no CLOSED row
-# here only because close_fixture built it compliant; use the real close).
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_allow "close-gate named: the compliant spec close still merges"
-
-# =============================================================================
-# 1.0.3, IN-1: an indirectly named trunk merge DENIES instead of passing.
-# The 1.0.1 fix widened the ref parser; these cases pin the DISPOSITION: when
-# the target is the trunk and the command matched the merge grammar but no
-# spec/ or chore/ ref could be extracted, the gate refuses to guess. The
-# fixture is fully COMPLIANT, so any deny below comes from the extraction
-# refusal alone, not from a missing close artifact.
-# =============================================================================
-
-CL="$WORK/close-indirect"; close_fixture "$CL" yes yes answered yes no true
-
-for spelling in \
-  'B=spec/0001-thing; git merge --no-ff $B' \
-  'git merge -' \
-  'git merge @{-1}' \
-  'git merge FETCH_HEAD' \
-  'git merge --no-ff 1a2b3c4d'; do
-  run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$spelling")"
-  expect_deny "close-gate indirect: [$spelling] into the trunk is denied" "literally"
-done
-
-# --continue/--abort finish or cancel a merge that was gated on its way in;
-# blocking them would strand a conflicted close.
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git merge --continue')"
-expect_allow "close-gate indirect: git merge --continue is exempt from the extraction deny"
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git merge --abort')"
-expect_allow "close-gate indirect: git merge --abort is exempt from the extraction deny"
-
-# The deny is scoped to TRUNK targets: syncing the trunk INTO a feature branch
-# names no spec/chore ref either, and must stay ungated.
-git -C "$CL" checkout -q spec/0001-thing
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload 'git merge main')"
-expect_allow "close-gate indirect: merging the trunk into a feature branch stays ungated"
-git -C "$CL" checkout -q main
-
-# And the literal compliant form still merges (the deny must not overreach).
-run_hook "$HOOKS/close-gate.sh" "$CL" "$(bash_payload "$MERGE_CMD")"
-expect_allow "close-gate indirect: the literal compliant merge is still allowed"
-
-# =============================================================================
 # 1.0.3, IN-3: NotebookEdit reaches the trunk rule (notebook_path), and a
 # pathless write-tool event denies instead of slipping through.
 # =============================================================================
@@ -129,30 +65,6 @@ else
 fi
 
 # =============================================================================
-# 1.0.3, IN-4: git rm and git mv stage during command execution, after the
-# gate scanned the index; compounded with a commit they are the git-add hole
-# in different spelling.
-# =============================================================================
-
-RMV="$WORK/commit-rmv"
-git_init "$RMV"
-sdd_json "$RMV"
-
-run_hook "$HOOKS/commit-gate.sh" "$RMV" "$(bash_payload 'git rm seed.txt && git commit -m "drop seed"')"
-expect_deny "commit-gate rm: compound git rm plus commit is denied" "one step"
-run_hook "$HOOKS/commit-gate.sh" "$RMV" "$(bash_payload 'git mv seed.txt seed2.txt && git commit -m "rename seed"')"
-expect_deny "commit-gate mv: compound git mv plus commit is denied" "one step"
-# Refusals must leave the tree untouched (the deny fired before the command ran).
-if [[ -f "$RMV/seed.txt" && ! -e "$RMV/seed2.txt" ]]; then
-  ok "commit-gate rm/mv: the denied compounds touched nothing"
-else
-  bad "commit-gate rm/mv: the denied compounds touched nothing" "seed.txt moved or vanished"
-fi
-# A message merely MENTIONING git rm stays allowed (quote-strip guard).
-run_hook "$HOOKS/commit-gate.sh" "$RMV" "$(bash_payload 'git commit -m "docs: when to use git rm"')"
-expect_allow "commit-gate rm-msg: a message mentioning git rm is not a compound"
-
-# =============================================================================
 # 1.0.3, IN-9: every exit 0 in a stamped hook justifies itself. A silent pass
 # with no written reason is how IN-1 survived two releases: the reviewer
 # found it by reading for unannotated exits, so the suite now reads for them
@@ -161,7 +73,7 @@ expect_allow "commit-gate rm-msg: a message mentioning git rm is not a compound"
 # =============================================================================
 
 FOK_TOTAL=0
-for hook in scope-hook commit-gate close-gate regrounding-hook; do
+for hook in scope-hook regrounding-hook bypass-deny; do
   HF="$HOOKS/$hook.sh"
   UNANNOTATED="$(awk '
     { lines[NR] = $0 }
@@ -194,7 +106,7 @@ done
 # today). A hook that ends by falling through exits with whatever its last
 # command returned, which is a silent pass nobody wrote down. Require the last
 # effective line of every hook to be an explicit exit.
-for hook in scope-hook commit-gate close-gate regrounding-hook; do
+for hook in scope-hook regrounding-hook bypass-deny; do
   LAST="$(grep -vE '^[[:space:]]*(#|$)' "$HOOKS/$hook.sh" | tail -n1)"
   case "$LAST" in
     exit\ [0-9]*) ok "fail-open audit: $hook.sh ends with an explicit exit" ;;
@@ -289,7 +201,7 @@ fi
 # The audit must have exercised something: four hooks with zero annotations
 # between them means the scan broke, not that the hooks are clean.
 if [[ "$FOK_TOTAL" -ge 10 ]]; then
-  ok "fail-open audit: the scan exercised $FOK_TOTAL annotations across the four hooks"
+  ok "fail-open audit: the scan exercised $FOK_TOTAL annotations across the audited hooks"
 else
   bad "fail-open audit: the scan exercised the hooks" \
       "only $FOK_TOTAL fail-open-ok annotations found; the audit covered almost nothing"

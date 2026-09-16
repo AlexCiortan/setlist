@@ -2,7 +2,7 @@
 # Setlist Stop hook: refuses to END A TURN that leaves a spec or specs/STATUS.md
 # changed and unstaged in the working tree (2.6.0, spec 0132 cluster H; the
 # owner's ruling 5 on the 2.6.0 strategy; external review minor 2). Stamped
-# into the instance beside the three PreToolUse gates and the SessionStart
+# into the instance beside the two PreToolUse hooks and the SessionStart
 # re-grounding hook; wired on the Stop event, which takes no matcher.
 #
 # WHY A STOP HOOK, AND WHY THIS RULE. The record (a spec's Status line, its
@@ -43,7 +43,7 @@
 #           nothing                                                        to allow
 #   exit    0 either way (a nonzero exit is an error the harness reports, not a verdict)
 #   setlistAdvisory  {gate: "stop", verdict: "block", code, reason}, the same
-#                    field the three gates emit, so one reader reads all four
+#                    field the PreToolUse hooks emit, so one reader reads them all
 set -u
 
 # THE CODE IS EXTRACTED BY THE SHELL (KL11's rule, from birth): the last
@@ -111,7 +111,7 @@ fi
 
 JQ_NOTE=""
 if [[ "$(printf '{"probe":"x"}' | jq -r '.probe' 2>/dev/null)" != "x" ]]; then
-  JQ_NOTE="[SP-JQ-BROKEN]: jq is missing or does not work on this machine, so the three PreToolUse gates are reporting their verdicts while permitting and the git hooks refuse; run jq --version to see which, then install or repair it. Reported here because this hook decides without jq and can still speak. "
+  JQ_NOTE="[SP-JQ-BROKEN]: jq is missing or does not work on this machine, so the scope hook is reporting its verdicts while permitting, the bypass deny is silent, and the git hooks refuse; run jq --version to see which, then install or repair it. Reported here because this hook decides without jq and can still speak. "
 fi
 
 # THE READ. git is asked directly for the working tree's state under specs/;

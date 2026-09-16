@@ -1,7 +1,9 @@
 # flowchart: the pieces and which talk to which
 
 Invent no topology, keep exact names, label every arrow, one figure one claim, no
-line ranges as evidence, no rendered image as source.
+line ranges as evidence, no rendered image as source; and hold the skill's four
+ceilings: twelve edges, 45 characters a label, 400 characters of label text, no
+subgraph as an endpoint, with any clause moved into the prose under the figure.
 
 This is the type for L2 containers and L3 components, and for the two questions
 that look like their own types and are not: the WORKFLOW question (approval
@@ -58,6 +60,12 @@ flowchart TD
 
 If a subgraph has one member, it is a label pretending to be a boundary. Drop it.
 
+**An arrow never starts or ends on a subgraph.** Mermaid permits `session --> sdd`
+where `session` is a box, and the rendered arrow lands on the box's border with no
+node under it, so the reader cannot tell which member makes the call. Draw the
+arrow from the member that does; if every member does, the arrow belongs on the
+module they share (a library they all source), or in the prose.
+
 **A subgraph's id and its title are both drawn names**, resolved exactly as a
 node's label is. So a boundary that IS a directory should spell it as the id
 (`subgraph templates/git-hooks["the hook layer"]`), and it is then checked; a
@@ -81,6 +89,14 @@ and refuses nothing, so a thirteenth node is a decision you make, not one the
 tooling makes for you. **Where there is no child to split into**, which is every
 diagram drawn inline in a README or an ADR, that escape is unavailable and the
 bound is hard: cut a node, and say in the prose that it is not drawn.
+
+**The container view is where the label ceilings bite**, because it is the view
+that mixes senses and so the one tempted to explain itself on the arrows. At most
+twelve edges, no label over 45 characters, at most 400 characters of label text in
+the figure. A label that grows a second clause (`reads it first; with no instance
+every hook exits 0`) keeps its verb on the arrow (`reads the trunk and the role
+paths`) and moves the clause into the sentences under the figure that say what it
+encodes, which is where a reader looks for a condition anyway.
 
 ## The data-flow variant
 

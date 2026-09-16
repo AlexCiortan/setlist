@@ -29,7 +29,7 @@ once, after phase 2 of the bootstrap; a repo that is already scaffolded gets
    did, so fill both when you fill the one.
 
    **The command must run in a BARE shell, with no environment activated
-   first.** The close gate and the git hooks run it in their own subshell, which
+   first.** The git hooks and the forge check run it in their own subshell, which
    inherits whatever git or the harness happened to have on PATH, not your
    interactive shell. So a project whose toolchain lives in a virtualenv, an nvm
    or rbenv shim, or a Conda env records the activation as part of the command

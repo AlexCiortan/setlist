@@ -458,8 +458,6 @@ close_fixture "$DEG" no no answered no no true
 # the day it closes we find out.
 DEG_HEAD="$(git -C "$DEG" rev-parse main)"
 git -C "$DEG" checkout -q --detach "$DEG_HEAD"
-run_hook "$HOOKS/close-gate.sh" "$DEG" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
-expect_allow "degraded a: on a detached HEAD the close gate passes (documented sideways route)"
 run_hook "$HOOKS/scope-hook.sh" "$DEG" "$(jq -nc --arg p "$DEG/src/x.js" '{tool_name:"Edit", tool_input:{file_path:$p}}')"
 expect_allow "degraded b: on a detached HEAD the scope hook passes (same route)"
 git -C "$DEG" checkout -q main
@@ -472,20 +470,6 @@ close_fixture "$DEG2" no no answered no no true
 printf '{ "trunk": \n' > "$DEG2/.claude/sdd.json"
 run_hook "$HOOKS/scope-hook.sh" "$DEG2" "$(jq -nc --arg p "$DEG2/src/x.js" '{tool_name:"Write", tool_input:{file_path:$p}}')"
 expect_deny "degraded c: an unparseable sdd.json denies the write rather than guessing" "scope hook"
-run_hook "$HOOKS/close-gate.sh" "$DEG2" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
-expect_deny "degraded d: an unparseable sdd.json denies the merge rather than guessing" "close gate"
-
-# MINIFIED sdd.json. Claude Code rewrites config files, and the 1.0.3 wiring
-# check was defeated by exactly this. The hooks read sdd.json with jq, which
-# is format-blind, so this must behave identically to the pretty form.
-DEG3="$WORK/degraded-minified"
-close_fixture "$DEG3" no no answered no no true
-jq -c . "$DEG3/.claude/sdd.json" > "$DEG3/t" && mv "$DEG3/t" "$DEG3/.claude/sdd.json"
-assert_true "degraded e0: the fixture really is minified" \
-  "the fixture is not one line, so case e proves nothing" \
-  test "$(wc -l < "$DEG3/.claude/sdd.json")" -le 1
-run_hook "$HOOKS/close-gate.sh" "$DEG3" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
-expect_deny "degraded e: a minified sdd.json is read identically to a pretty one" "Closing report"
 
 # EMPTY role paths. A config that parses but records nothing usable.
 DEG4="$WORK/degraded-noroles"
@@ -494,97 +478,17 @@ jq '.roles = {}' "$DEG4/.claude/sdd.json" > "$DEG4/t" && mv "$DEG4/t" "$DEG4/.cl
 run_hook "$HOOKS/scope-hook.sh" "$DEG4" "$(jq -nc --arg p "$DEG4/src/x.js" '{tool_name:"Write", tool_input:{file_path:$p}}')"
 expect_deny "degraded f: absent role paths fall back to src/tests rather than allowing everything" "never lands"
 
-# =============================================================================
-# GENERATOR 7: FOREIGN MATERIAL (1.0.5)
-#
-# A checker must judge what it owns and ignore what it does not. The 1.0.3
-# wiring check failed this in both directions at once. These put material the
-# gates do NOT own next to material they do.
-# =============================================================================
-
-FOR1="$WORK/foreign"
-close_fixture "$FOR1" yes yes answered yes no true
-# A file that LOOKS like a spec but is not in specs/, beside the real one.
-mkdir -p "$FOR1/vendor/specs"
-printf '# Spec 0001\n\nStatus: ACTIVE\n' > "$FOR1/vendor/specs/0001-decoy.md"
-git -C "$FOR1" add -A && git -C "$FOR1" commit -qm "vendored decoy that mimics a spec"
-run_hook "$HOOKS/close-gate.sh" "$FOR1" "$(bash_payload 'git merge --no-ff spec/0001-thing')"
-expect_allow "foreign a: a decoy spec outside specs/ does not confuse the close gate"
-
-# A branch whose NAME contains a spec-like string but is not a spec branch.
-git -C "$FOR1" branch -f feature/not-spec/0002-x main
-run_hook "$HOOKS/close-gate.sh" "$FOR1" "$(bash_payload 'git merge --no-ff feature/not-spec/0002-x')"
-expect_allow "foreign b: a branch whose name merely contains a spec-like path is not gated as a close"
-
-# THE REF-NAMESPACE ANCHOR (2.4.0 leg F2): a ref the instance does not govern,
-# whose name merely CONTAINS /spec/, must not hijack the classification of an
-# ordinary feature merge. Both leg spellings: a remote NAMED spec, and a
-# nesting namespace in front of spec/.
-git -C "$FOR1" branch -f feature/iso main
-git -C "$FOR1" update-ref refs/remotes/spec/main feature/iso
-run_hook "$HOOKS/close-gate.sh" "$FOR1" "$(bash_payload 'git merge --no-ff feature/iso')"
-expect_allow "foreign b2 (2.4.0 leg F2): a remote NAMED spec does not turn a feature merge into an unclosed close"
-git -C "$FOR1" update-ref -d refs/remotes/spec/main
-git -C "$FOR1" branch -f archive/spec/0099-old feature/iso
-run_hook "$HOOKS/close-gate.sh" "$FOR1" "$(bash_payload 'git merge --no-ff feature/iso')"
-expect_allow "foreign b3 (2.4.0 leg F2): a nesting namespace in front of spec/ is not the governed namespace"
-git -C "$FOR1" branch -D archive/spec/0099-old >/dev/null 2>&1
-# The direction that must NOT loosen, the remote-tracking copy of a GOVERNED
-# spec branch staying governed, is already pinned by the ref-identity corpus
-# below (remote-tracking spellings deny), which the 2.4.0 leg re-verified live.
-
-# THE IDENTITY-BY-COMMIT BOUNDARY (2.4.0 leg F9, documented): an alias is
-# governed only while a spec or chore ref still points at that exact commit.
-# Both spellings pinned as the documented Known-limitations bullet says, so
-# the delisting cannot silently return. The guarantee layers refuse these
-# merges (leg-verified by execution); what these pins record is the session
-# gate's classification boundary, on fresh copies so FOR1 stays untouched.
-FOR3="$WORK/foreign-alias-adv"
-rm -rf "$FOR3"; cp -R "$FOR1" "$FOR3"
-git -C "$FOR3" branch -f tmp/alias spec/0001-thing
-git -C "$FOR3" checkout -q spec/0001-thing 2>/dev/null
-printf 'more\n' >> "$FOR3/src/app.js" 2>/dev/null || printf 'more\n' > "$FOR3/src/later.txt"
-git -C "$FOR3" add -A >/dev/null 2>&1
-git -C "$FOR3" -c core.hooksPath=/dev/null commit -qm "branch advances past the alias" >/dev/null 2>&1
-git -C "$FOR3" checkout -q main 2>/dev/null
-run_hook "$HOOKS/close-gate.sh" "$FOR3" "$(bash_payload 'git merge --no-ff tmp/alias')"
-expect_allow "alias a (2.4.0 leg F9, documented boundary): an alias the spec branch advanced past classifies as an ungoverned sync at the session layer"
-FOR4="$WORK/foreign-alias-del"
-rm -rf "$FOR4"; cp -R "$FOR1" "$FOR4"
-git -C "$FOR4" branch -f tmp/alias spec/0001-thing
-git -C "$FOR4" branch -D spec/0001-thing >/dev/null 2>&1
-run_hook "$HOOKS/close-gate.sh" "$FOR4" "$(bash_payload 'git merge --no-ff tmp/alias')"
-expect_allow "alias b (2.4.0 leg F9, documented boundary): an alias that outlives the deleted spec branch classifies as an ungoverned sync at the session layer"
-
-# Foreign paths in the staged diff beside owned ones: the scan judges content,
-# and this pins that it does not judge ownership (a documented limitation).
-FOR2="$WORK/foreign-staged"
-git_init "$FOR2"; sdd_json "$FOR2"
-mkdir -p "$FOR2/node_modules/pkg"
-printf 'const a = 1;\n' > "$FOR2/node_modules/pkg/index.js"
-printf 'ours\n' > "$FOR2/ours.md"
-git -C "$FOR2" add -A
-run_hook "$HOOKS/commit-gate.sh" "$FOR2" "$(bash_payload 'git commit -m "add dependency"')"
-expect_allow "foreign c: clean vendored content beside our own passes the content scans"
-
-# =============================================================================
-# GENERATOR 5: EQUIVALENT OPERATIONS (1.0.5)
-#
-# Every sibling command that achieves the governed effect is either gated, or
-# named in Known limitations AND asserted here so its closure is detected.
-# The close-gate siblings are asserted in the documented-hole block above;
-# these are the COMMIT-gate siblings, which create or stage content without
-# the word "commit" ever appearing at command position.
-# =============================================================================
-
-EQ="$WORK/equivalent"
-git_init "$EQ"; sdd_json "$EQ"
-printf 'x\n' > "$EQ/a.md"; git -C "$EQ" add -A; git -C "$EQ" commit -qm base
-for sib in 'git revert --no-edit HEAD' 'git stash pop' 'git apply /tmp/p.patch' 'git cherry-pick --no-commit HEAD' 'git commit --amend --no-edit'; do
-  run_hook "$HOOKS/commit-gate.sh" "$EQ" "$(bash_payload "$sib")"
-  case "$sib" in
-    *--amend*) expect_allow "equivalent: [$sib] reaches the content scans (clean here)" ;;
-    *) expect_allow "equivalent: [$sib] bypasses the content scans (documented gap, item 30)" ;;
-  esac
-done
-
+# --- interpreter forms: the audit catch (moved here from shard 04 in spec 0144) --
+# The interpreter forms (sh -c, bash -c, timeout, sudo) passed the close gate by
+# design and were pinned together with what catches their outcome: this audit.
+# The gate half left with close-gate.sh in 2.8.0; the catch stays. The branch must
+# carry ROLE-PATH changes for the audit to have an opinion.
+INTERP="$WORK/interpreter"
+close_fixture "$INTERP" no no answered no no true
+git -C "$INTERP" checkout -q spec/0001-thing
+mkdir -p "$INTERP/src"; printf 'feature\n' > "$INTERP/src/f.js"
+git -C "$INTERP" add -A && git -C "$INTERP" commit -qm "feature code, spec still unclosed"
+git -C "$INTERP" checkout -q main
+git -C "$INTERP" merge -q --no-ff -m "merge as an interpreter form would leave it" spec/0001-thing
+run_script bash "$SCRIPTS/trunk-audit.sh" "$INTERP"
+expect_script "interpreter: the trunk audit CATCHES the outcome the gate let past" 1 "VIOLATION"

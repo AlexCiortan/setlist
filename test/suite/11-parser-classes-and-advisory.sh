@@ -8,32 +8,6 @@
 # >>> SHARD-BEGIN class-c-commit-shape cost=10
 if shard_region class-c-commit-shape; then
 # ===========================================================================
-# THE FROZEN PARSER SPELLINGS THIS FILE EXERCISES (documented 2026-08-04, and
-# pinned here so
-# the day one of them closes this file says so instead of the README describing
-# a weakness the release no longer has).
-#
-# Each is a WARNING that is absent or misleading, never a command wrongly
-# blocked, because the gates are advisory. The git hooks judge the same
-# operation correctly afterwards, which is why these are documented rather than
-# chased: the parsers and their corpus are frozen together.
-FROZEN_BAD=""
-# F11: a checkout in ANOTHER repository is credited to this one, so no warning.
-[[ "$(corpus_verdict 'cd vendor/lib && git checkout spec/0002-other && cd - && git merge --no-ff spec/0001-thing')" == "allow" ]] \
-  || FROZEN_BAD="$FROZEN_BAD
-    F11 (cross-repo checkout) now warns: the limitation has CLOSED and the README must stop naming it"
-# F13: a loop body that commits before it stages gets no warning.
-[[ "$(cg_verdict 'for f in a b; do git commit -m "$f"; git add "$f"; done')" == "allow" ]] \
-  || FROZEN_BAD="$FROZEN_BAD
-    F13 (loop body) now warns: the limitation has CLOSED and the README must stop naming it"
-if [[ -z "$FROZEN_BAD" ]]; then
-  ok "frozen parsers: the two spellings this file exercises still behave as Known limitations records"
-else
-  bad "frozen parsers: the two spellings this file exercises still behave as Known limitations records" \
-      "a documented limitation no longer holds, so the docs are now wrong in the safe direction:$FROZEN_BAD"
-fi
-
-# ===========================================================================
 # CLASS C: THE COMMIT SHAPE IS DERIVED FROM GIT, NOT ENUMERATED (final leg,
 # F1 octopus and F9 --amend).
 #
@@ -269,13 +243,13 @@ fi; shard_region_end
 # than a corpus entry or a fix.
 # ===========================================================================
 ADV_BAD=""
-for adv_gate in close-gate commit-gate scope-hook; do
-  case "$adv_gate" in
-    scope-hook) adv_payload="$(jq -nc '{tool_name:"Write",tool_input:{file_path:"src/App.js",content:"x"}}')" ;;
-    commit-gate) adv_payload="$(bash_payload 'git add . && git commit -m x')" ;;
-    *)           adv_payload="$(bash_payload 'git merge --no-ff spec/0001-thing')" ;;
-  esac
-  adv_out="$(printf '%s' "$adv_payload" | CLAUDE_PROJECT_DIR="$CORP" bash "$HOOKS/$adv_gate.sh" 2>/dev/null)"
+# The two Bash gates this loop also drove left in 2.8.0 (spec 0144), and with them
+# the corpus fixture of shard 04 it ran against; the scope hook reads only the
+# trunk and the roles, which any instance on its trunk carries.
+ADV_INST="$WORK/advisory-flip-instance"; close_fixture "$ADV_INST" no no answered no no true
+for adv_gate in scope-hook; do
+  adv_payload="$(jq -nc '{tool_name:"Write",tool_input:{file_path:"src/App.js",content:"x"}}')"
+  adv_out="$(printf '%s' "$adv_payload" | CLAUDE_PROJECT_DIR="$ADV_INST" bash "$HOOKS/$adv_gate.sh" 2>/dev/null)"
   [[ -n "$adv_out" ]] || { ADV_BAD="$ADV_BAD
     $adv_gate emitted nothing on a governed command"; continue; }
   adv_dec="$(printf '%s' "$adv_out" | jq -r '.hookSpecificOutput.permissionDecision // "MISSING"')"
@@ -295,9 +269,9 @@ for adv_gate in close-gate commit-gate scope-hook; do
     $adv_gate emits no systemMessage, so the session is told nothing"
 done
 if [[ -z "$ADV_BAD" ]]; then
-  ok "advisory a: all three session gates ALLOW while reporting their verdict, reason and systemMessage"
+  ok "advisory a: the scope hook ALLOWS while reporting its verdict, reason and systemMessage"
 else
-  bad "advisory a: all three session gates ALLOW while reporting their verdict, reason and systemMessage" \
+  bad "advisory a: the scope hook ALLOWS while reporting its verdict, reason and systemMessage" \
       "the advisory contract is broken:$ADV_BAD"
 fi
 
@@ -337,109 +311,12 @@ else
       "the guarantee layer is reading the parser's own opinion:$ADV_LEAK"
 fi
 
-# THE 1.1.0 LEG'S FOURTH RUN (the first COMPLETE leg). F5: the template-fence
-# stripper read fences as a BOOLEAN TOGGLE and ignored backtick run length, so a
-# four-backtick block quoting a three-backtick one was closed early by the inner
-# delimiter and everything after it, including the quoted "## Closing report",
-# was emitted as the spec's own text. All three layers went blind together,
-# which is the lockstep failure the stripper's own comment names.
-# ===========================================================================
-NF_DIR="$WORK/nested-fence"
-nf_spec() { # nf_spec <mode: nested|none|real> -> writes a spec body to stdout
-  local mode="$1" b3='```' b4='````'
-  printf '# Spec 0001\n\nStatus: CLOSED\n\n'
-  case "$mode" in
-    nested)
-      printf '%smarkdown\nExample output:\n%s\n' "$b4" "$b3"
-      printf '## Closing report\n\n- QA Pass 1 report (pasted verbatim):\n\n| 1 | c | PASS | e |\n\n- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n'
-      printf '%s\n%s\n\nNothing above is a real report.\n' "$b3" "$b4" ;;
-    none) printf 'No closing report at all.\n' ;;
-    real)
-      printf '%s\n%s\nquoted\n%s\n%s\n\n' "$b4" "$b3" "$b3" "$b4"
-      printf '## Closing report\n\n- QA Pass 1 report (pasted verbatim):\n\n| 1 | c | PASS | e |\n\n- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n' ;;
-  esac
-}
-nf_build() { # nf_build <dir> <mode>
-  local d="$1"
-  close_fixture "$d" no no answered no no true
-  git -C "$d" checkout -q spec/0001-thing
-  nf_spec "$2" > "$d/specs/0001-thing.md"
-  # The honest mode must carry the structured verdict (Part 6). The other two
-  # modes are the no-report and quoted-only cases and must stay denied, so they
-  # deliberately do not get one.
-  [[ "$2" == "real" ]] && printf -- '\n- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n' >> "$d/specs/0001-thing.md"
-  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n' > "$d/specs/STATUS.md"
-  git -C "$d" add -A >/dev/null 2>&1
-  git -C "$d" commit -qm "spec body" >/dev/null 2>&1
-  git -C "$d" checkout -q main
-}
-nf_verdict() { local o; o="$(printf '%s' "$(bash_payload 'git merge --no-ff spec/0001-thing')" | CLAUDE_PROJECT_DIR="$1" bash "$HOOKS/close-gate.sh" 2>/dev/null)"; [[ -z "$o" ]] && { printf 'allow'; return 0; }; printf '%s' "$o" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // "allow"'; }
-
-nf_build "$NF_DIR-none" none
-if [[ "$(nf_verdict "$NF_DIR-none")" == "deny" ]]; then
-  ok "nested fence a: CONTROL, a spec with no Closing report at all is denied"
-else
-  bad "nested fence a: CONTROL, a spec with no Closing report at all is denied" \
-      "the control did not deny, so nothing below means anything"
-fi
-nf_build "$NF_DIR-nested" nested
-if [[ "$(nf_verdict "$NF_DIR-nested")" == "deny" ]]; then
-  ok "nested fence b: a Closing report that exists ONLY inside a nested fence is refused"
-else
-  bad "nested fence b: a Closing report that exists ONLY inside a nested fence is refused" \
-      "quoted documentation was accepted as the spec's own Closing report"
-fi
-nf_build "$NF_DIR-real" real
-if [[ "$(nf_verdict "$NF_DIR-real")" == "allow" ]]; then
-  ok "nested fence c: an HONEST report after a quoted nested fence still merges"
-else
-  bad "nested fence c: an HONEST report after a quoted nested fence still merges" \
-      "the same defect firing the other way: a real report swallowed as template body"
-fi
-
 # THE 1.1.0 LEG'S THIRD RUN. Six repairs, every payload kept, and the ALLOW and
 # DENY directions asserted side by side because five of the six were FALSE
 # DENIALS created by earlier fixes. Law 2 in one block: the heredoc pass was a
 # 1.1.0 fix and it opened a BLOCKER; the case-variant repair was a 1.1.0 fix and
 # it covered only half its own comparison.
 # ===========================================================================
-
-# S6-6 BLOCKER: a heredoc-looking token in FREE TEXT swallowed every later line,
-# so a real trunk merge was allowed with every check skipped. Bash opens no
-# heredoc inside quotes or after a comment, which is exactly what the broken
-# version's justification claimed it did.
-L3_BAD=""
-while IFS= read -r l3_c; do
-  [[ -n "$l3_c" ]] || continue
-  [[ "$(corpus_verdict "$(printf '%b' "$l3_c")")" == "deny" ]] || L3_BAD="$L3_BAD
-    $l3_c"
-done <<'L3EOF'
-git commit -m "use <<EOF heredoc in the installer"\ngit merge --no-ff spec/0001-thing
-git commit -m 'use <<EOF heredoc'\ngit merge --no-ff spec/0001-thing
-# see <<EOF below\ngit merge --no-ff spec/0001-thing
-echo "shift << AMOUNT bits"\ngit merge --no-ff spec/0001-thing
-git commit -m x <<<WORD\ngit merge --no-ff spec/0001-thing
-L3EOF
-if [[ -z "$L3_BAD" ]]; then
-  ok "leg3 a: a heredoc-looking token in free text does not swallow a later trunk merge"
-else
-  bad "leg3 a: a heredoc-looking token in free text does not swallow a later trunk merge" \
-      "these merges were ALLOWED because the gate stopped reading:$L3_BAD"
-fi
-# The other direction, which is the F9 fix this must not undo: a REAL heredoc
-# body is still not read as commands.
-if [[ "$(corpus_verdict "$(printf 'git commit -F - <<%sMSG%s\nrefactor\n\ngit merge --no-ff spec/0001-thing is prose\nMSG\n' "'" "'")")" == "allow" ]]; then
-  ok "leg3 b: a REAL heredoc body is still not judged as commands (the F9 fix holds)"
-else
-  bad "leg3 b: a REAL heredoc body is still not judged as commands (the F9 fix holds)" \
-      "a line of the commit MESSAGE was judged as a trunk merge"
-fi
-# And a merge AFTER a properly terminated heredoc is still judged.
-if [[ "$(corpus_verdict "$(printf 'cat <<EOF > /tmp/f\ntext\nEOF\ngit merge --no-ff spec/0001-thing\n')")" == "deny" ]]; then
-  ok "leg3 c: a merge after a terminated heredoc is still judged"
-else
-  bad "leg3 c: a merge after a terminated heredoc is still judged" "the merge was allowed"
-fi
 
 # F8 (fourth run): the three readers of .roles DISAGREED, and the guarantee layer
 # was the one that was wrong. setlist-hook-lib.sh used `to_entries[] | .value`
@@ -500,196 +377,11 @@ else
       "could not extract all three jq expressions, so this assertion checked nothing"
 fi
 
-# THE FOURTH RUN'S REGRESSIONS FROM THE THIRD RUN'S FIXES. All three are mine
-# from the same day, which is why they are asserted with the case they broke
-# sitting next to the case they were written for.
-#
-# F15: adding switch's -c/-C to the creation-flag list collided with GIT'S OWN
-#      global options, spelled identically and sitting BEFORE the subcommand.
-# F16: a created branch name was trusted verbatim even when it was not a literal.
-# F22: two of git's separate-value global options were missing from GIT_OPTS.
-L3_REG_DENY=""
-for l3r in \
-  'git -C . checkout main && git merge --no-ff spec/0001-thing' \
-  'git -c user.name=x checkout main && git merge --no-ff spec/0001-thing' \
-  'git checkout -B $V && git merge --no-ff spec/0001-thing' \
-  'git checkout -b "$B" && git merge --no-ff spec/0001-thing' \
-  'git --config-env x=Y merge --no-ff spec/0001-thing' \
-  'git --attr-source x merge --no-ff spec/0001-thing' \
-  ; do
-  [[ "$(corpus_verdict "$l3r")" == "deny" ]] || L3_REG_DENY="$L3_REG_DENY
-    $l3r"
-done
-if [[ -z "$L3_REG_DENY" ]]; then
-  ok "leg4 a: a global git option is not a branch creation, and an unreadable creation target fails closed"
-else
-  bad "leg4 a: a global git option is not a branch creation, and an unreadable creation target fails closed" \
-      "these reached the trunk with the close conditions unevaluated:$L3_REG_DENY"
-fi
-# The other direction, which is what those fixes were FOR: a literal creation
-# followed by a merge onto the new branch is ordinary work and must still pass.
-L3_REG_ALLOW=""
-for l3r in \
-  'git switch -c feat/x && git merge --no-ff spec/0001-thing' \
-  'git checkout -b feat/z main && git merge --no-ff spec/0001-thing' \
-  ; do
-  [[ "$(corpus_verdict "$l3r")" == "allow" ]] || L3_REG_ALLOW="$L3_REG_ALLOW
-    $l3r"
-done
-if [[ -z "$L3_REG_ALLOW" ]]; then
-  ok "leg4 b: a LITERAL branch creation followed by a merge onto it is still allowed"
-else
-  bad "leg4 b: a LITERAL branch creation followed by a merge onto it is still allowed" \
-      "the regression fix went too far and re-broke the case it was written for:$L3_REG_ALLOW"
-fi
-
-# F3 (fourth run): ARITHMETIC IS A THIRD CONTEXT WHERE BASH SEES NO HEREDOC.
-# The 1.1.0 F9 repair taught the scanner about quotes and comments and stopped
-# there, so `echo $((1 << 2))` was read as opening a heredoc with delimiter `2`
-# and every later line was discarded: the merge on the next line was allowed in
-# silence, oracle-confirmed landing on the trunk. Two causes, both fixed: the
-# delimiter could start with a DIGIT, and arithmetic spans were not skipped.
-L3_ARITH_BAD=""
-while IFS= read -r l3a; do
-  [[ -n "$l3a" ]] || continue
-  [[ "$(corpus_verdict "$(printf '%b' "$l3a")")" == "deny" ]] || L3_ARITH_BAD="$L3_ARITH_BAD
-    $l3a"
-done <<'L3AEOF'
-echo $((1 << 2))\ngit merge --no-ff spec/0001-thing
-echo $((x << y))\ngit merge --no-ff spec/0001-thing
-((v = 1 << 3))\ngit merge --no-ff spec/0001-thing
-echo a << 2\ngit merge --no-ff spec/0001-thing
-L3AEOF
-if [[ -z "$L3_ARITH_BAD" ]]; then
-  ok "leg3 h: an arithmetic left-shift does not swallow a later trunk merge"
-else
-  bad "leg3 h: an arithmetic left-shift does not swallow a later trunk merge" \
-      "these merges were ALLOWED because the gate stopped reading:$L3_ARITH_BAD"
-fi
-
-# S6-3, S6-4, S6-11: branch CREATION spellings. Merging a spec branch into a
-# newly created feature branch cannot move the trunk, and the checkout -b
-# spelling was allowed while the switch -c spelling was denied.
-L3_CREATE_BAD=""
-for l3_c in \
-  'git switch -c feat/x && git merge --no-ff spec/0001-thing' \
-  'git switch -C feat/x && git merge --no-ff spec/0001-thing' \
-  'git switch --create feat/x && git merge --no-ff spec/0001-thing' \
-  'git checkout -b feat/x && git merge --no-ff spec/0001-thing' \
-  'git checkout -b feat/z main && git merge --no-ff spec/0001-thing' \
-  ; do
-  [[ "$(corpus_verdict "$l3_c")" == "allow" ]] || L3_CREATE_BAD="$L3_CREATE_BAD
-    $l3_c"
-done
-if [[ -z "$L3_CREATE_BAD" ]]; then
-  ok "leg3 d: creating a branch then merging a spec into it is allowed, in every creation spelling"
-else
-  bad "leg3 d: creating a branch then merging a spec into it is allowed, in every creation spelling" \
-      "the framework refused work that cannot reach the trunk:$L3_CREATE_BAD"
-fi
-# The guard the creation fix relaxed must still hold: a PATHSPEC checkout with
-# two operands records no switch, so a merge after it is judged against the trunk.
-L3_PATH_BAD=""
-for l3_c in \
-  'git checkout spec/0002-other src/a.txt && git merge --no-ff spec/0001-thing' \
-  'git checkout spec/0002-other -- src/a.txt && git merge --no-ff spec/0001-thing' \
-  ; do
-  [[ "$(corpus_verdict "$l3_c")" == "deny" ]] || L3_PATH_BAD="$L3_PATH_BAD
-    $l3_c"
-done
-if [[ -z "$L3_PATH_BAD" ]]; then
-  ok "leg3 e: a pathspec checkout still records no switch, so a later merge is judged against the trunk"
-else
-  bad "leg3 e: a pathspec checkout still records no switch, so a later merge is judged against the trunk" \
-      "the creation-flag relaxation opened the pathspec hole:$L3_PATH_BAD"
-fi
-
-# S6-7: the global-option run swallowed the SUBCOMMAND, so read-only commands
-# whose free text contains "merge" were denied and told to write a Closing report.
-L3_RO_BAD=""
-for l3_c in 'git --no-pager grep -n merge -- src' 'git --no-pager log --grep merge' 'git grep commit'; do
-  [[ "$(corpus_verdict "$l3_c")" == "allow" ]] || L3_RO_BAD="$L3_RO_BAD
-    $l3_c"
-done
-if [[ -z "$L3_RO_BAD" ]]; then
-  ok "leg3 f: read-only git commands mentioning merge in free text are not judged as merges"
-else
-  bad "leg3 f: read-only git commands mentioning merge in free text are not judged as merges" \
-      "a search was refused as if it were a close:$L3_RO_BAD"
-fi
-# ...and the global-option spellings of a REAL merge must still be caught, which
-# is what the greedy clause was there for in the first place.
-L3_GO_BAD=""
-for l3_c in \
-  'git -C . merge --no-ff spec/0001-thing' \
-  'git --no-pager merge --no-ff spec/0001-thing' \
-  'git -c user.name=x merge --no-ff spec/0001-thing' \
-  'git --git-dir=.git --work-tree=. merge --no-ff spec/0001-thing' \
-  ; do
-  [[ "$(corpus_verdict "$l3_c")" == "deny" ]] || L3_GO_BAD="$L3_GO_BAD
-    $l3_c"
-done
-if [[ -z "$L3_GO_BAD" ]]; then
-  ok "leg3 g: a real merge behind git's global options is still denied"
-else
-  bad "leg3 g: a real merge behind git's global options is still denied" \
-      "the GIT_OPTS repair opened the spelling hole it replaced:$L3_GO_BAD"
-fi
-
-# THE TWO DOCUMENTED TRADE-OFFS FROM THE 1.1.0 LEG'S SECOND RUN, asserted so
-# that the day either one closes this file says so instead of the README quietly
-# describing a weakness the release no longer has.
-#
-# 1. `@{u}` is refused while `origin/main` is allowed. Both name the same ref.
-#    The refusal is conservative rather than wrong (the gate declines operands it
-#    cannot reduce to a literal branch), but it IS a refusal of a workflow the
-#    suite protects one spelling over, so it is documented rather than silent.
-GHU="$WORK/gh-upstream"
-close_fixture "$GHU" no no answered no no true
-GHU_REMOTE="$WORK/gh-upstream-remote.git"; rm -rf "$GHU_REMOTE"; git init -q --bare "$GHU_REMOTE"
-git -C "$GHU" remote add origin "$GHU_REMOTE" 2>/dev/null || true
-git -C "$GHU" push -q origin main 2>/dev/null || true
-git -C "$GHU" branch --set-upstream-to=origin/main main >/dev/null 2>&1 || true
-ghu_verdict() { # ghu_verdict <command> -> deny|allow
-  local out
-  out="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$GHU" bash "$HOOKS/close-gate.sh" 2>/dev/null)"
-  [[ -z "$out" ]] && { printf 'allow'; return 0; }
-  printf '%s' "$out" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // "allow"'
-}
+# THE TWO DOCUMENTED TRADE-OFFS FROM THE 1.1.0 LEG'S SECOND RUN. The first, the
+# close gate's `@{u}` refusal, left with that gate in 2.8.0 (spec 0144); the
+# second follows.
 # >>> SHARD-BEGIN advisory-flip cost=8
 if shard_region advisory-flip; then
-# CONTROL, THE DENY DIRECTION FIRST, and the ordering is the whole point.
-#
-# This block used to open with the ALLOW control alone, and the 1.1.0 leg caught
-# it passing VACUOUSLY: the fixture was built by a script absent from the staged
-# export, so nothing existed at $GHU, the close gate emitted nothing, silence
-# reads as allow, and a control that cannot fail reported green. A green from a
-# control is only worth the fixture behind it, so the fixture is proven to DENY
-# something before its allow is believed.
-if [[ "$(ghu_verdict 'git merge --no-ff spec/0001-thing')" == "deny" ]]; then
-  ok "upstream a0: CONTROL, the fixture exists and the gate is live (a governed merge denies)"
-else
-  bad "upstream a0: CONTROL, the fixture exists and the gate is live (a governed merge denies)" \
-      "the gate said nothing about a merge it governs, so this fixture proves nothing and every verdict below is noise"
-fi
-if [[ "$(ghu_verdict 'git merge origin/main')" == "allow" ]]; then
-  ok "upstream a: CONTROL, the spelled-out sync merge from the trunk's own remote is allowed"
-else
-  bad "upstream a: CONTROL, the spelled-out sync merge from the trunk's own remote is allowed" \
-      "the control was denied, so the fixture is wrong and the documented trade-off below cannot be judged"
-fi
-GHU_BAD=""
-for ghu_c in 'git merge @{u}' 'git merge @{upstream}' 'git merge main@{u}'; do
-  [[ "$(ghu_verdict "$ghu_c")" == "deny" ]] || GHU_BAD="$GHU_BAD
-    $ghu_c"
-done
-if [[ -z "$GHU_BAD" ]]; then
-  ok "upstream b: the @{u} spellings are refused, as Known limitations records"
-else
-  bad "upstream b: the @{u} spellings are refused, as Known limitations records" \
-      "these are now ALLOWED, so the documented trade-off has closed and the README must stop naming it:$GHU_BAD"
-fi
-
 # 2. A role directory spelled in a different case is missed by the scope gate on
 #    a case-insensitive filesystem, and the trunk audit catches it. Both halves
 #    are asserted, because the second is the entire reason the first is MINOR.
@@ -816,60 +508,31 @@ if [[ -e "$CI_PROBE/AA" ]]; then
   # no document for the alternative operator to apply to. The emptiness has to be
   # tested before jq is asked anything. This is the same misread that made a
   # control look like a failure earlier in this cycle.
-  sga_close() { local o; o="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$SGA" bash "$HOOKS/close-gate.sh" 2>/dev/null)"; [[ -z "$o" ]] && { printf 'allow'; return 0; }; printf '%s' "$o" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // "allow"'; }
   sga_scope() { local o; o="$(printf '%s' "$(jq -nc --arg p "$1" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"}}')" | CLAUDE_PROJECT_DIR="$SGA" bash "$HOOKS/scope-hook.sh" 2>/dev/null)"; [[ -z "$o" ]] && { printf 'allow'; return 0; }; printf '%s' "$o" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // "allow"'; }
   # CONTROL on the canonical spelling first.
-  if [[ "$(sga_close 'git merge --no-ff spec/0001-thing')" == "deny" && "$(sga_scope 'src/x.js')" == "deny" ]]; then
-    ok "git hooks s0: CONTROL, both session gates refuse on the canonical trunk spelling"
+  if [[ "$(sga_scope 'src/x.js')" == "deny" ]]; then
+    ok "git hooks s0: CONTROL, the scope hook refuses on the canonical trunk spelling"
   else
-    bad "git hooks s0: CONTROL, both session gates refuse on the canonical trunk spelling" \
+    bad "git hooks s0: CONTROL, the scope hook refuses on the canonical trunk spelling" \
         "the control did not deny, so nothing below means anything"
   fi
   git -C "$SGA" checkout -q MAIN 2>/dev/null
-  if [[ "$(sga_close 'git merge --no-ff spec/0001-thing')" == "deny" && "$(sga_scope 'src/x.js')" == "deny" ]]; then
-    ok "git hooks s: a prior 'git checkout MAIN' does not disable the session gates"
+  if [[ "$(sga_scope 'src/x.js')" == "deny" ]]; then
+    ok "git hooks s: a prior 'git checkout MAIN' does not disable the scope hook"
   else
-    bad "git hooks s: a prior 'git checkout MAIN' does not disable the session gates" \
-        "one ordinary command in an earlier tool call turned both session gates off"
+    bad "git hooks s: a prior 'git checkout MAIN' does not disable the scope hook" \
+        "one ordinary command in an earlier tool call turned the scope hook off"
   fi
   git -C "$SGA" checkout -q main 2>/dev/null
   jq '.trunk="MAIN"' "$SGA/.claude/sdd.json" > "$SGA/.claude/sdd.json.t" && mv "$SGA/.claude/sdd.json.t" "$SGA/.claude/sdd.json"
-  if [[ "$(sga_close 'git merge --no-ff spec/0001-thing')" == "deny" && "$(sga_scope 'src/x.js')" == "deny" ]]; then
-    ok "git hooks s2: a case-variant trunk in sdd.json does not disable the session gates"
+  if [[ "$(sga_scope 'src/x.js')" == "deny" ]]; then
+    ok "git hooks s2: a case-variant trunk in sdd.json does not disable the scope hook"
   else
-    bad "git hooks s2: a case-variant trunk in sdd.json does not disable the session gates" \
+    bad "git hooks s2: a case-variant trunk in sdd.json does not disable the scope hook" \
         "the configured side of the comparison is still raw"
   fi
 else
   ok "git hooks s: SKIPPED, case-SENSITIVE filesystem (asserted where the alias is reachable)"
-fi
-
-# S6-12: the already-merged exemption was dead for every spec/-shaped ref, so
-# re-merging a branch that landed an hour ago was denied with CG-UNNAMEABLE-REF,
-# a reason produced by the code path that had just resolved the branch. git says
-# "Already up to date." for the same command, and there was NO user remedy: the
-# refusal fires before any close check, so writing a Closing report cannot clear it.
-AMG="$WORK/already-merged"
-close_fixture "$AMG" no no answered no no true
-( cd "$AMG" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m m spec/0001-thing ) >/dev/null 2>&1
-amg_verdict() { local o; o="$(printf '%s' "$(bash_payload "$1")" | CLAUDE_PROJECT_DIR="$AMG" bash "$HOOKS/close-gate.sh" 2>/dev/null)"; [[ -z "$o" ]] && { printf 'allow'; return 0; }; printf '%s' "$o" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // "allow"'; }
-assert_true "git hooks t0: CONTROL, the branch really is an ancestor of the trunk now" \
-  "the fixture did not merge, so the exemption below is not being exercised" \
-  git -C "$AMG" merge-base --is-ancestor spec/0001-thing main
-if [[ "$(amg_verdict 'git merge --no-ff spec/0001-thing')" == "allow" ]]; then
-  ok "git hooks t: re-merging an ALREADY-MERGED spec branch is allowed (it lands nothing)"
-else
-  bad "git hooks t: re-merging an ALREADY-MERGED spec branch is allowed (it lands nothing)" \
-      "a no-op the framework's own comment calls an ordinary sync was refused, with no remedy available"
-fi
-# The control that keeps the exemption honest: an UNMERGED spec branch must still deny.
-AMG2="$WORK/not-merged"
-close_fixture "$AMG2" no no answered no no true
-if [[ "$(printf '%s' "$(bash_payload 'git merge --no-ff spec/0001-thing')" | CLAUDE_PROJECT_DIR="$AMG2" bash "$HOOKS/close-gate.sh" 2>/dev/null | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // "allow"')" == "deny" ]]; then
-  ok "git hooks t2: an UNMERGED spec branch is still denied (the exemption did not become a hole)"
-else
-  bad "git hooks t2: an UNMERGED spec branch is still denied (the exemption did not become a hole)" \
-      "clearing the spec-shaped flag on the ancestor path opened the close gate"
 fi
 
 # BARE `--ff` IS THE SAME HOLE UNDER A NAME THE DOCUMENTATION LEFT OUT (1.1.0
@@ -936,15 +599,58 @@ esac
 
 # The three-way QA lockstep. close-gate.sh and trunk-audit.sh were asserted
 # identical by item 35; the git-hook library is now the third copy of the same
-# rule and joins the same assertion.
+# rule and joins the same assertion. Since spec 0144 the close gate's copy is
+# gone, and the case compares the two copies that remain.
 LIB_QA_RE="$(grep -m1 -E '^[[:space:]]*SLH_QA_PASS1_AWK=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" \
   | sed -e 's/^[[:space:]]*//' -e 's/^SLH_//')"
-CG_QA_RE2="$(grep -m1 -E '^[[:space:]]*QA_PASS1_AWK=' "$HOOKS/close-gate.sh" | sed 's/^[[:space:]]*//')"
-if [[ -n "$LIB_QA_RE" && "$LIB_QA_RE" == "$CG_QA_RE2" ]]; then
-  ok "git hooks k: the hook library's QA verdict program matches close-gate.sh byte for byte"
+AUD_QA_RE2="$(grep -m1 -E '^[[:space:]]*QA_PASS1_AWK=' "$SCRIPTS/trunk-audit.sh" | sed 's/^[[:space:]]*//')"
+if [[ -n "$LIB_QA_RE" && "$LIB_QA_RE" == "$AUD_QA_RE2" ]]; then
+  ok "git hooks k: the hook library's QA verdict program matches trunk-audit.sh byte for byte"
 else
-  bad "git hooks k: the hook library's QA verdict program matches close-gate.sh byte for byte" \
-      "lib has [$LIB_QA_RE] and close-gate has [$CG_QA_RE2]"
+  bad "git hooks k: the hook library's QA verdict program matches trunk-audit.sh byte for byte" \
+      "lib has [$LIB_QA_RE] and trunk-audit has [$AUD_QA_RE2]"
+fi
+
+# THE QA VERDICT AND TEMPLATE STRIPPER LOCKSTEPS, moved here from shard 04's region
+# qa-verdict-structure in spec 0144. The layers are written independently and
+# asserted IDENTICAL, so a widening applied to one fails here rather than in the
+# field. close-gate.sh was the third copy of each until 2.8.0; the two that remain
+# are compared. claims-sweep.sh names both pins as the watchers of their claims.
+QA_LOCK_BAD=""
+QA_LOCK_REF=""
+for qa_lock_f in "$SCRIPTS/trunk-audit.sh" "$ROOT/templates/git-hooks/setlist-hook-lib.sh"; do
+  qa_lock_v="$(grep -m1 -E '^[[:space:]]*(SLH_)?QA_PASS1_AWK=' "$qa_lock_f" | sed 's/^[[:space:]]*//; s/^SLH_//' || true)" # fail-open-ok: an empty value is the finding and is tested immediately below
+  if [[ -z "$qa_lock_v" ]]; then
+    QA_LOCK_BAD="$QA_LOCK_BAD $(basename "$qa_lock_f"):absent"
+  elif [[ -z "$QA_LOCK_REF" ]]; then
+    QA_LOCK_REF="$qa_lock_v"
+  elif [[ "$qa_lock_v" != "$QA_LOCK_REF" ]]; then
+    QA_LOCK_BAD="$QA_LOCK_BAD $(basename "$qa_lock_f"):differs"
+  fi
+done
+if [[ -z "$QA_LOCK_BAD" ]]; then
+  ok "qa verdict lockstep: both layers carry a byte-identical QA_PASS1_AWK"
+else
+  bad "qa verdict lockstep: both layers carry a byte-identical QA_PASS1_AWK" \
+      "these do not agree:$QA_LOCK_BAD"
+fi
+TF_LOCK_BAD=""
+TF_LOCK_REF=""
+for tf_lock_f in "$SCRIPTS/trunk-audit.sh" "$ROOT/templates/git-hooks/setlist-hook-lib.sh"; do
+  tf_lock_v="$(grep -m1 -E '^[[:space:]]*(SLH_)?TEMPLATE_FENCE_AWK=' "$tf_lock_f" | sed 's/^[[:space:]]*//; s/^SLH_//' || true)" # fail-open-ok: an empty value is the finding and is tested immediately below
+  if [[ -z "$tf_lock_v" ]]; then
+    TF_LOCK_BAD="$TF_LOCK_BAD $(basename "$tf_lock_f"):absent"
+  elif [[ -z "$TF_LOCK_REF" ]]; then
+    TF_LOCK_REF="$tf_lock_v"
+  elif [[ "$tf_lock_v" != "$TF_LOCK_REF" ]]; then
+    TF_LOCK_BAD="$TF_LOCK_BAD $(basename "$tf_lock_f"):differs"
+  fi
+done
+if [[ -n "$TF_LOCK_REF" && -z "$TF_LOCK_BAD" ]]; then
+  ok "template stripper lockstep: both layers carry a byte-identical TEMPLATE_FENCE_AWK"
+else
+  bad "template stripper lockstep: both layers carry a byte-identical TEMPLATE_FENCE_AWK" \
+      "ref-empty=[${TF_LOCK_REF:0:1}] disagreements:$TF_LOCK_BAD"
 fi
 
 # THE CHORE LOCKSTEP (F30's fix). The chore-completion rule now lives in the hook
@@ -1030,7 +736,7 @@ fi; shard_region_end
 LIB_LIVE_AWK="$(grep -m1 -E '^[[:space:]]*SLH_LIVE_TEXT_AWK=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" \
   | sed -e 's/^[[:space:]]*//' -e 's/^SLH_//')"
 LIVE_LOCK_BAD=""
-for live_lock_f in "$ROOT/scripts/trunk-audit.sh" "$HOOKS/close-gate.sh"; do
+for live_lock_f in "$ROOT/scripts/trunk-audit.sh"; do
   live_lock_v="$(grep -m1 -E '^[[:space:]]*SLH_LIVE_TEXT_AWK=' "$live_lock_f" | sed -e 's/^[[:space:]]*//' -e 's/^SLH_//')"
   if [[ -z "$live_lock_v" ]]; then
     LIVE_LOCK_BAD="$LIVE_LOCK_BAD $(basename "$live_lock_f"):absent"
@@ -1039,9 +745,9 @@ for live_lock_f in "$ROOT/scripts/trunk-audit.sh" "$HOOKS/close-gate.sh"; do
   fi
 done
 if [[ -n "$LIB_LIVE_AWK" && -z "$LIVE_LOCK_BAD" ]]; then
-  ok "live text a: SLH_LIVE_TEXT_AWK is byte-identical in the hook library, trunk-audit.sh and close-gate.sh"
+  ok "live text a: SLH_LIVE_TEXT_AWK is byte-identical in the hook library and trunk-audit.sh"
 else
-  bad "live text a: SLH_LIVE_TEXT_AWK is byte-identical in the hook library, trunk-audit.sh and close-gate.sh" \
+  bad "live text a: SLH_LIVE_TEXT_AWK is byte-identical in the hook library and trunk-audit.sh" \
       "lib-empty=[${LIB_LIVE_AWK:0:1}] disagreements:$LIVE_LOCK_BAD"
 fi
 
@@ -1268,17 +974,6 @@ else
   bad "live text d: both STATUS.md extractions in the hook library route through the live-text rule" \
       "raw extraction(s): $LIB_RAW_STATUS"
 fi
-# close-gate.sh reads the STATUS row too (CG-NO-STATUS-ROW); its git-show of
-# specs/STATUS.md must route through the rule, the gap the second adversary
-# round found.
-CG_RAW_STATUS="$(grep -nE 'show "[^"]*:specs/STATUS.md"' "$HOOKS/close-gate.sh" | grep -v 'SLH_LIVE_TEXT_AWK' || true)"
-if [[ -z "$CG_RAW_STATUS" ]]; then
-  ok "live text e: close-gate.sh's STATUS.md extraction routes through the live-text rule"
-else
-  bad "live text e: close-gate.sh's STATUS.md extraction routes through the live-text rule" \
-      "raw extraction(s): $CG_RAW_STATUS"
-fi
-
 # Pin: the DIAGRAM-field reader routes through the live-text rule too (F6,
 # plugin-2.0.0 adversarial review). Pins c/d/e above covered only the STATUS.md
 # extractions, so the Architecture-diagram field reader stayed a RAW grep of the
@@ -1292,19 +987,20 @@ fi
 # The selection moved from `tail -n1` to `head -n1` at KL1's ruling (2026-08-29,
 # first-match), so this pin's own pattern moved with it. The PROPERTY is
 # unchanged and is the point: every reader pipes through the live-text rule.
-DIAG_RAW="$(grep -rnE "Architecture diagram:'.*head -n1" "$HOOKS/close-gate.sh" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh" | grep -v 'SLH_LIVE_TEXT_AWK' || true)"
-DIAG_COUNT="$(grep -rcE "Architecture diagram:'.*head -n1" "$HOOKS/close-gate.sh" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh" | awk -F: '{s+=$2} END{print s+0}')"
+DIAG_RAW="$(grep -rnE "Architecture diagram:'.*head -n1" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh" | grep -v 'SLH_LIVE_TEXT_AWK' || true)"
+DIAG_COUNT="$(grep -rcE "Architecture diagram:'.*head -n1" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh" | awk -F: '{s+=$2} END{print s+0}')"
 # 4 to 6 at edition v1.15 (spec 0136, 2026-09-10): the diagram half added
 # slh_diagram_field_line, once in setlist-hook-lib.sh and once byte-identically
 # in trunk-audit.sh. The COUNT is what makes this pin more than a spell-check on
 # the readers that already exist: a new reader written in a shape this regex does
 # not match at all fails here rather than passing silently, which is the whole
-# reason it is not derived from the same grep it guards.
-if [[ -z "$DIAG_RAW" && "$DIAG_COUNT" -eq 6 ]]; then
-  ok "live text h: every Architecture-diagram field reader (6, across the three lockstep files) routes through the live-text rule"
+# reason it is not derived from the same grep it guards. 6 to 5 at spec 0144:
+# close-gate.sh's reader left with the file.
+if [[ -z "$DIAG_RAW" && "$DIAG_COUNT" -eq 5 ]]; then
+  ok "live text h: every Architecture-diagram field reader (5, across the two lockstep files) routes through the live-text rule"
 else
   bad "live text h: every Architecture-diagram field reader routes through the live-text rule" \
-      "found $DIAG_COUNT reader(s) (expect 6); raw (unrouted): ${DIAG_RAW:-none}"
+      "found $DIAG_COUNT reader(s) (expect 5); raw (unrouted): ${DIAG_RAW:-none}"
 fi
 
 # Pin: the live-text program uses NO {n,m} interval. The git hooks run under
@@ -1317,7 +1013,7 @@ fi
 # the awk PROGRAM only. Byte-identity is already pinned, so checking one copy is
 # enough, but all three are checked to name the offender.
 LT_INTERVAL_BAD=""
-for lt_awk_f in "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh" "$HOOKS/close-gate.sh"; do
+for lt_awk_f in "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$ROOT/scripts/trunk-audit.sh"; do
   lt_awk_v="$(grep -m1 -E "^[[:space:]]*SLH_LIVE_TEXT_AWK=" "$lt_awk_f")"
   if printf '%s' "$lt_awk_v" | grep -qE '\{[0-9]+,[0-9]*\}'; then
     LT_INTERVAL_BAD="$LT_INTERVAL_BAD $(basename "$lt_awk_f")"
@@ -1398,6 +1094,27 @@ else
   bad "live text f: an indented line is a lazy continuation only after a real paragraph; after a heading/setext/HR or a blank it is code" \
       "divergences:$LT_PARA_BAD -- a dropped lazy row launders (ii), a kept code line admits on the excuse (i)"
 fi
+
+# THE CANONICAL LIFECYCLE SET AND ITS PROSE COPIES, moved here from shard 05 in
+# spec 0144 when that shard left with commit-gate.sh. The gate's own copy and its
+# per-state behavioural cases left with it; the edition's block, the STATUS
+# template's legend and the spec-authoring skill are the copies that remain, and
+# the git hook's copy is compared below. (The lockstep's history, CHECK 3 of D5,
+# is in the shard's last committed version.)
+CANON_STATES="$(bash "$SCRIPTS/part.sh" lifecycle-states "$ROOT/setlist.md" 2>/dev/null | sort | tr '\n' ' ')"
+assert_true "lifecycle canon: the edition's SDD-LIFECYCLE-STATES block extracts non-empty" \
+  "part.sh lifecycle-states returned nothing, so every comparison below would compare against an empty set and pass" \
+  test -n "$(printf '%s' "$CANON_STATES" | tr -d '[:space:]')"
+for lc_file in "$ROOT/templates/specs/STATUS.md.tmpl" "$ROOT/skills/spec-authoring/SKILL.md"; do
+  lc_name="$(basename "$lc_file")"
+  for st in $CANON_STATES; do
+    if grep -q "$st" "$lc_file"; then
+      ok "lifecycle legend: $lc_name names the state $st"
+    else
+      bad "lifecycle legend: $lc_name names the state $st" "this copy of the enumeration omits it"
+    fi
+  done
+done
 
 # The lifecycle enumeration is now in a fourth place too.
 GHOOK_STATES="$(grep -m1 -E "^SLH_LIFECYCLE_STATES=" "$ROOT/templates/git-hooks/pre-commit" \

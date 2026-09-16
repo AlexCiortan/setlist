@@ -1,7 +1,9 @@
 # erDiagram and classDiagram: the shape of the data
 
 Invent no topology, keep exact names, label every arrow, one figure one claim, no
-line ranges as evidence, no rendered image as source.
+line ranges as evidence, no rendered image as source; and hold the skill's four
+ceilings: twelve edges, 45 characters a label, 400 characters of label text, no
+subgraph as an endpoint, with any clause moved into the prose under the figure.
 
 This is the type for the central data structure, and its home is the core-model
 section of `steering/structure.md`, beside the prose that defines it. The prose

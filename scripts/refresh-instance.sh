@@ -124,10 +124,16 @@ if [[ "$SKEW_RC" -eq 1 && "$APPLY" == "yes" ]]; then
   die "refusing to refresh: this session is not bound to the newest plugin tree present in the cache, so it would install the older hook bytes and report an upgrade. Restart the session, then retry."
 fi
 
-# --- the five stamped enforcement files (four through 2.5.0; the Stop hook joined
-# in 2.6.0, spec 0132 cluster H) ---------------------------------------------------
+# --- the four stamped enforcement files (four through 2.5.0; the Stop hook joined
+# in 2.6.0, spec 0132 cluster H; the one hard deny's own hook in the 2.8.0 cycle,
+# spec 0143; the two Bash gates left in 2.8.0, spec 0144) -----------------------------------------------------------------------
 
-STAMPED_HOOKS="scope-hook commit-gate close-gate regrounding-hook stop-hook"
+STAMPED_HOOKS="scope-hook regrounding-hook stop-hook bypass-deny"
+# RETIRED WITH 2.8.0 (spec 0144): the two Bash advisory gates. No longer stamped,
+# and never removed by this script: removal from someone's repository is
+# destructive, so what is left of them is REPORTED with the exact edit and the
+# owner makes it (spec 0142 section 10, the owner's ruling R-D of 2026-09-13).
+RETIRED_HOOKS="commit-gate close-gate"
 CHANGED=""
 SAME=""
 NEW=""
@@ -139,6 +145,14 @@ for h in $STAMPED_HOOKS; do
     SAME="$SAME $h.sh"
   else
     CHANGED="$CHANGED $h.sh"
+  fi
+done
+
+# The retired files still present. A symlink counts and is not followed.
+RETIRED_FILES=""
+for h in $RETIRED_HOOKS; do
+  if [[ -e "$INSTANCE/.claude/hooks/$h.sh" || -L "$INSTANCE/.claude/hooks/$h.sh" ]]; then
+    RETIRED_FILES="$RETIRED_FILES .claude/hooks/$h.sh"
   fi
 done
 
@@ -404,12 +418,13 @@ OURS_TEST='
   for h in $STAMPED_HOOKS; do
     case "$h" in
       scope-hook)        ev=PreToolUse;  tool=Write ;;
-      commit-gate)       ev=PreToolUse;  tool=Bash ;;
-      close-gate)        ev=PreToolUse;  tool=Bash ;;
       regrounding-hook)  ev=SessionStart; tool="" ;;
       # KL10 TAKEN (2026-09-07, spec 0132 cluster H): the wiring check learns the
       # fifth session hook, on the Stop event, which takes no matcher.
       stop-hook)         ev=Stop;        tool="" ;;
+      # The one hard deny's own hook (spec 0143): a PreToolUse hook that must
+      # reach Bash (the two gates that stood beside it left in 2.8.0, spec 0144).
+      bypass-deny)       ev=PreToolUse;  tool=Bash ;;
       *)                 ev=PreToolUse;  tool="" ;;
     esac
     # A MATCH-ALL MATCHER IS COVERAGE, NOT A GAP (F4-2026, 2.2.0 leg finding F4).
@@ -450,9 +465,9 @@ OURS_TEST='
   wrong hook event, or on a matcher that never names the tool it governs, never
   fires. Restore each entry from the plugin's templates/claude/settings.json.tmpl
   (the scope hook on PreToolUse matching Write|Edit|MultiEdit|NotebookEdit, the
-  commit and close gates on PreToolUse matching Bash, the re-grounding hook on
-  SessionStart, the stop hook on Stop), keeping this file's own permissions and
-  model settings."
+  bypass deny on PreToolUse matching Bash, the
+  re-grounding hook on SessionStart, the stop hook on Stop), keeping this file's
+  own permissions and model settings."
   fi
 
   # The scope hook is identified by what its entry EXECUTES, and only ITS
@@ -541,9 +556,20 @@ OURS_TEST='
   A hook the harness cancels is a gate that did not run, verified live on
   Claude Code 2.1.x: a hook exceeding its timeout is dropped and the tool call
   PROCEEDS. The value is in SECONDS. The template ships 120 for the scope
-  hook, 300 for the commit gate, 300 for the close gate, 60 for the
+  hook, 300 for the bypass deny, 60 for the
   re-grounding hook and 60 for the Stop hook."
   fi
+
+  # RETIRED ENTRIES (spec 0144). The wiring check above asks whether a STAMPED hook
+  # is wired, so an entry that runs a hook this release no longer stamps was never
+  # a gap to it and was never seen. It is read here with the same predicate, so a
+  # retired entry means exactly what a wired one means one check up; a command
+  # word naming a retired hook at any OTHER path is a FORK, named and never edited.
+  RETIRED_SPELLINGS="$(for h in $RETIRED_HOOKS; do ours_spellings "$h"; done | jq -s -c 'add')"
+  RETIRED_ENTRIES="$(jq -r --argjson allowed "$RETIRED_SPELLINGS" '[.hooks | to_entries[] | .key as $ev | .value[]? | .hooks[]? | select('"$OURS_TEST"') | "\($ev): \(.command)"] | unique | .[]' "$SETTINGS" 2>/dev/null)" \
+    || RETIRED_ENTRIES="<unreadable>"
+  RETIRED_FORKS="$(jq -r --argjson allowed "$RETIRED_SPELLINGS" '[.hooks | to_entries[] | .key as $ev | .value[]? | .hooks[]? | select(('"$OURS_TEST"') | not) | select((.command // "") | split(" ")[0] | test("(^|/)(commit|close)-gate[.]sh\"?$")) | "\($ev): \(.command)"] | unique | .[]' "$SETTINGS" 2>/dev/null)" \
+    || RETIRED_FORKS="<unreadable>"
 fi
 
 printf 'refresh-instance.sh: plugin %s -> instance recorded %s (%s)\n' "$PLUGIN_VERSION" "$FROM" "$DIRECTION"
@@ -642,6 +668,40 @@ else
 fi
 if [[ -n "$WIRING_GAPS" ]]; then
   printf 'settings wiring, NOT refreshed by this script (it holds your own permissions and model settings):%s\n' "$WIRING_GAPS"
+fi
+# THE RETIRED-HOOKS REPORT (spec 0144; spec 0142 section 10, ruling R-D). Printed in
+# report mode and under --apply alike, and it changes no exit status: a stale
+# advisory gate PERMITS, the git hooks carry every refusal, so nothing this release
+# promises is out of force, and removing files from someone's repository is the
+# owner's act. The edit is printed between two fixed lines so it can be run as
+# printed, and the suite runs it exactly that way.
+RETIRED_JQ='def retired_entry: ((.type // "command") == "command") and ((.command // "") as $c | (($retired | index($c)) != null) or (($retired | index($c | split(" ")[0])) != null)); .hooks |= with_entries(((.value // []) | length) as $n | .value |= ((. // []) | map(if ((.hooks | type) == "array") and any(.hooks[]; retired_entry) then (.hooks |= map(select(retired_entry | not))) | select((.hooks | length) > 0) else . end)) | select(($n == 0) or ((.value | length) > 0)))'
+if [[ -n "$RETIRED_FILES" || ( -n "${RETIRED_ENTRIES:-}" && "${RETIRED_ENTRIES:-}" != "<unreadable>" ) || ( -n "${RETIRED_FORKS:-}" && "${RETIRED_FORKS:-}" != "<unreadable>" ) ]]; then
+  printf 'retired hooks, NOT removed by this script (removing files from your repository is yours to do):\n'
+  [[ -n "$RETIRED_FILES" ]] && printf '  these hooks were retired with 2.8.0 and are still in this instance:%s\n' "$RETIRED_FILES"
+  if [[ "${RETIRED_ENTRIES:-}" == "<unreadable>" ]]; then
+    printf '  whether .claude/settings.json still runs them could not be read, so the edit below removes the files only.\n'
+  elif [[ -n "${RETIRED_ENTRIES:-}" ]]; then
+    printf '  .claude/settings.json still runs them:\n'
+    printf '%s\n' "$RETIRED_ENTRIES" | sed 's/^/    /'
+  fi
+  printf '  They are the commit and close gates, advisory parsers whose questions the git hooks now answer;\n'
+  printf '  left in place they keep running on every Bash call. If you changed either file, keep a copy first.\n'
+  if [[ -n "$RETIRED_FILES" || ( -n "${RETIRED_ENTRIES:-}" && "${RETIRED_ENTRIES:-}" != "<unreadable>" ) ]]; then
+    printf '  To remove exactly what is named here and nothing else, run from the instance root:\n'
+    printf '  --- the edit, verbatim ---\n'
+    [[ -n "$RETIRED_FILES" ]] && printf '    rm -f --%s\n' "$RETIRED_FILES"
+    if [[ -n "${RETIRED_ENTRIES:-}" && "${RETIRED_ENTRIES:-}" != "<unreadable>" ]]; then
+      RETIRED_SPELLINGS_Q="${RETIRED_SPELLINGS//\'/\'\\\'\'}"
+      printf "    jq --argjson retired '%s' '%s' .claude/settings.json > .claude/settings.json.new && mv .claude/settings.json.new .claude/settings.json\n" "$RETIRED_SPELLINGS_Q" "$RETIRED_JQ"
+    fi
+    printf '  --- end of the edit ---\n'
+  fi
+  if [[ -n "${RETIRED_FORKS:-}" && "${RETIRED_FORKS:-}" != "<unreadable>" ]]; then
+    printf '  a FORK of a retired hook is wired, and the edit above leaves it alone:\n'
+    printf '%s\n' "$RETIRED_FORKS" | sed 's/^/    /'
+    printf '  Setlist no longer ships the file it was forked from; keep it, or delete it and its entry yourself.\n'
+  fi
 fi
 # THE gates BLOCK MIGRATION (P2, 2.6.0; design section 8 as amended by the
 # owner's ruling of 2026-09-07, spec 0132 "What the contract left open" 5). An
@@ -946,9 +1006,9 @@ mv "$TMP" "$SDD" \
 
 [[ "$GATES_WRITE" -eq 1 ]] && printf 'refresh-instance.sh: wrote the gates block to %s (commit empty; close and push the single gate_command), the shape the hooks already read for an absent block.\n' "$SDD"
 if [[ -n "$GITHOOKS_SKIP_NOTE" ]]; then
-  printf 'refresh-instance.sh: refreshed the five stamped hooks and recorded plugin %s in %s; the git-hook boundary was NOT touched (see above).\n' "$PLUGIN_VERSION" "$SDD"
+  printf 'refresh-instance.sh: refreshed the four stamped hooks and recorded plugin %s in %s; the git-hook boundary was NOT touched (see above).\n' "$PLUGIN_VERSION" "$SDD"
 else
-  printf 'refresh-instance.sh: refreshed the five stamped hooks, delivered the git-hook boundary (.githooks/ plus core.hooksPath and merge.ff), and recorded plugin %s in %s\n' "$PLUGIN_VERSION" "$SDD"
+  printf 'refresh-instance.sh: refreshed the four stamped hooks, delivered the git-hook boundary (.githooks/ plus core.hooksPath and merge.ff), and recorded plugin %s in %s\n' "$PLUGIN_VERSION" "$SDD"
 fi
 printf 'Hooks load at session start, so the refreshed gates bind from the NEXT session onward.\n'
 

@@ -285,19 +285,8 @@ QSPEC
   esac
 }
 
-# Layer 1: close-gate, advisory. The nf_verdict shape: empty output is allow.
-qa_scope_cg() { # qa_scope_cg <shape> -> allow|deny
-  local d="$WORK/qa-scope-cg" o
-  rm -rf "$d"; close_fixture "$d" no no answered no no true
-  git -C "$d" checkout -q spec/0001-thing
-  qa_scope_spec "$1" > "$d/specs/0001-thing.md"
-  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n' > "$d/specs/STATUS.md"
-  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm "spec body" >/dev/null 2>&1
-  git -C "$d" checkout -q main
-  o="$(printf '%s' "$(bash_payload 'git merge --no-ff spec/0001-thing')" | CLAUDE_PROJECT_DIR="$d" bash "$HOOKS/close-gate.sh" 2>/dev/null)"
-  [[ -z "$o" ]] && { printf 'allow'; return 0; }
-  printf '%s' "$o" | jq -r '.setlistAdvisory.verdict // "allow"'
-}
+# The advisory close-gate layer that stood first here left in 2.8.0 (spec 0144);
+# the two enforcing layers below carry the corpus.
 
 # Layer 2: the armed pre-merge-commit, enforcing. Outcome is whether the work
 # LANDED, never the printed reason.
@@ -327,27 +316,27 @@ qa_scope_audit() { # qa_scope_audit <shape> -> allow|deny
 
 for qa_scope_case in good:allow f8nested:deny f3illustrative:allow missing:deny; do
   qs_shape="${qa_scope_case%%:*}"; qs_want="${qa_scope_case#*:}"
-  qs_cg="$(qa_scope_cg "$qs_shape")"
   qs_slh="$(qa_scope_slh "$qs_shape")"
   qs_audit="$(qa_scope_audit "$qs_shape")"
-  if [[ "$qs_cg" == "$qs_want" && "$qs_slh" == "$qs_want" && "$qs_audit" == "$qs_want" ]]; then
-    ok "qa scope corpus: [$qs_shape] lands $qs_want at close-gate, pre-merge-commit and trunk-audit alike"
+  if [[ "$qs_slh" == "$qs_want" && "$qs_audit" == "$qs_want" ]]; then
+    ok "qa scope corpus: [$qs_shape] lands $qs_want at pre-merge-commit and trunk-audit alike"
   else
-    bad "qa scope corpus: [$qs_shape] lands $qs_want at close-gate, pre-merge-commit and trunk-audit alike" \
-        "wanted $qs_want everywhere, measured close-gate=$qs_cg pre-merge-commit=$qs_slh trunk-audit=$qs_audit; a layer that disagrees with the expected side is either the F8 blindness or the F3 false-deny, and a layer that disagrees with its siblings has broken the lockstep by outcome"
+    bad "qa scope corpus: [$qs_shape] lands $qs_want at pre-merge-commit and trunk-audit alike" \
+        "wanted $qs_want everywhere, measured pre-merge-commit=$qs_slh trunk-audit=$qs_audit; a layer that disagrees with the expected side is either the F8 blindness or the F3 false-deny, and a layer that disagrees with its siblings has broken the lockstep by outcome"
   fi
 done
 
 # The two directions by NAME, so a regression in either reads as itself rather
 # than as a corpus row. F8: the nested block must not satisfy the enforcing
-# layer. F3: the illustrative block must not poison the advisory one.
+# layer. F3: the illustrative block must not poison the enforcing one either (the
+# advisory layer where the leg first measured it left in 2.8.0, spec 0144).
 if [[ "$(qa_scope_slh f8nested)" == "deny" ]]; then
   ok "qa scope F8: a qa-pass-1 block nested inside a pasted-report fence does not close a spec"
 else
   bad "qa scope F8: a qa-pass-1 block nested inside a pasted-report fence does not close a spec" \
       "the armed merge landed on a Closing report whose verdicts field reads <not run yet>; this is the 2.0.0 leg's guarantee bypass, replayed"
 fi
-if [[ "$(qa_scope_cg f3illustrative)" == "allow" ]]; then
+if [[ "$(qa_scope_slh f3illustrative)" == "allow" ]]; then
   ok "qa scope F3: an illustrative shape-quote outside the Closing report does not poison a real verdict"
 else
   bad "qa scope F3: an illustrative shape-quote outside the Closing report does not poison a real verdict" \
@@ -373,7 +362,7 @@ fi; shard_region_end
 # =============================================================================
 
 qa_atx_run() { # qa_atx_run <spec-text-on-stdin> -> reader state
-  awk "$(grep -m1 -E '^[[:space:]]*QA_PASS1_AWK=' "$HOOKS/close-gate.sh" | sed -e "s/^[[:space:]]*QA_PASS1_AWK='//" -e "s/'$//")"
+  awk "$(grep -m1 -E '^[[:space:]]*SLH_QA_PASS1_AWK=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed -e "s/^[[:space:]]*SLH_QA_PASS1_AWK='//" -e "s/'$//")"
 }
 QA_ATX_BAD=""
 qa_atx_case() { # qa_atx_case <name> <want> <spec text>
@@ -622,7 +611,7 @@ QA_STRIP_BAD=""
 qa_strip_case() { # qa_strip_case <name> <want> <<'SPEC'
   local name="$1" want="$2" f="$WORK/qa-strip-$1" got
   cat > "$f"
-  got="$(awk "$(grep -m1 -E '^[[:space:]]*TEMPLATE_FENCE_AWK=' "$HOOKS/close-gate.sh" | sed -e "s/^[[:space:]]*TEMPLATE_FENCE_AWK='//" -e "s/'$//")" "$f" | qa_atx_run)"
+  got="$(awk "$(grep -m1 -E '^[[:space:]]*SLH_TEMPLATE_FENCE_AWK=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed -e "s/^[[:space:]]*SLH_TEMPLATE_FENCE_AWK='//" -e "s/'$//")" "$f" | qa_atx_run)"
   [[ "$got" == "$want" ]] || QA_STRIP_BAD="$QA_STRIP_BAD
     $name: wanted $want, pipeline said $got"
 }
@@ -677,12 +666,6 @@ template text
 1: PASS
 ```
 SPEC
-if [[ -z "$QA_STRIP_BAD" ]]; then
-  ok "qa stripper corpus: the fence stripper obeys the 0-3-space rule, 5 shapes through the full pipeline"
-else
-  bad "qa stripper corpus: the fence stripper obeys the 0-3-space rule, 5 shapes through the full pipeline" \
-      "the stripper and the reader disagree about what a fence is:$QA_STRIP_BAD"
-fi
 # Round 6, finding 4, DOCUMENTED as flat-correct and pinned: a fence whose
 # closer is 4-space-indented does not close in ANY renderer (CommonMark:
 # closing fences may be indented at most 3), so the tail of such a spec,
@@ -704,9 +687,19 @@ login: PASS
 ```
 SPEC
 printf '## \fClosing report\n\n```qa-pass-1\nlogin: PASS\n```\n' > "$WORK/qa-strip-formfeed"
-QA_STRIP_FF="$(awk "$(grep -m1 -E '^[[:space:]]*TEMPLATE_FENCE_AWK=' "$HOOKS/close-gate.sh" | sed -e "s/^[[:space:]]*TEMPLATE_FENCE_AWK='//" -e "s/'$//")" "$WORK/qa-strip-formfeed" | qa_atx_run)"
+QA_STRIP_FF="$(awk "$(grep -m1 -E '^[[:space:]]*SLH_TEMPLATE_FENCE_AWK=' "$ROOT/templates/git-hooks/setlist-hook-lib.sh" | sed -e "s/^[[:space:]]*SLH_TEMPLATE_FENCE_AWK='//" -e "s/'$//")" "$WORK/qa-strip-formfeed" | qa_atx_run)"
 [[ "$QA_STRIP_FF" == "none" ]] || QA_STRIP_BAD="$QA_STRIP_BAD
     formfeed-heading-no-section: wanted none, pipeline said $QA_STRIP_FF (a REAL formfeed byte, printf-built because a quoted heredoc would have tested the literal string)"
+# THE ASSERTION READS ALL FIVE SHAPES (spec 0145, the owner's ruling on 0144's
+# escalation E-b): it stood above the unclosed-fence and formfeed cases, which
+# wrote to QA_STRIP_BAD after it had already fired, so two of the five shapes it
+# names were never asserted. It sits below the last writer now.
+if [[ -z "$QA_STRIP_BAD" ]]; then
+  ok "qa stripper corpus: the fence stripper obeys the 0-3-space rule, 5 shapes through the full pipeline"
+else
+  bad "qa stripper corpus: the fence stripper obeys the 0-3-space rule, 5 shapes through the full pipeline" \
+      "the stripper and the reader disagree about what a fence is:$QA_STRIP_BAD"
+fi
 # Round 7, finding 2: a fence is a fence in either CommonMark spelling. The
 # edition says "a fenced block whose info string is qa-pass-1"; tilde fences
 # and longer backtick runs are exactly that, and a tilde fence is the ordinary
@@ -855,16 +848,102 @@ else
       "the reader and markdown disagree about what a heading is:$QA_ATX_BAD"
 fi
 
-# End to end: a spec whose only Closing heading is the no-space spelling has,
-# per markdown, NO Closing report section, and the unified exists-grep says so
-# with the honest code rather than letting the loose-open reader accept a
-# fenced example from a section nothing could close (adversary finding 4).
-NSC="$WORK/qa-nospace-close"; rm -rf "$NSC"; close_fixture "$NSC" no no answered no no true
-git -C "$NSC" checkout -q spec/0001-thing
-printf '# Spec 0001\n\nStatus: CLOSED\n\n##Closing report\n\n- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n\n- Architecture diagram: no impact\n' > "$NSC/specs/0001-thing.md"
-printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n' > "$NSC/specs/STATUS.md"
-git -C "$NSC" add -A >/dev/null 2>&1; git -C "$NSC" commit -qm ns >/dev/null 2>&1
-git -C "$NSC" checkout -q main
-run_hook "$HOOKS/close-gate.sh" "$NSC" "$(bash_payload "$MERGE_CMD")"
-expect_deny "qa heading e2e: a no-space ##Closing report is not a section, refused with the section code" "CG-NO-CLOSING-REPORT"
+# =============================================================================
+# THE SCOPE HOOK'S HALF OF SHARD 04's CONFIG AND DENY-CODE AXES, moved here in
+# spec 0144 when shard 04 left with close-gate.sh. Each case below stood beside a
+# close-gate twin that left with the gate; the scope hook's half is unchanged.
+# =============================================================================
 
+# --- the DENY-CODE axis (1.0.8, routine item 4) ------------------------------
+# Every deny carries a stable bracketed CODE, so an assertion can test the hook's
+# IDENTITY instead of its prose, and a reworded message never breaks a test.
+# Asserted STRUCTURALLY: every deny site carries a code, and the codes are unique.
+# The close and commit gates were in this set until 2.8.0.
+DC_MISSING=""
+for hookfile in "$HOOKS"/scope-hook.sh; do
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    printf '%s' "$line" | grep -qE '\[SH-[A-Z0-9-]+\]' || DC_MISSING="$DC_MISSING
+    $(basename "$hookfile"): $(printf '%s' "$line" | cut -c1-72)"
+  done <<DCEOF
+$(grep -hE '^\s*deny(_literal)? "' "$hookfile")
+DCEOF
+done
+if [[ -z "$DC_MISSING" ]]; then
+  ok "deny codes: every deny site in every stamped hook carries a stable code"
+else
+  bad "deny codes: a deny without a code cannot be asserted except by its prose" \
+      "these carry no [XX-CODE]:$DC_MISSING"
+fi
+DC_DUPES="$(grep -ohE '\[SH-[A-Z0-9-]+\]' "$HOOKS"/scope-hook.sh | sort | uniq -d)"
+if [[ -z "$DC_DUPES" ]]; then
+  ok "deny codes: every code is unique across the stamped hooks"
+else
+  bad "deny codes: two denials sharing a code cannot be told apart" "duplicated: $DC_DUPES"
+fi
+
+# --- the SDD-SHAPE axis (1.0.8, F1) -----------------------------------------
+# `jq -e .` tests JSON VALIDITY, not SHAPE. A top-level array and TWO documents in
+# one file are both valid JSON and both disabled the trunk rule in silence.
+for shape in 'array' 'multidoc'; do
+  SDDSH="$WORK/inst-shape-$shape"
+  close_fixture "$SDDSH" no no answered no no true
+  case "$shape" in
+    array)    printf '[]' > "$SDDSH/.claude/sdd.json" ;;
+    multidoc) printf '{"trunk":"main"}\n{"trunk":"main"}\n' > "$SDDSH/.claude/sdd.json" ;;
+  esac
+  if [[ "$shape" == "array" ]]; then
+    assert_true "sdd-shape $shape 0: the fixture is valid JSON, so validity is not the test" \
+      "the fixture is malformed, so this case would pass for the wrong reason" \
+      jq -e . "$SDDSH/.claude/sdd.json"
+  fi
+  OUT="$(jq -nc --arg p "$SDDSH/src/app.js" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"}}' \
+        | CLAUDE_PROJECT_DIR="$SDDSH" bash "$HOOKS/scope-hook.sh" 2>/dev/null)"
+  if [[ "$(printf '%s' "$OUT" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // empty' 2>/dev/null)" == "deny" ]]; then
+    ok "sdd-shape $shape b: the scope hook refuses it too, so the trunk rule is not silently off"
+  else
+    bad "sdd-shape $shape b: the scope hook must refuse a config it cannot read a trunk from" \
+        "a $shape sdd.json disabled the trunk rule and the write reached the trunk"
+  fi
+done
+
+# A trunk that is PRESENT and not a non-empty string is refused, not read as no
+# trunk at all; absent stays defaulted.
+for bad_trunk in '""' '[]' '{}'; do
+  TRV="$WORK/trunkval"; rm -rf "$TRV"; close_fixture "$TRV" no no answered no no true
+  printf '{"scaffolded":true,"trunk":%s,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' "$bad_trunk" > "$TRV/.claude/sdd.json"
+  run_hook "$HOOKS/scope-hook.sh" "$TRV" "$(edit_payload "$TRV/src/app.js")"
+  expect_deny "scope-hook trunk value: [$bad_trunk] is refused, not read as no trunk at all" "SH-TRUNK-INVALID"
+done
+
+# Backlog item 33a: the deny MESSAGE keeps its quote marks (nested double quotes
+# once concatenated them away).
+TRQ="$WORK/trunkquotes"; close_fixture "$TRQ" no no answered no no true
+printf '{"scaffolded":true,"trunk":"","gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$TRQ/.claude/sdd.json"
+run_hook "$HOOKS/scope-hook.sh" "$TRQ" "$(edit_payload "$TRQ/src/app.js")"
+expect_deny "scope-hook trunk message: the key is quoted where the text declares it" 'declares a "trunk" that is not'
+run_hook "$HOOKS/scope-hook.sh" "$TRQ" "$(edit_payload "$TRQ/src/app.js")"
+expect_deny "scope-hook trunk message: the key is quoted where the text says to set it" 'Set "trunk" to your trunk branch name'
+run_hook "$HOOKS/scope-hook.sh" "$TRQ" "$(edit_payload "$TRQ/src/app.js")"
+expect_deny "scope-hook trunk message: the example branch names keep their quotes" '(for example "main" or "master")'
+
+# A ROLES value that is not an object disabled the scope hook entirely: the jq
+# extraction errored, ROLE_PATHS came back empty, and the deny loop ran zero times.
+for roles_v in '"src"' '[]' '123'; do
+  RLS="$WORK/roles-shape"; rm -rf "$RLS"; close_fixture "$RLS" no no answered no no true
+  printf '{"scaffolded":true,"trunk":"main","gate_command":"true","roles":%s}\n' "$roles_v" > "$RLS/.claude/sdd.json"
+  run_hook "$HOOKS/scope-hook.sh" "$RLS" "$(edit_payload "$RLS/src/app.js")"
+  expect_deny "roles shape: [$roles_v] is refused, not read as no roles at all" "SH-ROLES-SHAPE"
+done
+
+# THE TRUNK VALUE MUST NAME A LOCAL BRANCH (F1, second 1.0.8 leg): a trunk recorded
+# as a ref path still reduces to the branch, and the scope hook still guards it.
+TRB="$WORK/trunk-branch"; close_fixture "$TRB" no no answered no no true
+git -C "$TRB" update-ref refs/remotes/origin/main "$(git -C "$TRB" rev-parse main)" 2>/dev/null
+git -C "$TRB" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main 2>/dev/null
+for trunk_spelling in 'refs/remotes/origin/main' 'refs/heads/main' 'heads/main' 'origin/main'; do
+  printf '{"scaffolded":true,"trunk":"%s","gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' \
+    "$trunk_spelling" > "$TRB/.claude/sdd.json"
+  run_hook "$HOOKS/scope-hook.sh" "$TRB" "$(edit_payload "$TRB/src/app.js")"
+  expect_deny "trunk spelling: [$trunk_spelling] still guards trunk writes" "SH-"
+done

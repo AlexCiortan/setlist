@@ -35,12 +35,13 @@ Checks:
    The `_comment` key in the permissions block is the deny list's own note
    (a deny list is a spelling list) and is not a finding; a `//` comment
    anywhere in the file IS one, because the harness then drops every rule.
-2. The five stamped hooks are present in `.claude/hooks/` and wired in
+2. The four stamped session hooks are present in `.claude/hooks/` and wired in
    settings.json: scope-hook on Write|Edit|MultiEdit|NotebookEdit
-   (PreToolUse), commit-gate and close-gate on Bash (PreToolUse),
+   (PreToolUse), bypass-deny on Bash (PreToolUse, 2.8.0),
    regrounding-hook on SessionStart, stop-hook on Stop (2.6.0; no matcher).
-   An instance stamped before 2.6.0 lacks the fifth until `/setlist:upgrade`
-   delivers it and its settings entry is restored from the template. A
+   An instance stamped before 2.6.0 lacks stop-hook, and one stamped before
+   2.8.0 lacks bypass-deny, until `/setlist:upgrade` delivers it and its
+   settings entry is restored from the template. A
    disabled or missing hook is a finding,
    not an error: report it with the settings line that would re-enable it.
    The pre-1.0.3 matcher `Write|Edit` is a finding (NotebookEdit writes files
@@ -86,7 +87,7 @@ Checks:
     (their duties ship as /setlist:checkpoint and /setlist:validate);
     report any survivor with the removal step from the upgrade protocol.
 11. Binding dependencies are installed: `jq` resolves on PATH (all four
-    stamped hooks need it; since plugin 1.0.1 the three gates report their verdict and PERMIT (advisory since v1.7; the GIT hooks are what refuse, and they fail closed without jq)
+    stamped hooks need it; the scope hook reports its verdict and PERMITS and the bypass deny is silent (advisory since v1.7; the GIT hooks are what refuse, and they fail closed without jq)
     without it, denying the writes, commits, and merges they govern rather
     than allowing them unchecked, and the re-grounding pointer says so at
     session start, so a missing jq presents as a blocked session rather than
@@ -129,11 +130,12 @@ Checks:
     the trigger.
 15. If `.claude/sdd.json` declares `identity.user_email`, report it beside the
     machine's current `git config user.email` as INFORMATION when they match.
-    When they DIFFER, say so plainly: the commit gate will WARN on the next
-    commit, and NOTHING refuses it: the identity comparison exists only in the advisory
-    commit gate, and no git hook or the trunk audit reads `user.email` at all. Say that
-    plainly, because this declaration has no enforcing layer; learning
-    that during a health check is cheaper than learning it mid-close. An absent key is not a finding; the check is opt-in and most
+    When they DIFFER, say so plainly: this item is the only place the declared
+    identity is compared at all (since 2.8.0 nothing warns at commit time), and
+    NOTHING refuses a commit made under the wrong one: no git hook and not the trunk
+    audit reads `user.email`. Say that plainly, because this declaration has no
+    enforcing layer; learning that during a health check is cheaper than learning
+    it mid-close. An absent key is not a finding; the check is opt-in and most
     projects will not want it.
 16. The ACTIVE spec carries a `Spec-hash:` field (Part 6). Its ABSENCE is
     INFORMATION, not a finding: specs authored before edition v1.7 do not have

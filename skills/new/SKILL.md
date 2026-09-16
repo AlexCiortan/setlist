@@ -50,7 +50,7 @@ Ask for, in plain conversation:
   out of settings.json and park verification in STATUS.md with a named owner.
   Never park without attempting the probe.
 - Verify `jq` in the same environment check (`command -v jq`). The three
-  stamped GIT hooks fail closed without it (the three session gates are advisory and permit), so an instance stamped on a machine
+  stamped GIT hooks fail closed without it (the session hooks report, or stay silent, and permit), so an instance stamped on a machine
   that lacks it will deny its own first writes; a clean container is the
   common case, since jq is not in most default installs. Report the install
   command and let the user run it; install nothing yourself.
@@ -85,7 +85,7 @@ mode=new
 Then run:
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stamp.sh" .claude/stamp-answers.txt .`
 
-The stamp emits every framework-fixed file, including the five session hooks
+The stamp emits every framework-fixed file, including the four session hooks
 (enabled; each documents its one-line disable in its header), the git hooks,
 the trunk audit and the forge check beside it, `.github/workflows/
 setlist-forge-check.yml` (the check as a required status check, `setlist forge

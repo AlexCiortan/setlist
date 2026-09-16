@@ -562,49 +562,44 @@ build_brokenjq_bin
 # hole: The forge check reads the trunk's protection as it stands, not as it stood. | asserted
 # hole: A session killed from outside fires no Stop, and the Stop hook is a nudge, never a lock. | asserted
 # hole: Sideways routes to the trunk. | asserted
-# hole: `git rebase` onto a spec branch brings that branch's commits to the trunk with no closing merge. | asserted
-# hole: `git reset --hard <spec-branch>` moves the trunk onto unclosed work outright. | asserted
+# hole: `git rebase` onto a spec branch brings that branch's commits to the trunk with no closing merge. | unassertable | the cases that pinned it drove the close gate, deleted in 2.8.0 (spec 0144); the bullet now says no merge hook runs and the trunk audit refuses the result at push, and no case drives that route end to end, so this ledger says so rather than claiming a pin (spec 0146, E-g)
+# hole: `git reset --hard <spec-branch>` moves the trunk onto unclosed work outright. | unassertable | the cases that pinned it drove the close gate, deleted in 2.8.0 (spec 0144); the bullet now says nothing refuses before the push and the trunk audit refuses at push, and no case drives that route end to end (spec 0146, E-g)
 # hole: `git checkout <spec-branch> -- <path>` copies role-path files onto the trunk without any merge to read. | asserted
-# hole: The pathspec hole. | asserted
 # hole: Completing a refused merge on the trunk side, as the hook's own message prescribes, is accepted at commit and refused at push. | asserted
-# hole: A timed-out hook is a skipped gate. | unassertable | harness behaviour, not hook behaviour; verified live 2026-07-25 with a sleeping hook under timeout 1 and 10, recorded in close-gate.sh's header
+# hole: A timed-out hook is a skipped gate. | unassertable | harness behaviour, not hook behaviour; verified live 2026-07-25 with a sleeping hook under timeout 1 and 10, recorded in the header of the close gate that 2.8.0 removed
 # hole: The staged-content scans read every staged line unless you scope them. | asserted
-# hole: The scans read this project's own index. | asserted
+# hole: The scans read this project's own index. | asserted | own index a and b (shard 08, region scan-ref-refusal, spec 0146): a commit through GIT_INDEX_FILE is scanned and refused, and a git -C commit into a nested repository is not, which is the hole the bullet names
 # hole: `--no-verify` skips git hooks | asserted
 # hole: Git hooks are per-clone, and the tracked directory narrows that without closing it. | asserted
 # hole: `git merge --ff-only` and `git merge --ff` skip the merge hooks. | asserted
 # hole: `git merge --squash` needs one flag to work in a Setlist instance, and the error does not say so. | asserted
-# hole: The close gate refuses `@{u}` and other revision-suffix spellings of a merge operand. | asserted
 # hole: A role directory spelled in a different case is not seen by the session scope gate on macOS or Windows. | asserted
-# hole: A `<<\EOF` heredoc body is read as code by the session gates. | asserted
-# hole: The session gates are text parsers, and a growing list of spellings read a command wrongly. | asserted
-# hole: The session gates' warnings do not reach the agent on current harnesses. | unassertable | a property of the HARNESS, not of these bytes: a shell test can see the hook emit the reason on three channels but not what Claude Code renders. dogfood/advisory-visibility-probe.sh measures it with a live session and a deny-control, and is the check that lifts this limitation when it changes
+# hole: The session layer's one command reader is a frozen text parser, and a short list of spellings reads a command wrongly. | asserted | since 2.8.0 (spec 0146) the lexer's bytes are pinned by the bypass deny region's digest assertion, and the one item that reaches the trunk, the diagram field's first-line reading, by diagram first-wins a and b at pre-merge-commit (shard 10, spec 0145); the retired gates' spellings left with their parsers
+# hole: The scope hook's warnings do not reach the agent on current harnesses. | unassertable | a property of the HARNESS, not of these bytes: a shell test can see the hook emit the reason on three channels but not what Claude Code renders. dogfood/advisory-visibility-probe.sh measures it with a live session and a deny-control per release; the vendor documents the drop on allow as intended, so no change is expected to lift it (spec 0146, CLAIMS-CORRECTIONS item 6)
 # hole: A first push to a brand-new EMPTY remote audits every pushed branch as a trunk candidate. | asserted
 # hole: The trunk audit cannot tell a merge that EDITS a file from ordinary conflict resolution. | asserted
 # hole: The headless integrity chain is only as strong as where your signing key lives, and a key your build can reach is not custody. | asserted
 # hole: The close audit's single-parent arm is as strong as your declarations, and a declaration is a claim, not a verified fact. | asserted
 # hole: The hashed range ends at the FIRST line reading `## Closing report`, fences included, and the ownership reader agrees with that cut. | asserted
-# hole: Identity-by-commit governs an alias only while a spec or chore ref still points at that exact commit. | asserted
+# hole: An alias of a spec branch is judged by what its merge closes, never by the name it was merged under. | asserted | alias close a (shard 08, region scan-ref-refusal, spec 0146): an alias of an unclosed spec branch, merged after the spec branch advances, is refused by pre-merge-commit with SLH-CLOSES-NO-SPEC
 # hole: The wiring check recognises only the command spellings `settings.json.tmpl` ships. | asserted
 # hole: The set of tested platforms is a list, not a proof. | unassertable | a statement ABOUT the CI matrix rather than about hook behaviour; the matrix in .github/workflows/test.yml is the evidence, and the honest check is reading which platforms it actually runs. Extended 2026-09-02 (spec 0127, backlog KL8, ratified decision 5): the Linux leg now runs this suite a second time under GNU awk, so the list is Linux/mawk, Linux/gawk and macOS/BWK awk, and the public bullet moved with it. Still unassertable here for the same reason, and Windows is still unrun
-# hole: Secret and style scanning is best-effort early warning, not a guarantee. | asserted
+# hole: Secret and style scanning is best-effort early warning, not a guarantee. | unassertable | the two cases that named it, scan cherry a (shard 08) and plus prefix (shard 10), report ok on both branches, so neither fails the day a hole closes (spec 0144, E-f); the bullet is a statement about a rendering the repository controls and a first-cut pattern set, and each fixed member is asserted by its own case
 # hole: git allows one `core.hooksPath`, so Setlist cannot coexist with husky, lefthook or pre-commit, and `refresh-instance.sh --apply` now REFUSES rather than displace one silently. | asserted
 # hole: A checkout is an enforcement switch: every git hook is inert on a branch without `.claude/sdd.json`. | asserted
 # hole: The `SETLIST_SKIP_HOOKS=1` escape skips EVERY git hook, `pre-push`'s trunk audit and content scan included. | asserted
-# hole: Merges crafted to evade the trunk audit can succeed, and the list of known routes is maintained rather than complete. | asserted
+# hole: Merges crafted to evade the trunk audit can succeed, and the list of known routes is maintained rather than complete. | unassertable | chain a (shard 08) and chain d (shard 10) report ok on both branches, so neither fails if a route closes (spec 0144, E-f); the ordinary-work controls beside them (chain b, c and e) are real and assert that the removed checks stay removed, not that the routes stay open
 # hole: The trunk is recognised by the NAME recorded in `.claude/sdd.json`, so an instance that merges onto a differently-named branch is ungoverned. | asserted
 # hole: A diagram check compares a claim to a diff and a lockfile to a command's output; it does not judge whether a drawing is true of the code. | asserted
 # hole: A drawn name is verified only when it is path-shaped, and everything else is reported rather than checked. | asserted
 # hole: The render check runs where a renderer runs, and the stamped workflow fails its job rather than passing without one. | unassertable | the REFUSAL half is asserted (the forge check refuses a block that does not parse, under a stub parser on PATH); what is unassertable here is the WORKFLOW half, that the stamped renderer step fails its job rather than letting the check pass, because that is a property of a GitHub Actions step and not of these bytes. The stamped workflow's own step verifies its parser in both directions before the check runs, and the release's forge-check run is the evidence
-# hole: Mermaid's inline edge-text form can refuse a close for a path nobody drew. | asserted
+# hole: Mermaid's inline edge-text form can refuse a close for a path nobody drew. | unassertable | no suite case pins it (spec 0144, E-f): the bullet's refusal would be drawn by an inline edge-text label naming an absent path at a close on an armed instance, and until a case drives that, this ledger says so rather than claiming a pin
 # LEDGER-END
 
 # --- the shards, in order; the program is their concatenation ---------------
 source "$SUITE_DIR/01-session-gates.sh"
 source "$SUITE_DIR/02-plugin-version-and-refresh.sh"
 source "$SUITE_DIR/03-trunk-rules-and-hook-audits.sh"
-source "$SUITE_DIR/04-close-gate-corpus.sh"
-source "$SUITE_DIR/05-commit-gate-corpus.sh"
 source "$SUITE_DIR/06-trunk-audit.sh"
 source "$SUITE_DIR/07-pre-push-and-suite-audits.sh"
 source "$SUITE_DIR/08-git-hooks.sh"
@@ -617,6 +612,7 @@ source "$SUITE_DIR/14-status-record-rp1.sh"
 source "$SUITE_DIR/15-rc2-f10-jq-hardening.sh"
 source "$SUITE_DIR/16-team-edition-0132.sh"
 source "$SUITE_DIR/17-diagram-edition-0136.sh"
+source "$SUITE_DIR/18-bypass-deny-0143.sh"
 
 # EVERY SHARD FILE ON DISK IS SOURCED ABOVE, asserted rather than remembered
 # (spec 0136, 2026-09-10, from the defect that produced it). SUITE_FILES globs

@@ -1,6 +1,6 @@
 ---
 name: checkpoint
-description: Survey, sanity-check, spec-scoped commit, branch lifecycle, and the close gate (Part 6)
+description: Survey, sanity-check, spec-scoped commit, branch lifecycle, and the close checklist (Part 6)
 argument-hint: "[what to commit or close, e.g. close spec 0004]"
 ---
 
@@ -17,7 +17,7 @@ full mandate when in doubt:
    or two lines before acting.
 2. Sanity-check the content you are about to commit: no secrets (tokens,
    connection strings, passwords), no build cruft, no em-dashes in new content.
-   The commit-gate hook enforces the same mechanically; fix findings rather
+   The pre-commit git hook enforces the same mechanically; fix findings rather
    than argue with the hook.
 3. Commit with a clean spec-scoped message, Conventional-Commits style with the
    spec number: `type(NNNN): summary` (chores: `chore: summary`). Small,
@@ -333,8 +333,8 @@ theater that teaches people to click through.
 Do not report a release as cut until the tag exists AND the push has happened.
 "Tagged locally" is not released.
 
-The close-gate hook independently verifies the same conditions on any merge
-attempt, reading the spec file and STATUS.md from the branch being merged, so
+The pre-merge-commit git hook independently verifies the same conditions on any
+merge, reading the spec file and STATUS.md from the branch being merged, so
 the Closing report and the CLOSED row count only once COMMITTED on the branch;
 working-tree edits do not satisfy it. Passing this checklist is what satisfies
 it. A hook denial is a finding, not an obstacle to argue with: fix the named
@@ -342,17 +342,15 @@ item and retry.
 
 ## Gotchas (field-observed)
 
-- Stage-and-commit compounds are denied by design. `git add X && git commit`
-  would scan an empty index, so every staged-content check would pass
-  vacuously; an em-dash file reached a trunk exactly this way before the gate
-  closed the hole. Stage first, then commit as its own command. Treat the
-  denial as a discipline, not a proof: the 2.4.0 review recorded one spelling
-  the parser cannot see (`&` immediately followed by punctuation loses the
-  concurrency marker), so the absence of a warning never certifies a compound
-  as safe. The git pre-commit hook scans the real index either way.
+- Stage first, then commit as its own command. Nothing in the session reads a
+  `git add X && git commit` compound any more (the advisory gate that warned
+  about it left in 2.8.0), and the git pre-commit hook scans the real index
+  either way, so the split is for review: what is staged is seen before it is
+  committed. An em-dash file once reached a trunk through a compound read
+  before its index was written, which is why the scan lives in the git hook.
 - Pasted tool output is new content. A QA report pasted verbatim into a
-  Closing report has carried em-dashes into staged content; the commit gate
-  denies exactly this. Fix the paste before staging; the scan exempts nothing.
+  Closing report has carried em-dashes into staged content; the pre-commit git
+  hook refuses exactly this. Fix the paste before staging; the scan exempts nothing.
 - A trunk sat RED for two days because a session pushed and stopped. The step
   existed as words and went unperformed, which is why it is now a numbered
   duty with a written fallback rather than a reminder. "The push succeeded" is

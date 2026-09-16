@@ -10,9 +10,9 @@
 # where a gate and its backstop agreed on something wrong. One copy, sourced
 # twice.
 #
-# The QA verdict rule below is byte-identical to the assignments in
-# templates/hooks/close-gate.sh and scripts/trunk-audit.sh, and the test suite
-# asserts all three match. Three is already one more than anybody can hold in
+# The QA verdict rule below is byte-identical to the assignment in
+# scripts/trunk-audit.sh, and the test suite asserts the two match (a third
+# copy left in 2.8.0). Two copies are already more than anybody can hold in
 # their head, which is why the assertion exists rather than a comment asking
 # people to remember.
 #
@@ -33,7 +33,7 @@
 # fix is why this paragraph can say "never to a silent pass" about the git
 # hooks at all.
 
-# The verdict rule. LOCKSTEP: close-gate.sh, trunk-audit.sh, and this file.
+# The verdict rule. LOCKSTEP: trunk-audit.sh and this file.
 #
 # SCOPED (2.0.0 leg, F8/F3): the block that decides is the FIRST qa-pass-1 fence
 # at fence depth ZERO inside a Closing report section. Third fence-vs-QA-block
@@ -88,7 +88,7 @@ SLH_QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l)
 # Hoisting it is what let the lifecycle detector below become a sibling of the
 # three readers that already carry it instead of a fourth private copy (A9).
 #
-# LOCKSTEP: byte-identical to close-gate.sh and trunk-audit.sh, asserted.
+# LOCKSTEP: byte-identical to trunk-audit.sh, asserted.
 SLH_TEMPLATE_FENCE_AWK='function __f(k,  i){ if(k) for(i=1;i<=n;i++) print b[i]; n=0 } { __l=$0; sub(/\r$/,"",__l); sub(/^[[:space:]]*/,"",__l); if (incmt) { __cb[++__cn]=$0; if (index(__l, "-->")) { incmt = 0; __cn=0 } next } if (!fence && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; __cn=0; __cb[++__cn]=$0; next } __c=substr(__l,1,1); if ((__c=="`" || __c=="~") && $0 ~ /^ ? ? ?[`~]/) { __m=0; while(substr(__l,__m+1,1)==__c) __m++; __raw=substr(__l,__m+1); __r=__raw; gsub(/[[:space:]]/,"",__r); if (__m>=3 && !(__c=="`" && index(__raw,"`"))) { if (!fence) { fence=1; fch=__c; flen=__m; n=0; t=0; b[++n]=$0; next } else if (__c==fch && __m>=flen && __r=="") { fence=0; b[++n]=$0; __f(!t); next } } } if (fence) { b[++n]=$0; if($0 ~ /^ ? ? ?#+[ \t]+Closing report/) t=1; next } print } END { if(fence) __f(!t); if(incmt) for(__ci=1;__ci<=__cn;__ci++) print __cb[__ci] }'
 
 # A HEADING IS WHAT MARKDOWN SAYS A HEADING IS, IN THE FOURTH READER TOO
@@ -407,7 +407,7 @@ SLH_CHORE_DONE_RE='^[-*+>[:space:]]*(CHORE-[0-9]+)[[:space:]]*:[[:space:]]*DONE(
 
 # HISTORY: ruling LIB-20 (undated), in the framework source's private hook-rulings record: LIVE TEXT ONLY (2026-08 consolidation, blocker F2).
 #
-# LOCKSTEP: byte-identical to trunk-audit.sh and close-gate.sh. NEW function, not an edit
+# LOCKSTEP: byte-identical to trunk-audit.sh. NEW function, not an edit
 # to the frozen QA_PASS1_AWK/TEMPLATE_FENCE_AWK (dogfood/QA-READER-FREEZE.md):
 # those exist to find a specific block and must keep real content they are not
 # stripping FOR; this one exists to delete anything that is not live prose before
@@ -465,7 +465,7 @@ slh_is_instance() { [ -f "$1/.claude/sdd.json" ]; }
 #
 #
 # LOCKSTEP: the seven SLH_RECORD_*_JQ assignments below are byte-identical in
-# this file, scripts/trunk-audit.sh and templates/hooks/close-gate.sh, asserted
+# this file and scripts/trunk-audit.sh, asserted
 # by the suite exactly as the three frozen awk readers are. The frozen readers
 # themselves are RETAINED byte-identical as the permanent absence path, never
 # repaired and never removed (both freeze documents name that role).
@@ -1281,7 +1281,7 @@ EOF
     # The spec file AS THE TIP HOLDS IT, by the same exact-number-then-hyphen
     # rule slh_spec_path_for uses, and refusing a multiple match rather than
     # taking the first: sort order is not a choice of spec (leg F6).
-    hits="$(git -C "$proj" ls-tree -r --name-only "$tip" -- specs/ 2>/dev/null | grep -E "^specs/${num}-[^/]*\.md$" || true)" # fail-open-ok: no match leaves hits empty and the skip below is the close gate's question, not this one
+    hits="$(git -C "$proj" ls-tree -r --name-only "$tip" -- specs/ 2>/dev/null | grep -E "^specs/${num}-[^/]*\.md$" || true)" # fail-open-ok: no match leaves hits empty and the skip below is the close verification's question, not this one
     n="$(printf '%s\n' "$hits" | grep -c . || true)"
     [ "$n" = "1" ] || continue
     sf="$hits"
@@ -1900,7 +1900,7 @@ $__owns_out"
 
     # HISTORY: ruling LIB-73 (plugin 1.1.0), in the framework source's private hook-rulings record: A FENCED EXAMPLE IS NOT A CLOSING REPORT.
     #
-    # LOCKSTEP: byte-identical to close-gate.sh and trunk-audit.sh, asserted.
+    # LOCKSTEP: byte-identical to trunk-audit.sh, asserted.
     # The value is defined once at the top of this file, because the lifecycle
     # detector reads it too (V19-F2).
     text="$(printf '%s\n' "$text" | awk "$SLH_TEMPLATE_FENCE_AWK")"

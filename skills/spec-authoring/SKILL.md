@@ -49,7 +49,8 @@ specs/TEMPLATE.md, which is the same text, stamped at bootstrap.
   reader compares the living diagram against later; checkpoint absorbs it into
   the living diagrams at the close rather than moving it. Draw the mechanism,
   not its name; label every arrow with what it carries; invent no box and no
-  arrow; one main path and at most twelve nodes.
+  arrow; one main path and at most twelve nodes, under the `diagrams` skill's
+  edge and label ceilings, with edge labels in the pipe form.
 - Acceptance criteria are dual-purpose: a human checklist AND the verbatim
   prompt that drives automated QA Pass 1. Write each as a concrete, checkable
   statement naming observable behavior, never implementation; if two readers
@@ -64,7 +65,7 @@ specs/TEMPLATE.md, which is the same text, stamped at bootstrap.
 
 ## The Closing report contract
 
-A spec closes only with the Closing report complete, and the close gate
+A spec closes only with the Closing report complete, and the merge hook
 verifies it mechanically:
 
 - What was built; deviations and whether each was ratified; test counts
@@ -103,7 +104,7 @@ verifies it mechanically:
   the boundary and the sibling number now ("the WSL2 half parks as 0002b if the
   session overruns"). Otherwise the Builder invents a scope boundary under
   pressure, at the moment its judgment is worst. The sibling's STATUS row uses
-  the SUFFIXED number; the close gate greps the number literally, so a `0002b`
+  the SUFFIXED number; the close verification matches the number literally, so a `0002b`
   spec with a `0002` row does not close.
 - A spec approved with no friction, in a session that raised a concern, is a
   concern that got dropped. Approval is not agreement. If you raised something

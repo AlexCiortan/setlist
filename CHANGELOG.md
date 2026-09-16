@@ -9,6 +9,69 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.8.0
+
+**Edition v1.16 (the deletion edition).** The session layer loses its two Bash advisory gates,
+1,735 lines of frozen command-text parser whose verdicts Claude Code does not deliver to the agent
+on `allow`. Every question they asked is answered by the git hooks, which refuse where the gates
+only warned, or by `/setlist:validate`, or was a question about a command's text that leaves with
+the parser that asked it. Nothing in the shipped plugin read their machine-readable verdict: no
+skill, script or template consumes the `setlistAdvisory` field. This is the first release whose
+edition delta removes files from an instance, and it says how an existing instance learns that.
+
+- **The two Bash advisory gates are removed.** The commit gate and the close gate are no longer
+  stamped, and `templates/claude/settings.json.tmpl` wires one Bash hook where 2.7.0 wired two.
+  The close verification keeps three bindings (checkpoint, the forge check, the git hooks) and
+  loses its advisory fourth. A declared git identity is compared by `/setlist:validate` at the
+  health check, and nothing warns about it at commit time any more.
+- **The bypass deny, the one refusal left in the session.** The session layer's one hard deny moves
+  into `.claude/hooks/bypass-deny.sh`, a hook of its own at a new path, so an upgraded instance's
+  entry for the old gate can never silently start to mean something else. It denies a command that
+  would disarm the git hooks for its own run and prints nothing for any other; its lexer moved
+  verbatim and is pinned by digest in the suite.
+- **The retired-hooks report, for an instance that upgrades.** New instances get the deletion;
+  existing instances get a report until they take it. `refresh-instance.sh` names the two stale
+  files and the `.claude/settings.json` entries that still run them, in report mode and under
+  `--apply` alike, and prints the exact edit that removes exactly those; it removes nothing itself,
+  the report changes no exit status, and a fork of a retired hook is reported and left alone.
+- **Legibility ceilings for diagrams.** The `diagrams` skill and edition Part 4 cap a figure at
+  twelve edges, 45 characters per arrow label, 400 characters of arrow-label text and no subgraph
+  as an edge endpoint, beside the twelve-node bound, with a label that needs a clause moved into
+  the prose; the pipe form for arrow labels is stated at the top of the skill, because it is the
+  one mitigation for Mermaid's inline edge-text refusal. Nothing mechanical reads the ceilings.
+- **The container view in this README, redrawn.** Ten nodes and twelve edges under those ceilings:
+  the two deleted gates and their arrows are gone, the one-member session box is dropped, and the
+  prose under the figure names only nodes and arrows the block contains.
+
+**Claims corrected in this release, said plainly.** A harness change costs the ceremony, the
+session hooks and the `qa-verifier` agent, not only the advisories, as the README had said. The
+upstream bullet no longer says it lifts by itself: the harness vendor documents the dropped reason
+on `allow` as intended, a sibling field on the same event is documented to carry context to the
+model, and Setlist has not measured it. The README now says what no enforcement layer reads (an
+agent's account of its own work), cites the vendor's guidance that a task specified up front beats
+one refined across turns, and recommends the built-in Concise output style.
+
+**The Known-limitations list as it leaves this release: 36 design boundaries, 2 open
+limitations, 2 upstream conditions.** Three bullets leave with their subject and none enters.
+The backslash-heredoc misreading and the `@{u}` refusal were properties of the close gate's
+command parser, and the pathspec hole (`git commit <file>` committing a file the staged scan
+never read) was the commit gate's: the git `pre-commit` hook reads the index git builds for
+that commit and refuses what it finds, measured for this release. Both gates are removed, so
+none of the three is a boundary a reader can meet any more, and both layers lose the same
+three titles.
+
+**Fixed after this release's own adversarial review.** The bypass deny no longer refuses
+ordinary work that only mentions a disarming spelling: a heredoc body written through `cat`,
+`tee` or `git` in its SPACED spelling (`cat << EOF`), a read-only search such as `git log -S
+--no-verify` or `git grep -- --no-verify`, and a `git commit -am "--no-verify"` whose message is
+the spelling. The no-space spelling (`cat<<EOF`) is still refused when its body mentions a
+disarming spelling, and writing `<< EOF` with a space is the whole of the workaround. Its lexer is
+pinned by digest, and this was a decision to change it, not a drift. The degraded-mode messages
+of the re-grounding and Stop hooks, and the `validate` and `new` skills, no longer name the two
+gates this release removed. The same review measured more spellings that defeat the deny (a
+wrapper before the escape variable, a redirection or a line continuation before the flag); they
+stay documented under Known limitations rather than chased.
+
 ## 2.7.0
 
 **Edition v1.15 (the diagram edition).** A diagram stops being a picture the close asks

@@ -442,18 +442,19 @@ CLEAN=0
 CHORES=0
 
 # HOISTED so the linear close check above the merged-parent loop can use it.
-# LOCKSTEP: close-gate.sh and setlist-hook-lib.sh carry this same program byte
-# for byte and the suite asserts all three are identical, and since the 2.0.0
+# LOCKSTEP: setlist-hook-lib.sh carries this same program byte for byte and
+# the suite asserts the two are identical (close-gate.sh, the third copy, left
+# in 2.8.0, spec 0144), and since the 2.0.0
 # leg (F8) also that they AGREE BY OUTCOME over a corpus, because this audit
 # was blind in lockstep with the hooks it backstops. The reader is scoped: the
 # deciding block is the FIRST qa-pass-1 fence at fence depth zero inside a
 # Closing report section (F7-2026, ruled 2026-08-29; it was the LAST until
 # then, which let a later illustrative block replace a real verdict);
-# close-gate.sh carries the full reasoning.
+# setlist-hook-lib.sh carries the full reasoning.
 QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; qa_seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } } else { if (__r == "qa-pass-1" && inclose && !qa_seen) { inb = 1; qch = __c; qlen = __m; n = 0; bad = 0; next } fence = 1; fch = __c; flen = __m; next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "") next; if (l ~ /^[A-Za-z0-9._-]+[[:space:]]*:[[:space:]]*(PASS|PARTIAL|FAIL)$/) n++; else bad = 1; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) inclose = 0 } } END { if (incmt) print "unclosed-comment"; else if (inb) print "unclosed"; else if (!qa_seen) print "none"; else if (bad) print "malformed"; else if (n == 0) print "empty"; else print "ok" }'
 
 # HOISTED, same reason as QA_PASS1_AWK above: the linear close check needs it
-# too. LOCKSTEP: byte-identical to close-gate.sh and setlist-hook-lib.sh. Strips
+# too. LOCKSTEP: byte-identical to setlist-hook-lib.sh. Strips
 # a fenced block that itself carries a "Closing report" heading (a quoted
 # template example) and deletes HTML comment spans; kept narrow on purpose so a
 # real pasted qa-pass-1 fence survives for QA_PASS1_AWK to find.
@@ -477,7 +478,7 @@ SLH_LIVE_TEXT_AWK='{ __l=$0; sub(/\r$/,"",__l); __para=PARA; PARA=0; if (incmt) 
 # is judged page-wise there and record-wise from the adoption commit on.
 #
 # LOCKSTEP: the seven SLH_RECORD_*_JQ assignments are byte-identical to
-# templates/git-hooks/setlist-hook-lib.sh and templates/hooks/close-gate.sh,
+# templates/git-hooks/setlist-hook-lib.sh,
 # asserted by the suite exactly as the three frozen awk readers are. The full
 # grammar reasoning lives with the library's copy.
 SLH_RECORD_CHECK_JQ='if (type != "object") or (.setlist_status != 1) or (((keys - ["setlist_status","specs","chores"]) | length) > 0) or (((.specs // {}) | type) != "object") or (((.chores // {}) | type) != "object") then "malformed" elif (((.specs // {}) | to_entries | all((.key | test("^[0-9]+[a-z]*$")) and (.value | if type != "object" then false else (((keys - ["status","qa_pass_1","diagram"]) | length) == 0) and (.status as $s | (["draft","queued","active","revised","built","parked","closed"] | index($s)) != null) and ((.qa_pass_1 == null) or (.qa_pass_1 == "ok")) and ((.diagram == null) or (.diagram == "updated") or (.diagram == "no-impact")) end))) | not) then "malformed" elif (((.chores // {}) | to_entries | all((.key | test("^CHORE-[0-9]+$")) and (.value | if type != "object" then false else (((keys - ["status","files"]) | length) == 0) and ((.status == "open") or (.status == "done")) and ((.files == null) or (((.files | type) == "array") and (.files | all(type == "string")))) end))) | not) then "malformed" else "ok" end'
@@ -1604,7 +1605,7 @@ $LIN_CF"
       # gate has stripped fenced spans since leg 5's F7; this script never did,
       # so a spec quoting the shipped template satisfied every check below and
       # the audit reported it clean (v1.7 gate, adversarial review F9). Stripped once,
-      # before all of them, exactly as close-gate.sh and setlist-hook-lib.sh do.
+      # before all of them, exactly as setlist-hook-lib.sh does.
       #
       # NARROWED for the 1.1.0 adversarial review F6, and this copy is the one that
       # made the defect RETROACTIVE. The stripper is new here in 1.1.0, so an
@@ -1614,7 +1615,7 @@ $LIN_CF"
       # block is a TEMPLATE QUOTE exactly when its own body carries a
       # Closing-report heading; a pasted verifier report never does.
       #
-      # LOCKSTEP: byte-identical to close-gate.sh and setlist-hook-lib.sh, and
+      # LOCKSTEP: byte-identical to setlist-hook-lib.sh, and
       # (2026-08 consolidation) hoisted to file scope with QA_PASS1_AWK above so
       # the linear close check can share the one definition instead of drifting
       # a second copy of it.
@@ -1626,10 +1627,10 @@ $LIN_CF"
       # THE VERDICT IS A PASTED BLOCK, NOT A WORD IN PROSE (B6, leg 5 F15).
       # This was `grep PASS|PARTIAL|FAIL` over the WHOLE spec, so "the browser
       # tests PASS on my machine but mobile was never run" satisfied it. The
-      # close gate rejects exactly that text and has since 1.0.2; its backstop
-      # accepted it, so the audit reported clean on input the gate refuses,
+      # close gate rejected exactly that text from 1.0.2; its backstop
+      # accepted it, so the audit reported clean on input the gate refused,
       # which is the worst possible disagreement between two layers that are
-      # supposed to cover each other. Both halves of the close gate's rule are
+      # supposed to cover each other. Both halves of that rule, the library's now, are
       # mirrored here rather than reinvented: extract the QA Pass 1 block
       # DISPLACED, NOT LEFT BESIDE. The field-marker extraction that used to
       # live here fed a regex over the prose between the "QA Pass 1 report" and
@@ -1637,8 +1638,8 @@ $LIN_CF"
       # of the spec text, so that extraction has no reader and is deleted rather
       # than kept warm. shellcheck is what noticed it was dead, which is the
       # argument for the lint gate being a gate.
-      # LOCKSTEP WITH templates/hooks/close-gate.sh (backlog item 35). That file
-      # carries this same assignment, byte for byte, and the suite asserts the
+      # LOCKSTEP WITH templates/git-hooks/setlist-hook-lib.sh (backlog item 35). That file
+      # carries this same program, byte for byte, and the suite asserts the
       # two are identical, so a widening applied to one and not the other goes
       # red here rather than in the field.
       #
@@ -1649,8 +1650,9 @@ $LIN_CF"
       # asks whether the verdict is a FIELD (a table cell, a bracketed verdict,
       # a labelled value, a verdict-as-label, or the first or last thing on its
       # line) rather than where on the line it happens to sit. Prose is still
-      # refused, which is the half B6 exists for; see close-gate.sh for the full
-      # reasoning and for the tally boundary this deliberately does not cross.
+      # refused, which is the half B6 exists for; the full reasoning, and the
+      # tally boundary this deliberately does not cross, are in the framework
+      # source's private hook-rulings record, under the retired close-gate region.
       [[ "$(printf '%s\n' "$SPEC_TEXT" | awk "$QA_PASS1_AWK")" == "ok" ]] \
         || MISSING="$MISSING no-qa-verdict"
 

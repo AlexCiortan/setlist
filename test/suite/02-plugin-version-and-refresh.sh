@@ -132,7 +132,7 @@ done
 
 # --- refresh fixtures -----------------------------------------------------------
 
-# A minimal instance: the four stamped hooks plus sdd.json. close-gate.sh
+# A minimal instance: the stamped session hooks plus sdd.json. scope-hook.sh
 # carries a marker line, so "did the refresh copy anything?" is decidable by
 # looking rather than by trusting the exit code.
 MARKER="# instance marker, must survive every refusal"
@@ -141,10 +141,10 @@ instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken> [wi
   local d="$1" rec="$2" wiring="${3:-current}" h
   rm -rf "$d"
   mkdir -p "$d/.claude/hooks"
-  for h in scope-hook commit-gate close-gate regrounding-hook stop-hook; do
+  for h in scope-hook regrounding-hook stop-hook bypass-deny; do
     cp "$HOOKS/$h.sh" "$d/.claude/hooks/$h.sh"
   done
-  printf '%s\n' "$MARKER" >> "$d/.claude/hooks/close-gate.sh"
+  printf '%s\n' "$MARKER" >> "$d/.claude/hooks/scope-hook.sh"
   case "$rec" in
     broken) printf '{ "trunk": "main", \n' > "$d/.claude/sdd.json" ;;
     none)   printf '{ "trunk": "main", "gate_command": "", "scaffolded": false }\n' > "$d/.claude/sdd.json" ;;
@@ -154,13 +154,11 @@ instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken> [wi
   # The settings wiring is the OTHER half of the enforcement layer, and the
   # refresh checks it without rewriting it (1.0.3). Fixtures default to the
   # current wiring so the direction cases below stay about direction.
-  local matcher='Write|Edit|MultiEdit|NotebookEdit' t1='"timeout": 120,' t2='"timeout": 300,' t3='"timeout": 300,' t4='"timeout": 60,' t5='"timeout": 60,'
-  local gates_block=1
+  local matcher='Write|Edit|MultiEdit|NotebookEdit' t1='"timeout": 120,' t4='"timeout": 60,' t5='"timeout": 60,' t6='"timeout": 300,'
   case "$wiring" in
     stale-matcher) matcher='Write|Edit' ;;
-    no-timeouts)   t1='' ; t2='' ; t3='' ; t4='' ; t5='' ;;
+    no-timeouts)   t1='' ; t4='' ; t5='' ; t6='' ;;
     missing)       return 0 ;;
-    no-gates)      gates_block=0 ;;
   esac
   # The command paths must be the REAL ones. The wiring check identifies this
   # plugin's own hook entries by their command pointing into .claude/hooks/,
@@ -176,13 +174,9 @@ instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken> [wi
   # because nothing yet checked that a stamped hook was wired AT ALL, which is
   # the same blind spot as the defect (B5) that made this check necessary. The
   # fixture and the checker were incomplete in exactly the same place.
-  local gates=''
-  if [[ "$gates_block" -eq 1 ]]; then
-    gates=",
+  local gates=",
       { \"matcher\": \"Bash\",
-        \"hooks\": [ { \"type\": \"command\", $t2 \"command\": \"\\\"\$CLAUDE_PROJECT_DIR\\\"/.claude/hooks/commit-gate.sh\" },
-                   { \"type\": \"command\", $t3 \"command\": \"\\\"\$CLAUDE_PROJECT_DIR\\\"/.claude/hooks/close-gate.sh\" } ] }"
-  fi
+        \"hooks\": [ { \"type\": \"command\", $t6 \"command\": \"\\\"\$CLAUDE_PROJECT_DIR\\\"/.claude/hooks/bypass-deny.sh\" } ] }"
   cat > "$d/.claude/settings.json" <<SETTINGS
 {
   "hooks": {
@@ -206,7 +200,7 @@ SETTINGS
 }
 
 marker_intact() { # marker_intact <dir>
-  grep -q "^$MARKER\$" "$1/.claude/hooks/close-gate.sh"
+  grep -q "^$MARKER\$" "$1/.claude/hooks/scope-hook.sh"
 }
 
 # --- refusal: a backwards move --------------------------------------------------
@@ -220,7 +214,7 @@ run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "refresh down: a backwards refresh is refused and names both versions" 1 \
   "BACKWARDS" "9.9.9" "$PLUGIN_VERSION"
 assert_true "refresh down2: the refused refresh copied nothing" \
-  "the instance's close-gate.sh lost its marker, so the refusal overwrote the file it refused to touch" \
+  "the instance's scope-hook.sh lost its marker, so the refusal overwrote the file it refused to touch" \
   marker_intact "$INST"
 
 # F4 OF THE SECOND 2.7.0 LEG, fix round 2: ABSENT AND UNREADABLE ARE DIFFERENT.
@@ -241,7 +235,7 @@ run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "refresh notobj: a .plugin that is not an object REFUSES rather than reading as unrecorded" 1 \
   "not an object"
 assert_true "refresh notobj2: the refused refresh copied nothing" \
-  "the instance's close-gate.sh lost its marker, so the refusal overwrote the file it refused to touch" \
+  "the instance's scope-hook.sh lost its marker, so the refusal overwrote the file it refused to touch" \
   marker_intact "$INST"
 
 # --- the refresh DELIVERS the git-hook boundary (v1.7 dogfood BLOCKER) ----------
@@ -365,7 +359,7 @@ instance_fixture "$INST" "banana"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "refresh unreadable: an unreadable recorded version refuses" 1 "cannot read" "banana"
 assert_true "refresh unreadable2: the refused refresh copied nothing" \
-  "the instance's close-gate.sh lost its marker despite the refusal" \
+  "the instance's scope-hook.sh lost its marker despite the refusal" \
   marker_intact "$INST"
 
 INST="$WORK/inst-broken"
@@ -373,7 +367,7 @@ instance_fixture "$INST" broken
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "refresh broken: sdd.json that does not parse refuses" 1 "does not parse"
 assert_true "refresh broken2: the refused refresh copied nothing" \
-  "the instance's close-gate.sh lost its marker despite the refusal" \
+  "the instance's scope-hook.sh lost its marker despite the refusal" \
   marker_intact "$INST"
 
 INST="$WORK/inst-nosdd"
@@ -389,7 +383,7 @@ instance_fixture "$INST" 1.0.0
 run_script_nojq bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "refresh nojq: without jq the refresh refuses rather than copying blind" 1 "jq"
 assert_true "refresh nojq2: the refused refresh copied nothing" \
-  "the instance's close-gate.sh lost its marker despite the refusal" \
+  "the instance's scope-hook.sh lost its marker despite the refusal" \
   marker_intact "$INST"
 
 # --- forward moves are performed and recorded ------------------------------------
@@ -401,19 +395,19 @@ assert_true "refresh legacy0: the fixture really records no plugin version" \
   test -z "$(jq -r '.plugin.version // empty' "$INST/.claude/sdd.json")"
 run_script bash "$SCRIPTS/refresh-instance.sh" "$INST"
 expect_script "refresh legacy: a report-only run names the differing file and changes nothing" 0 \
-  "close-gate.sh" "Re-run with --apply"
+  "scope-hook.sh" "Re-run with --apply"
 assert_true "refresh legacy2: the report-only run copied nothing" \
-  "report mode overwrote the instance's close-gate.sh" \
+  "report mode overwrote the instance's scope-hook.sh" \
   marker_intact "$INST"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "refresh legacy3: an instance recording no version is refreshed forward" 0 "forward"
 if marker_intact "$INST"; then
   bad "refresh legacy4: --apply restores the hook bytes" \
-      "close-gate.sh still carries the instance marker, so nothing was copied"
-elif cmp -s "$HOOKS/close-gate.sh" "$INST/.claude/hooks/close-gate.sh"; then
+      "scope-hook.sh still carries the instance marker, so nothing was copied"
+elif cmp -s "$HOOKS/scope-hook.sh" "$INST/.claude/hooks/scope-hook.sh"; then
   ok "refresh legacy4: --apply restores the hook bytes byte-verbatim"
 else
-  bad "refresh legacy4: --apply restores the hook bytes" "close-gate.sh differs from the template"
+  bad "refresh legacy4: --apply restores the hook bytes" "scope-hook.sh differs from the template"
 fi
 if [[ "$(jq -r '.plugin.version // empty' "$INST/.claude/sdd.json")" == "$PLUGIN_VERSION" ]]; then
   ok "refresh legacy5: --apply records the plugin version in the instance"
@@ -485,7 +479,7 @@ run_script bash "$STALE/scripts/refresh-instance.sh" --apply "$INST"
 expect_script "stale a: a session bound to a superseded plugin tree refuses to refresh" 1 \
   "SKEW" "Restart the session"
 assert_true "stale a2: the refused refresh copied nothing" \
-  "the instance's close-gate.sh lost its marker despite the refusal" \
+  "the instance's scope-hook.sh lost its marker despite the refusal" \
   marker_intact "$INST"
 
 # The same tree, with no newer neighbour, refreshes normally: the refusal above
@@ -572,10 +566,10 @@ expect_script "wiring a: a report names the stale matcher" 0 "NotebookEdit"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "wiring b: applying over a stale matcher exits INCOMPLETE, not 0" 3 "INCOMPLETE" "NotebookEdit"
 # The hooks must still have landed: incomplete is not the same as refused.
-if cmp -s "$HOOKS/close-gate.sh" "$INST/.claude/hooks/close-gate.sh"; then
+if cmp -s "$HOOKS/scope-hook.sh" "$INST/.claude/hooks/scope-hook.sh"; then
   ok "wiring c: an incomplete refresh still refreshed the hook bytes"
 else
-  bad "wiring c: an incomplete refresh still refreshed the hook bytes" "close-gate.sh was not copied"
+  bad "wiring c: an incomplete refresh still refreshed the hook bytes" "scope-hook.sh was not copied"
 fi
 if [[ "$(jq -r '.plugin.version // empty' "$INST/.claude/sdd.json")" == "$PLUGIN_VERSION" ]]; then
   ok "wiring d: an incomplete refresh still recorded the plugin version"
@@ -598,7 +592,7 @@ expect_script "wiring f: a missing settings.json exits INCOMPLETE" 3 "missing en
 INST="$WORK/inst-wiring-ok"
 instance_fixture "$INST" 1.0.0 current
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
-expect_script "wiring g: current wiring refreshes completely and exits 0" 0 "refreshed the five stamped hooks"
+expect_script "wiring g: current wiring refreshes completely and exits 0" 0 "refreshed the four stamped hooks"
 
 # =============================================================================
 # >>> SHARD-BEGIN refresh-wiring cost=16
@@ -616,7 +610,7 @@ instance_fixture "$INST" 1.0.0 current
 jq '.hooks.PostToolUse=[{matcher:"Write",hooks:[{type:"command",command:"npx prettier --write"}]}]' \
   "$INST/.claude/settings.json" > "$INST/t" && mv "$INST/t" "$INST/.claude/settings.json"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
-expect_script "wiring h: a foreign hook with no timeout does NOT make the refresh incomplete" 0 "refreshed the five stamped hooks"
+expect_script "wiring h: a foreign hook with no timeout does NOT make the refresh incomplete" 0 "refreshed the four stamped hooks"
 
 # THE SAME CASE IN ITS REAL SHAPE (1.0.7, F23). The fixture above puts the
 # foreign hook's command at `npx prettier --write`, which is not a path into
@@ -636,7 +630,7 @@ chmod +x "$INST/.claude/hooks/prettier.sh"
 jq '.hooks.PostToolUse=[{matcher:"Write",hooks:[{type:"command",command:"\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/prettier.sh"}]}]' \
   "$INST/.claude/settings.json" > "$INST/t" && mv "$INST/t" "$INST/.claude/settings.json"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
-expect_script "wiring h2: a foreign hook INSIDE .claude/hooks/ is still not Setlist's" 0 "refreshed the five stamped hooks"
+expect_script "wiring h2: a foreign hook INSIDE .claude/hooks/ is still not Setlist's" 0 "refreshed the four stamped hooks"
 if printf '%s' "$SCRIPT_OUT" | grep -q prettier; then
   bad "wiring h2: the report must not name a hook the project owns" \
       "prettier.sh was named as a Setlist entry: $SCRIPT_OUT"
@@ -644,41 +638,10 @@ else
   ok "wiring h2: the report does not name the project's own hook"
 fi
 
-# THE GATES MUST BE WIRED AT ALL (1.0.7, B5/F5). Every wiring case above finds
-# fault with an entry that is PRESENT: a stale matcher, a missing timeout, a
-# malformed file. Delete the two gate entries outright and there was nothing
-# left to object to, so the refresh reported a complete apply, exit 0, and told
-# the operator the refreshed gates would bind from the next session, of a pair
-# of gates that would never bind again.
-#
-# This is the seam that carried plugin 1.0.3's worst defect. An upgrade path
-# that certifies a disarmed instance is worse than no check at all: it turns
-# "verify this yourself" into "this was verified".
-INST="$WORK/inst-gates-unwired"
-instance_fixture "$INST" 1.0.0 no-gates
-run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
-expect_script "wiring m: both gates unwired exits INCOMPLETE and names them" 3 "commit-gate.sh" "close-gate.sh"
-
-# The hook FILES are current in that instance, which is the whole trap: byte
-# freshness and enforcement are different claims, and the first was being
-# reported as though it settled the second.
-if cmp -s "$HOOKS/commit-gate.sh" "$INST/.claude/hooks/commit-gate.sh"; then
-  ok "wiring m2: the unwired instance's hook bytes ARE current, so freshness is not enforcement"
-else
-  bad "wiring m2: the unwired instance's hook bytes should still have been refreshed" \
-      "an INCOMPLETE refresh still copies the files; only the wiring is outstanding"
-fi
-
-# And the inverse, so "names them" cannot be satisfied by naming them always.
-INST="$WORK/inst-gates-wired"
-instance_fixture "$INST" 1.0.0 current
-run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
-if printf '%s' "$SCRIPT_OUT" | grep -q 'NOTHING IN'; then
-  bad "wiring m3: a fully wired instance must not be reported as unwired" \
-      "the unwired message fired on a complete instance: $SCRIPT_OUT"
-else
-  ok "wiring m3: a fully wired instance is not reported as unwired"
-fi
+# THE HOOKS MUST BE WIRED AT ALL (1.0.7, B5/F5): the two-gate case that stood here
+# left with the gates in 2.8.0 (spec 0144). The same property for the hook that
+# replaced their one deny is region bypass-deny-0143's last wiring case: an entry
+# deleted outright is named NOT WIRED under --apply.
 
 # =============================================================================
 # 1.0.8 (leg 4, F2): WIRED MEANS THIS INSTANCE'S FILE, NOT A FILE WITH THAT NAME.
@@ -714,7 +677,7 @@ rewire() { # rewire <settings.json> <hook-name> <new-command-string>
 # $INSTANCE/.claude/hooks/<name>.sh, so every one must report UNWIRED. Run
 # against all four stamped hooks, because a predicate that is right for the
 # close gate and wrong for the scope hook is the defect one file over.
-for h in scope-hook commit-gate close-gate regrounding-hook stop-hook; do
+for h in scope-hook regrounding-hook stop-hook bypass-deny; do
   for spell in \
     'SUFFIX-disabled|"$CLAUDE_PROJECT_DIR"/.claude/hooks/HOOK.sh.disabled' \
     'SUFFIX-orig|"$CLAUDE_PROJECT_DIR"/.claude/hooks/HOOK.sh.orig' \
@@ -747,11 +710,11 @@ do
   label="${spell%%|*}"; tmpl="${spell#*|}"
   INST="$WORK/inst-armed-$label"
   instance_fixture "$INST" 1.0.0 current
-  for h in scope-hook commit-gate close-gate regrounding-hook stop-hook; do
+  for h in scope-hook regrounding-hook stop-hook bypass-deny; do
     rewire "$INST/.claude/settings.json" "$h" "${tmpl//HOOK/$h}"
   done
   run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
-  expect_script "armed $label: a spelling this script stamps stays WIRED" 0 "refreshed the five stamped hooks"
+  expect_script "armed $label: a spelling this script stamps stays WIRED" 0 "refreshed the four stamped hooks"
 done
 
 # THE ENUMERATED-SET RESTRICTION, pinned as the documented Known-limitations
@@ -762,30 +725,30 @@ done
 # widen the bullet in the same commit.
 INST="$WORK/inst-bash-prefix"
 instance_fixture "$INST" 1.0.0 current
-rewire "$INST/.claude/settings.json" "close-gate" 'bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/close-gate.sh'
+rewire "$INST/.claude/settings.json" "bypass-deny" 'bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/bypass-deny.sh'
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
-expect_script "wiring restriction (2.4.0 leg F11, documented): an interpreter-prefixed spelling that runs the stamped file is still reported NOT WIRED" 3 "close-gate.sh"
+expect_script "wiring restriction (2.4.0 leg F11, documented): an interpreter-prefixed spelling that runs the stamped file is still reported NOT WIRED" 3 "bypass-deny.sh"
 
 # The absolute path of the instance itself, which cannot be templated above
 # because it is only known at run time.
 INST="$WORK/inst-armed-absolute"
 instance_fixture "$INST" 1.0.0 current
 INST_ABS="$(cd "$INST" && pwd)"
-for h in scope-hook commit-gate close-gate regrounding-hook stop-hook; do
+for h in scope-hook regrounding-hook stop-hook bypass-deny; do
   rewire "$INST/.claude/settings.json" "$h" "$INST_ABS/.claude/hooks/$h.sh"
 done
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
-expect_script "armed absolute: this instance's own absolute path stays WIRED" 0 "refreshed the five stamped hooks"
+expect_script "armed absolute: this instance's own absolute path stays WIRED" 0 "refreshed the four stamped hooks"
 
 # And an entry that is not a command hook does not run a command however its
 # string reads, so it cannot arm a gate.
 INST="$WORK/inst-disarm-type"
 instance_fixture "$INST" 1.0.0 current
-jq 'walk(if type == "object" and has("command") and ((.command // "") | test("close-gate"))
+jq 'walk(if type == "object" and has("command") and ((.command // "") | test("bypass-deny"))
          then .type = "output" else . end)' \
   "$INST/.claude/settings.json" > "$INST/t" && mv "$INST/t" "$INST/.claude/settings.json"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
-expect_script "disarm type: an entry whose type is not 'command' does not arm the close gate" 3 "close-gate.sh"
+expect_script "disarm type: an entry whose type is not 'command' does not arm the bypass deny" 3 "bypass-deny.sh"
 
 # grep -c counts LINES. Against a minified settings.json (Claude Code rewrites
 # this file when a user toggles config) four entries carrying one timeout read
@@ -800,7 +763,7 @@ assert_true "wiring i0: the fixture really is minified and really is short a tim
   test "$(wc -l < "$INST/.claude/settings.json")" -le 1
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "wiring i: a minified settings.json short a timeout is still caught" 3 "timeout"
-expect_script "wiring i2: and the report NAMES the offending entries" 3 "commit-gate.sh"
+expect_script "wiring i2: and the report NAMES the offending entries" 3 "bypass-deny.sh"
 
 # A foreign hook that merely MENTIONS NotebookEdit must not mask a stale scope
 # matcher: 1.0.3 grepped the whole file for the token.

@@ -120,13 +120,13 @@ fi
 # ---------------------------------------------------------------------------
 # Cheap check 3: a staged spec lifecycle transition stages specs/STATUS.md too.
 # The vocabulary is the canonical enumeration from the edition (Part 5); the
-# suite asserts this list matches it and matches commit-gate.sh's.
+# suite asserts this list matches it.
 #
 # THE READING ITSELF LIVES IN THE LIBRARY (V19-F2). This hook used to grep the
 # raw staged diff here, with no fence handling and no indent allowance, and it
 # was the one reader of four that did: a quoted template refused an honest
 # commit and an indented heading was invisible. The enumeration stays here,
-# because the suite pins it against the edition and commit-gate.sh from this
+# because the suite pins it against the edition from this
 # file; the QUESTION moved to slh_lifecycle_added, beside the readers it now
 # agrees with.
 # ---------------------------------------------------------------------------
@@ -225,7 +225,7 @@ if [ "$ATTEST_CODE" = "1" ]; then
   fi
   for __num in $__ACTIVE_SPECS; do
     __sf="$(slh_spec_path_for "$PROJ" "$__num")"
-    # A row that names no readable spec file is the close gate's
+    # A row that names no readable spec file is the close verification's
     # SLH-CLOSES-NO-SPEC-FILE question, not this one; it is left to the layer
     # that owns it rather than answered twice with two different codes.
     [ -n "$__sf" ] || continue

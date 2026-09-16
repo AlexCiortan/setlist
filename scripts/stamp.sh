@@ -14,9 +14,9 @@
 #             mode=new|retrofit (default new)
 #
 # Substitution runs ONLY on templates named *.tmpl (suffix stripped at the
-# destination). Everything else, notably templates/hooks/, is copied
-# byte-verbatim: the commit gate builds its em-dash pattern from an escape
-# sequence that must survive untouched.
+# destination). Everything else, notably templates/hooks/ and templates/git-hooks/,
+# is copied byte-verbatim: the git-hook library builds its em-dash pattern from an
+# escape sequence that must survive untouched.
 #
 # Collisions: in mode=new any existing destination file aborts the whole stamp
 # before anything is written. In mode=retrofit existing files are skipped and
@@ -113,10 +113,9 @@ add claude/sdd.json.tmpl       .claude/sdd.json
 add claude/status.json         .claude/status.json
 add claude/agents/qa-verifier.md .claude/agents/qa-verifier.md
 add hooks/scope-hook.sh        .claude/hooks/scope-hook.sh
-add hooks/commit-gate.sh       .claude/hooks/commit-gate.sh
-add hooks/close-gate.sh        .claude/hooks/close-gate.sh
 add hooks/regrounding-hook.sh  .claude/hooks/regrounding-hook.sh
 add hooks/stop-hook.sh         .claude/hooks/stop-hook.sh
+add hooks/bypass-deny.sh       .claude/hooks/bypass-deny.sh
 # The GIT hooks, into a TRACKED directory (.githooks/), not .git/hooks. The
 # whole point of core.hooksPath is that .git/hooks is not cloned, so a hook that
 # lives there protects exactly one working copy and a fresh clone is bare. A
