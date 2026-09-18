@@ -52,9 +52,33 @@ fi
 # silent ceiling.
 # =============================================================================
 
-TYPE_COUNT="$(grep -c '"type": "command"' "$ROOT/templates/claude/settings.json.tmpl")"
-TIMEOUT_COUNT="$(grep -c '"timeout":' "$ROOT/templates/claude/settings.json.tmpl")"
-if [[ "$TYPE_COUNT" -eq 0 ]]; then
+# ENTRIES, NOT LINES (CHK-SUITE's timeout arm, 0148's E-4, taken in spec 0150).
+# The count was two greps, so a newline-stripped template was ONE line and
+# passed having evaluated one entry. It now reads the template as JSON: every
+# command hook under every event, and those whose timeout is a number. The
+# {{IF:...}} markers are resolved by deleting the marker, not the line, because
+# the suite's `grep -v '^{{IF:'` would erase a one-line template whole.
+timeout_entries() { # timeout_entries <template> -> "<commands> <with a numeric timeout>", or nothing when unparseable
+  sed -e 's/{{IF:[A-Z_]*}}//' -e 's/{{[A-Z_]*}}/x/g' "$1" \
+    | jq -r '[.hooks[][] | .hooks[] | select(.type == "command")] | "\(length) \([.[] | select(.timeout | type == "number")] | length)"' 2>/dev/null
+}
+TO_MUT="$WORK/settings-oneline.tmpl"
+awk '{ l[NR] = $0 } END { for (i = 1; i <= NR; i++) if (!d && l[i] ~ /"timeout":/) { sub(/,[[:space:]]*$/, "", l[i-1]); skip[i] = 1; d = 1 }
+                         for (i = 1; i <= NR; i++) if (!skip[i]) print l[i] }' "$ROOT/templates/claude/settings.json.tmpl" > "$TO_MUT.a"
+tr -d '\n' < "$TO_MUT.a" > "$TO_MUT"
+TO_MUT_READ="$(timeout_entries "$TO_MUT")"
+if [[ -n "$TO_MUT_READ" && "${TO_MUT_READ% *}" -ne "${TO_MUT_READ#* }" ]]; then
+  ok "timeout b: a newline-stripped template with one entry's timeout removed is caught ($TO_MUT_READ)"
+else
+  bad "timeout b: a newline-stripped template with one entry's timeout removed is caught" \
+      "read '${TO_MUT_READ:-<unparseable>}'; the count cannot see the entry it lost"
+fi
+TO_READ="$(timeout_entries "$ROOT/templates/claude/settings.json.tmpl")"
+TYPE_COUNT="${TO_READ% *}"; TIMEOUT_COUNT="${TO_READ#* }"
+if [[ -z "$TO_READ" ]]; then
+  bad "timeout a: every command hook in the template carries a timeout" \
+      "the template did not parse as JSON with its markers resolved; the check exercised nothing"
+elif [[ "$TYPE_COUNT" -eq 0 ]]; then
   bad "timeout a: every command hook in the template carries a timeout" \
       "found zero command hooks in the template; the check exercised nothing"
 elif [[ "$TYPE_COUNT" -eq "$TIMEOUT_COUNT" ]]; then
@@ -72,9 +96,21 @@ fi
 # the exit.
 # =============================================================================
 
+# EVERY SESSION HOOK, BY GLOB, WITH A COUNT (F16 of the 2.8.0 leg, spec 0148).
+# This loop named three hooks, `stop-hook.sh` was the stamped fourth, and a
+# hardcoded list with no count reports nothing about the file it forgot. So it
+# reads templates/hooks/*.sh and asserts the count equals the hooks the settings
+# template wires, the shape the git-hooks loop below already uses.
+#
+# NO KNOWN SITES. Spec 0148 pinned stop-hook.sh's two out-of-window annotations
+# with a staleness assertion owed to that hook's next edit; spec 0150 (DE11's fix,
+# 0148's E-2) moved both inside the window and retired the pins with it.
 FOK_TOTAL=0
-for hook in scope-hook regrounding-hook bypass-deny; do
-  HF="$HOOKS/$hook.sh"
+FOK_HOOK_N=0
+for HF in "$HOOKS"/*.sh; do
+  [[ -f "$HF" ]] || continue
+  hook="$(basename "$HF" .sh)"
+  FOK_HOOK_N=$((FOK_HOOK_N + 1))
   UNANNOTATED="$(awk '
     { lines[NR] = $0 }
     # A BARE `exit` exits with the status of the last command, which is 0 far
@@ -86,7 +122,15 @@ for hook in scope-hook regrounding-hook bypass-deny; do
     # `exit 1`, `exit 2` and `exit "$rc"` are deliberately NOT matched: the first
     # two are refusals and the third is a status this audit cannot evaluate, so
     # flagging it would be noise that trains people to ignore the check.
-    ($0 ~ /(^|[;[:space:]])exit[[:space:]]*(0[[:space:]]*)?(;|$)/) && $0 !~ /^[[:space:]]*#/ {
+    #
+    # The match reads the CODE, not a trailing comment: `refuse() { # ... exit 0`
+    # in stop-hook.sh matched on its comment text (found by F16 of the leg), a false
+    # positive. A ` # ` after code starts a comment; `${#x}` has no space before.
+    {
+      code = $0
+      sub(/[[:space:]]#[[:space:]].*$/, "", code)
+    }
+    (code ~ /(^|[;[:space:]])exit[[:space:]]*(0[[:space:]]*)?(;|$)/) && $0 !~ /^[[:space:]]*#/ {
       ok = 0
       for (i = NR - 3; i < NR; i++) if (lines[i] ~ /fail-open-ok/) ok = 1
       if (!ok) print NR": "$0
@@ -106,8 +150,17 @@ done
 # today). A hook that ends by falling through exits with whatever its last
 # command returned, which is a silent pass nobody wrote down. Require the last
 # effective line of every hook to be an explicit exit.
-for hook in scope-hook regrounding-hook bypass-deny; do
-  LAST="$(grep -vE '^[[:space:]]*(#|$)' "$HOOKS/$hook.sh" | tail -n1)"
+FOK_WIRED_N="$(grep -oE '/\.claude/hooks/[A-Za-z0-9_-]+\.sh' "$ROOT/templates/claude/settings.json.tmpl" | sort -u | grep -c .)"
+if [[ "$FOK_HOOK_N" -ge 4 && "$FOK_HOOK_N" -eq "$FOK_WIRED_N" ]]; then
+  ok "fail-open audit: all $FOK_HOOK_N session hooks were read, the $FOK_WIRED_N the settings template wires"
+else
+  bad "fail-open audit: every session hook the settings template wires was read" \
+      "read $FOK_HOOK_N files under templates/hooks/, the template wires $FOK_WIRED_N; a hook outside this audit is a silent pass nobody reads"
+fi
+for HF in "$HOOKS"/*.sh; do
+  [[ -f "$HF" ]] || continue
+  hook="$(basename "$HF" .sh)"
+  LAST="$(grep -vE '^[[:space:]]*(#|$)' "$HF" | tail -n1)"
   case "$LAST" in
     exit\ [0-9]*) ok "fail-open audit: $hook.sh ends with an explicit exit" ;;
     *) bad "fail-open audit: $hook.sh ends with an explicit exit" \
@@ -151,7 +204,7 @@ fi
 # THE SAME DISCIPLINE, EXTENDED TO THE GIT HOOKS (v1.7 dogfood gate, F26).
 #
 # This is the structural finding of that gate, and it is worth stating plainly:
-# the audit above reads the four PreToolUse hooks and scripts/*.sh, and it had
+# the audit above reads the session hooks and scripts/*.sh, and it had
 # NEVER read templates/git-hooks/. v1.7 moved the enforcement guarantee into that
 # directory and the tool whose entire job is finding silent passes was not
 # looking at it. Eleven unannotated exit sites lived there, one of which was the

@@ -575,7 +575,8 @@ build_brokenjq_bin
 # hole: `git merge --squash` needs one flag to work in a Setlist instance, and the error does not say so. | asserted
 # hole: A role directory spelled in a different case is not seen by the session scope gate on macOS or Windows. | asserted
 # hole: The session layer's one command reader is a frozen text parser, and a short list of spellings reads a command wrongly. | asserted | since 2.8.0 (spec 0146) the lexer's bytes are pinned by the bypass deny region's digest assertion, and the one item that reaches the trunk, the diagram field's first-line reading, by diagram first-wins a and b at pre-merge-commit (shard 10, spec 0145); the retired gates' spellings left with their parsers
-# hole: The scope hook's warnings do not reach the agent on current harnesses. | unassertable | a property of the HARNESS, not of these bytes: a shell test can see the hook emit the reason on three channels but not what Claude Code renders. dogfood/advisory-visibility-probe.sh measures it with a live session and a deny-control per release; the vendor documents the drop on allow as intended, so no change is expected to lift it (spec 0146, CLAIMS-CORRECTIONS item 6)
+# hole: The scope hook's warning reaches the agent, and the agent may proceed anyway: advisories persuade, hooks refuse. | unassertable | a property of the MODEL and the HARNESS, not of these bytes: whether an agent heeds a delivered warning is its judgement. The suite asserts the hook EMITS the reason in additionalContext with its code (shard 11, advisory a; shard 15, 0151 P a); dogfood/advisory-visibility-probe.sh measures delivery per release, and NOT-SEEN after 2.9.0 is a regression (spec 0151)
+# hole: A relative write path is read against the project root, so the scope hook can miss a role-path write made from a subdirectory. | asserted
 # hole: A first push to a brand-new EMPTY remote audits every pushed branch as a trunk candidate. | asserted
 # hole: The trunk audit cannot tell a merge that EDITS a file from ordinary conflict resolution. | asserted
 # hole: The headless integrity chain is only as strong as where your signing key lives, and a key your build can reach is not custody. | asserted
@@ -613,6 +614,7 @@ source "$SUITE_DIR/15-rc2-f10-jq-hardening.sh"
 source "$SUITE_DIR/16-team-edition-0132.sh"
 source "$SUITE_DIR/17-diagram-edition-0136.sh"
 source "$SUITE_DIR/18-bypass-deny-0143.sh"
+source "$SUITE_DIR/19-probe-seed-0151.sh"
 
 # EVERY SHARD FILE ON DISK IS SOURCED ABOVE, asserted rather than remembered
 # (spec 0136, 2026-09-10, from the defect that produced it). SUITE_FILES globs

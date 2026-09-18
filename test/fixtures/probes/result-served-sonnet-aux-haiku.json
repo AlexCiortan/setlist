@@ -1,0 +1,28 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 2,
+  "stop_reason": "end_turn",
+  "result": "probe-fixture",
+  "usage": {
+    "input_tokens": 4,
+    "output_tokens": 107,
+    "cache_read_input_tokens": 44841,
+    "cache_creation_input_tokens": 44991
+  },
+  "modelUsage": {
+    "claude-haiku-4-5-20251001": {
+      "inputTokens": 912,
+      "outputTokens": 12,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0
+    },
+    "claude-sonnet-5": {
+      "inputTokens": 4,
+      "outputTokens": 107,
+      "cacheReadInputTokens": 44841,
+      "cacheCreationInputTokens": 44991
+    }
+  }
+}

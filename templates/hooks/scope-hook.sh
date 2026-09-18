@@ -9,11 +9,14 @@
 # (read from .claude/sdd.json, never assumed to be main).
 # Deny mechanic verified live 2026-07-04 on Claude Code 2.1.200: JSON
 # permissionDecision output, exit 0; the reason reaches the agent verbatim.
-# Requires jq, and FAILS CLOSED without it: a missing jq used to make the
-# scaffolded flag, the trunk name, and the role paths all read empty, so every
-# check fell through and feature code could land on the trunk unchallenged.
-# Because none of those facts are readable without jq, the fail-closed path
-# denies every Write and Edit inside a stamped instance rather than guessing;
+# Requires jq: a missing jq used to make the scaffolded flag, the trunk name,
+# and the role paths all read empty, so every check fell through and feature
+# code could land on the trunk unchallenged. Because none of those facts are
+# readable without jq, the jq-less path REPORTS rather than guesses: it emits
+# the SH-NO-JQ code below (unbracketed here on purpose: the suite reads a
+# bracketed code twice in this file as two denials sharing one code), whose
+# own text says gates report their verdict and PERMIT, this hook having been
+# advisory since v1.7, and the git hooks are what refuse.
 # Bash is untouched, so the session can install jq and continue.
 # Disable with a one-line edit: remove this hook's entry from
 # .claude/settings.json.
@@ -21,6 +24,12 @@
 set -u
 
 # THE scope ADVISES, IT DOES NOT VETO (the advisory-gate decision, RATIFIED 2026-08-04).
+#
+# ADVISORIES PERSUADE; HOOKS REFUSE. Since 2.9.0 the reason below reaches the
+# agent's context (additionalContext, measured delivered on PreToolUse at Claude
+# Code 2.1.274, spec 0151), and an agent that receives it may still judge the
+# write harmless and proceed: a delivered warning is not an enforcement channel.
+# What refuses is git's own hooks, at commit, merge and push.
 #
 # This function used to emit permissionDecision "deny" and hold a hard veto over
 # the session. It now emits "allow" and reports what it WOULD have decided in a
@@ -41,10 +50,16 @@ set -u
 # THE CONTRACT, frozen with the parsers:
 #   permissionDecision   ALWAYS "allow"
 #   setlistAdvisory      {gate, verdict: deny|allow, code, reason}
-#   systemMessage        the reason, again, because permissionDecisionReason is
-#                        documented as reaching the USER rather than the model
-#                        when the decision is allow, and the point of a warning
-#                        is that the session sees it.
+#   additionalContext    the reason, prefixed, for the MODEL (design P, spec
+#                        0151): documented as added to Claude's context beside the
+#                        tool result, and measured delivered on this event with
+#                        permissionDecision allow.
+#   permissionDecisionReason  the reason, for the USER: documented as shown to
+#                        the user and not Claude on allow; kept by the owner's
+#                        ruling E-3 of 2026-09-17 until the interactive view is
+#                        measured.
+# `systemMessage` carried the reason until 2.9.0 and was measured never
+# reaching the model on the allow path; it left with this contract.
 #
 # `setlistAdvisory.verdict` is evidence about THIS layer only. Every
 # guarantee-layer check binds to observed repository state instead, because a
@@ -73,9 +88,9 @@ adv_code_of() { # adv_code_of <reason> -> sets ADV_CODE
 }
 advise() {
   adv_code_of "$1"
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":%s},"systemMessage":%s,"setlistAdvisory":{"gate":"scope","verdict":"deny","code":%s,"reason":%s}}\n' \
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":%s,"additionalContext":%s},"setlistAdvisory":{"gate":"scope","verdict":"deny","code":%s,"reason":%s}}\n' \
     "$(printf '%s' "$1" | jq -Rs .)" \
-    "$(printf 'setlist %s' "$1" | jq -Rs .)" \
+    "$(printf 'setlist scope hook (advisory; the write proceeds): %s' "$1" | jq -Rs .)" \
     "$(printf '%s' "$ADV_CODE" | jq -Rs .)" \
     "$(printf '%s' "$1" | jq -Rs .)"
   # fail-open-ok: the gate is advisory by design as of 2026-08-04. It has
@@ -88,7 +103,7 @@ deny() { advise "$1"; }
 # HISTORY: ruling SC-01 (plugin 2.3.0), in the framework source's private hook-rulings record: Advise with a fixed literal reason, for the paths where jq is unavailable to.
 advise_literal() {
   adv_code_of "$1"
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"scope","verdict":"deny","code":"%s","reason":"%s"}}\n' "$1" "$1" "$ADV_CODE" "$1"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s","additionalContext":"setlist scope hook (advisory; the write proceeds): %s"},"setlistAdvisory":{"gate":"scope","verdict":"deny","code":"%s","reason":"%s"}}\n' "$1" "$1" "$ADV_CODE" "$1"
   # fail-open-ok: advisory by design; see advise() above.
   exit 0
 }
@@ -213,10 +228,23 @@ if [[ -z "$FILE_PATH" ]]; then
 fi
 
 # HISTORY: ruling SC-13 (undated), in the framework source's private hook-rulings record: Role paths: a string or a list of strings (multi-prefix repos, and flat-root.
+# ONE QUESTION, ONE SITE: can the role paths be read at all. Since 2.9.0 (F10 of
+# that release's leg, spec 0154) it has two causes, and they share this one code
+# on this one deny: a "roles" value that is not an object, and a roles OBJECT whose
+# values yield no path string (an object, null, an empty list, a number), which
+# the extraction reads EMPTY and the loop below would have ended in silence on a
+# trunk write the roles were declared to guard. The extraction is the three
+# readers' shared expression and does not change.
+ROLES_WHY=""
 if [[ "$(jq -r 'if (.roles == null) then "absent" elif ((.roles | type) == "object") then "ok" else "bad" end' "$SDD_JSON" 2>/dev/null)" == "bad" ]]; then
-  deny "scope hook [SH-ROLES-SHAPE]: .claude/sdd.json has a \"roles\" value that is not an object, so the role paths this hook guards cannot be read and every write to the trunk would silently pass. Set \"roles\" to an object such as {\"src\": \"src\", \"tests\": \"tests\"}, or remove the key to accept the defaults."
+  ROLES_WHY='has a "roles" value that is not an object'
+else
+  ROLE_PATHS="$(jq -r 'if ((.roles // {}) | length) == 0 then ["src","tests"] else [(.roles // {}) | .[]] end | flatten | .[] | select(type == "string")' "$SDD_JSON")"
+  [[ -n "$ROLE_PATHS" ]] || ROLES_WHY='declares "roles" but none of its values is a path string or a list of them'
 fi
-ROLE_PATHS="$(jq -r 'if ((.roles // {}) | length) == 0 then ["src","tests"] else [(.roles // {}) | .[]] end | flatten | .[] | select(type == "string")' "$SDD_JSON")"
+if [[ -n "$ROLES_WHY" ]]; then
+  deny "scope hook [SH-ROLES-SHAPE]: .claude/sdd.json $ROLES_WHY, so the role paths this hook guards cannot be read and every write to the trunk would silently pass. Set \"roles\" to an object whose values are paths, such as {\"src\": \"src\", \"tests\": \"tests\"}, or remove the key to accept the defaults."
+fi
 
 # HISTORY: ruling SC-14 (undated), in the framework source's private hook-rulings record: Canonicalize before comparing.
 REL="$(printf '%s' "$FILE_PATH" | tr -s '/')"

@@ -88,10 +88,10 @@ IFS= read -r -d '' INPUT || true
 # second block on the same grounds would loop until the harness's own cap.
 # Read by substring on the raw payload, so jq is not on this path.
 case "$INPUT" in
-  # fail-open-ok: the harness has already marked this turn a continuation of a
-  # stop this hook blocked, so blocking again is the loop rather than the gate.
   # Annotated at F6 of the 2.7.0 leg, which found this file absent from the
   # disposition audit entirely and these exits therefore never read.
+  # fail-open-ok: the harness has already marked this turn a continuation of a
+  # stop this hook blocked, so blocking again is the loop rather than the gate.
   *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) exit 0 ;;
 esac
 
@@ -102,12 +102,24 @@ if [[ -z "$PROJ" ]]; then
   PROJ="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)"
   [[ -n "$PROJ" ]] || PROJ="$PWD"
 fi
-# Not an instance: nothing here is this hook's business.
+# Not an instance: nothing here is this hook's business. The same guard every
+# stamped hook opens with, and the boundary it draws is its own documented
+# limitation. Annotated at F6 of the 2.7.0 leg.
 # fail-open-ok: no sdd.json on the checked-out branch means this is not a Setlist
 # instance, and a core.hooksPath set in one repository must not govern unrelated
-# work. The same guard every stamped hook opens with, and the boundary it draws is
-# its own documented limitation. Annotated at F6 of the 2.7.0 leg.
+# work.
 [[ -f "$PROJ/.claude/sdd.json" ]] || exit 0
+
+# NO REPOSITORY YET IS NOT A BROKEN ONE (DE11, spec 0150). An ENTRY of any type
+# counts: a .git file (a linked worktree) and a dangling .git symlink reach the
+# read below and are judged or refused as before. Only a root with no .git at
+# all is silent, and that includes an instance stamped below an enclosing
+# repository's top (the stamp's skip-subdir, reported NOT ARMED by the stamp
+# itself; the owner's ruling E-1 of 2026-09-17).
+# fail-open-ok: no .git at the root is the state /setlist:new leaves by design
+# (the stamp's skip-norepo) until /scaffold creates the repository, so there is
+# no committed record yet for a turn to leave disagreeing.
+[[ -e "$PROJ/.git" || -L "$PROJ/.git" ]] || exit 0
 
 JQ_NOTE=""
 if [[ "$(printf '{"probe":"x"}' | jq -r '.probe' 2>/dev/null)" != "x" ]]; then
@@ -128,12 +140,21 @@ fi
 # untracked (??). A change that is STAGED is the session's deliberate act and
 # is allowed to stand at the end of a turn; the record it will become is in the
 # index, and the commit is the next thing the protocol asks for.
-UNSTAGED_STATUS=""; UNSTAGED_SPECS=""
+#
+# AN UNTRACKED FILE COUNTS ONLY WHEN IT IS MARKDOWN (2.9.0; F8 of that release's
+# leg, spec 0154). A new spec is untracked until it is staged, so an untracked
+# .md file is the spec record; a .DS_Store, an editor swap file or a merge's .orig
+# is not, and refusing every turn on one offered two remedies that fail on a file
+# git has never tracked. Such a file gets its own remedy line below.
+UNSTAGED_STATUS=""; UNSTAGED_SPECS=""; UNTRACKED_SPECS=""
 while IFS= read -r line; do
   [[ -n "$line" ]] || continue
   x="${line:0:1}"; y="${line:1:1}"; path="${line:3}"
   case "$path" in *' -> '*) path="${path##* -> }" ;; esac
   case "$path" in \"*\") path="${path#\"}"; path="${path%\"}" ;; esac
+  if [[ "$x$y" == "??" ]]; then
+    case "$path" in *.md) UNTRACKED_SPECS="${UNTRACKED_SPECS:+$UNTRACKED_SPECS, }$path" ;; *) continue ;; esac
+  fi
   if [[ "$x$y" == "??" || "$y" != " " ]]; then
     case "$path" in
       specs/STATUS.md) UNSTAGED_STATUS="$path" ;;
@@ -142,12 +163,16 @@ while IFS= read -r line; do
   fi
 done <<< "$STATUS"
 
+UNTRACKED_NOTE=""
+if [[ -n "$UNTRACKED_SPECS" ]]; then
+  UNTRACKED_NOTE=" Git has never tracked $UNTRACKED_SPECS, so git restore does not apply to it: stage it (git add $UNTRACKED_SPECS) if it is a spec record, or remove it if it is not."
+fi
 if [[ -n "$UNSTAGED_STATUS" && -n "$UNSTAGED_SPECS" ]]; then
-  refuse "[SP-UNSTAGED-STATUS]: specs/STATUS.md is changed and not staged, and so is the spec record ($UNSTAGED_SPECS). A turn that ends here leaves the inventory and the record disagreeing with what is committed, and the next session re-grounds on the committed page. Stage them (git add specs/) and commit them with the work they describe, or restore them (git checkout -- specs/STATUS.md, git restore <file>) if the edit was not meant, then end the turn. This hook refuses once; the continuation it grants passes."
+  refuse "[SP-UNSTAGED-STATUS]: specs/STATUS.md is changed and not staged, and so is the spec record ($UNSTAGED_SPECS). A turn that ends here leaves the inventory and the record disagreeing with what is committed, and the next session re-grounds on the committed page. Stage them (git add specs/) and commit them with the work they describe, or restore them (git checkout -- specs/STATUS.md, git restore <file>) if the edit was not meant, then end the turn.$UNTRACKED_NOTE This hook refuses once; the continuation it grants passes."
 elif [[ -n "$UNSTAGED_STATUS" ]]; then
   refuse "[SP-UNSTAGED-STATUS]: specs/STATUS.md is changed and not staged. A turn that ends here leaves the inventory page disagreeing with what is committed, and the next session re-grounds on the committed page. Stage it (git add specs/STATUS.md) and commit it with the work it describes, or restore it (git checkout -- specs/STATUS.md) if the edit was not meant, then end the turn. This hook refuses once; the continuation it grants passes."
 elif [[ -n "$UNSTAGED_SPECS" ]]; then
-  refuse "[SP-UNSTAGED-SPEC]: the spec record is changed and not staged ($UNSTAGED_SPECS). A turn that ends here leaves the record disagreeing with what is committed, and the next session re-grounds on the committed page. Stage it (git add specs/) and commit it with the work it describes, or restore it (git restore <file>) if the edit was not meant, then end the turn. This hook refuses once; the continuation it grants passes."
+  refuse "[SP-UNSTAGED-SPEC]: the spec record is changed and not staged ($UNSTAGED_SPECS). A turn that ends here leaves the record disagreeing with what is committed, and the next session re-grounds on the committed page. Stage it (git add specs/) and commit it with the work it describes, or restore it (git restore <file>) if the edit was not meant, then end the turn.$UNTRACKED_NOTE This hook refuses once; the continuation it grants passes."
 fi
 
 # fail-open-ok: every file under specs/ is committed or staged, which is the

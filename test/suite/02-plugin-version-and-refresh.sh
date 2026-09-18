@@ -856,3 +856,302 @@ expect_script "wiring k: settings.json that does not parse is reported, not gues
 
 fi; shard_region_end
 # <<< SHARD-END refresh-wiring
+
+# =============================================================================
+# >>> SHARD-BEGIN edition-drift-0153 cost=24
+if shard_region edition-drift-0153; then
+# SKEW PART B (spec 0153): the refresh REPORTS edition and binding drift by
+# name, reading the new edition from the committed setlist.md's Edition header
+# and the bindings from Part 2's table in the same file.
+#
+# The class was measured three times before this region existed: an instance
+# four editions behind its stamp with nothing surfacing it; an instance whose
+# own CLAUDE.md header still named v1.6 after an upgrade to v1.14, because the
+# CLAUDE.md rewrite is delta-driven and a stale edition string in phase-2 prose
+# is in no delta; and the plugin's own `new` skill telling session zero to run
+# `/model opus` on the escalation tier while Part 2 bound that tier to `fable`.
+# The third is why the last case here reads the SHIPPED skills tree: a check
+# that catches the drift in other people's instances and not in the bytes that
+# teach it would be the same defect wearing the fix's name.
+# =============================================================================
+
+# The two values the report is not allowed to hold, read here the way a reader
+# would read them, so every assertion below compares against the edition rather
+# than against a string this file also carries.
+ED_NEW="$(grep -oE '^\*\*Edition v[0-9]+\.[0-9]+' "$ROOT/setlist.md" | head -n1 | grep -oE 'v[0-9]+\.[0-9]+')"
+ED_ESC="$(awk -F'|' '
+  /^\| Tier \| Binding \|/ { f = 1; next }
+  f && /^\|[[:space:]]*---/ { next }
+  f && /^\|/ { t = $2; gsub(/^[ \t]+|[ \t]+$/, "", t)
+               if (tolower(t) == "escalation") { n = split($3, p, "`")
+                 for (i = 2; i <= n; i += 2) printf "%s%s", (c++ ? " " : ""), p[i] } }
+  f && !/^\|/ { f = 0 }
+' "$ROOT/setlist.md")"
+if [[ -n "$ED_NEW" && -n "$ED_ESC" ]]; then
+  ok "drift a: the edition header and Part 2's escalation binding are both readable ($ED_NEW; $ED_ESC)"
+else
+  bad "drift a: the edition header and Part 2's escalation binding are both readable" \
+      "edition='$ED_NEW' escalation='$ED_ESC'; every case below would compare against nothing"
+fi
+
+# THE RED-FIRST FIXTURE. A synthetic instance carrying both drifts at known
+# line numbers: an edition string that is not the new edition on line 3 of
+# CLAUDE.md, and an escalation sentence naming a foreign alias on line 3 of an
+# instance-owned skill.
+INST="$WORK/inst-drift"
+instance_fixture "$INST" 1.0.0 current
+printf '# The Project\n\n' > "$INST/CLAUDE.md"
+printf 'This repository follows Setlist edition v1.6 as its protocol.\n' >> "$INST/CLAUDE.md"
+mkdir -p "$INST/.claude/skills/house-style"
+printf '# House style\n\n' > "$INST/.claude/skills/house-style/SKILL.md"
+printf 'Session zero runs on the escalation tier of the model ladder (`/model opus`).\n' \
+  >> "$INST/.claude/skills/house-style/SKILL.md"
+run_script bash "$SCRIPTS/refresh-instance.sh" "$INST"
+expect_script "drift b: an edition string that is not the new edition is named by file and line" 0 \
+  "CLAUDE.md:3" "[SLH-EDITION-DRIFT]" "edition v1.6"
+expect_script "drift c: the refusal line names the value the edition holds" 0 "$ED_NEW"
+expect_script "drift d: a tier named beside a foreign alias is named by file and line" 0 \
+  ".claude/skills/house-style/SKILL.md:3" "[SLH-BINDING-DRIFT]" "escalation"
+expect_script "drift e: the binding line names what Part 2 binds that tier to" 0 "$ED_ESC"
+
+# THE REPORT CHANGES NO EXIT STATUS, on the retired-hooks report's precedent in
+# the same script: a drift line takes nothing out of force that the hooks
+# carry, and removing or rewriting text in someone's repository is their act.
+# Asserted on the same run above (rc 0) and again under --apply, because a
+# report that is quiet in one mode and loud in the other describes two futures.
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "drift f: --apply reports the same drift and the drift changes no exit status" 0 \
+  "[SLH-EDITION-DRIFT]" "[SLH-BINDING-DRIFT]"
+
+# NO BYPASS HINT. Three-cause style says what, why and what to do; it never
+# says how to switch the check off. The retired-hooks report is the shape.
+DRIFT_BLOCK="$(printf '%s\n' "$SCRIPT_OUT" | awk '/^edition and binding drift/{f=1} f&&/^retired hooks,/{f=0} f')"
+if printf '%s' "$DRIFT_BLOCK" | grep -qiE 'SETLIST_[A-Z_]*=|--no-|skip|bypass|disable|silence'; then
+  bad "drift g: the drift report offers no way to switch itself off" \
+      "the block names one: $DRIFT_BLOCK"
+else
+  ok "drift g: the drift report offers no way to switch itself off"
+fi
+
+# WHAT IT SAYS TO DO, and the sentence that holds the chore open. The upgrade
+# skill's step quotes this output; the sentence has to be IN the output or the
+# step is quoting a promise the script does not make.
+expect_script "drift h: the report says the migration chore does not close while a line stands" 0 \
+  "does not close while a listed line stands"
+
+# HISTORY IS EXCLUDED BY RULE, NOT BY JUDGEMENT. A fenced code block and a
+# blockquote are not compared, and the count of lines skipped for that reason
+# is printed rather than dropped: a check that silently ignores part of its
+# input has not checked it.
+INST="$WORK/inst-drift-history"
+instance_fixture "$INST" 1.0.0 current
+# The fixture carries ONE real finding beside the two excluded ones. Since spec
+# 0154's fix round 1 the skipped count prints whether or not anything was found
+# (case fence d); an instance with nothing but history still draws no drift
+# block, which is case k's subject.
+{ printf '# The Project\n\n'
+  printf 'This repository follows Setlist edition v1.4 as its protocol.\n\n'
+  printf '> Relocated 2026-01-01 from the old handbook, verbatim:\n'
+  printf '> this project follows Setlist edition v1.2.\n\n'
+  printf 'An example of what the old header looked like:\n\n'
+  printf '```\n'
+  printf 'Setlist edition v1.3\n'
+  printf '```\n'
+} > "$INST/CLAUDE.md"
+run_script bash "$SCRIPTS/refresh-instance.sh" "$INST"
+expect_script "drift i0: the one line outside the history is listed, so the block exists to count into" 0 \
+  "CLAUDE.md:3" "edition v1.4"
+if printf '%s' "$SCRIPT_OUT" | grep -qE 'edition v1\.(2|3)'; then
+  bad "drift i: text inside a blockquote or a code fence is not compared" \
+      "one of them was listed: $SCRIPT_OUT"
+else
+  ok "drift i: text inside a blockquote or a code fence is not compared"
+fi
+expect_script "drift j: the lines excluded as history are counted in the report, never dropped" 0 \
+  "not compared (history is excluded by rule)"
+
+# FENCES ARE READ THE WAY MARKDOWN READS THEM (spec 0154, fix round 1; the 2.9.0
+# leg's F5 and F7, ruled by the validator 2026-09-18). The first cut toggled its
+# fence state on ANY line starting with three backticks or tildes, so a
+# four-backtick block quoting a three-backtick fence left the rest of the file
+# inverted (fenced history listed, live prose hidden), an indented fence marker
+# toggled it too, and the skip count printed only when drift was found.
+INST="$WORK/inst-drift-fences"
+instance_fixture "$INST" 1.0.0 current
+{ printf '````\n'
+  printf 'Historical quote from the old runbook, kept as provenance:\n'
+  printf '```\n'
+  printf 'This instance runs Edition v1.14 of the protocol.\n'
+  printf '````\n'
+  printf 'This instance runs Edition v1.15 of the protocol.\n'
+  printf '\n~~~\n'
+  printf '```\n'
+  printf 'quoted: Setlist edition v1.12\n'
+  printf '~~~\n'
+  printf '\nHouse style: open every example block like this:\n\n'
+  printf '    ```sh\n\n'
+  printf 'and this project follows Setlist edition v1.13 today.\n'
+} > "$INST/CLAUDE.md"
+run_script bash "$SCRIPTS/refresh-instance.sh" "$INST"
+expect_script "drift fence a: the live line after a four-backtick block quoting a three-backtick fence is listed" 0 \
+  "CLAUDE.md:6" "Edition v1.15"
+if printf '%s' "$SCRIPT_OUT" | grep -qE 'v1\.14|v1\.12'; then
+  bad "drift fence b: a line inside a longer fence, or inside a tilde fence a backtick line cannot close, is not compared" \
+      "a fenced line was listed: $SCRIPT_OUT"
+else
+  ok "drift fence b: a line inside a longer fence, or inside a tilde fence a backtick line cannot close, is not compared"
+fi
+expect_script "drift fence c: a fence marker indented four spaces is text, not a delimiter, so the prose after it is still read" 0 \
+  "CLAUDE.md:17" "edition v1.13"
+
+# THE SKIP COUNT IS PRINTED WHENEVER LINES WERE SKIPPED, not only beside a
+# finding: the run that finds nothing is the one where a reader most needs to
+# know what it did not read. An instance with only fenced history draws the
+# count and still no drift block (case k's subject).
+INST="$WORK/inst-drift-onlyhistory"
+instance_fixture "$INST" 1.0.0 current
+printf '# The Project\n\n```\nSetlist edition v1.3\n```\n' > "$INST/CLAUDE.md"
+run_script bash "$SCRIPTS/refresh-instance.sh" "$INST"
+expect_script "drift fence d: a run that finds nothing still counts the lines it did not compare" 0 \
+  "not compared (history is excluded by rule)"
+if printf '%s' "$SCRIPT_OUT" | grep -q 'edition and binding drift'; then
+  bad "drift fence e: counting the excluded lines draws no drift block when nothing was found" \
+      "the block was printed: $SCRIPT_OUT"
+else
+  ok "drift fence e: counting the excluded lines draws no drift block when nothing was found"
+fi
+
+# AN UNCLOSED FENCE IS A GAP, never a clean read: every line after it went
+# uncompared, and the report says so by file and line.
+INST="$WORK/inst-drift-unclosed"
+instance_fixture "$INST" 1.0.0 current
+printf '# The Project\n\nText.\n\n```\nThis project follows Setlist edition v1.2.\n' > "$INST/CLAUDE.md"
+run_script bash "$SCRIPTS/refresh-instance.sh" "$INST"
+expect_script "drift fence f: a fence that never closes is reported as a gap by file and line" 0 \
+  "CLAUDE.md:5" "never closes"
+
+# A CLEAN INSTANCE STAYS QUIET. A check that fires on everything is a check
+# people learn to ignore, which is this repository's own 2026-08-04 lesson.
+INST="$WORK/inst-drift-clean"
+instance_fixture "$INST" 1.0.0 current
+printf '# The Project\n\nThis repository follows Setlist edition %s as its protocol.\n' "$ED_NEW" \
+  > "$INST/CLAUDE.md"
+run_script bash "$SCRIPTS/refresh-instance.sh" "$INST"
+if printf '%s' "$SCRIPT_OUT" | grep -q 'edition and binding drift'; then
+  bad "drift k: an instance naming the new edition and no tier draws no drift block" \
+      "the block was printed anyway: $SCRIPT_OUT"
+else
+  ok "drift k: an instance naming the new edition and no tier draws no drift block"
+fi
+
+# ONE VALUE, READ, NEVER COPIED. A check that hardcodes the edition or an alias
+# is a second copy of the bindings, which is the drift class itself one layer
+# down. Asserted on the bytes: no two-component edition version and no model
+# alias is written into the script.
+# Read over the CODE, not the comments: the script's history comments cite when
+# a layer arrived ("the enforcement boundary as of edition v1.7"), which is
+# provenance and not a value anything compares against. The subject is a
+# version the code could compare with, so full-line comments are dropped first.
+DRIFT_HARDCODE="$(grep -vE '^[[:space:]]*#' "$SCRIPTS/refresh-instance.sh" \
+  | sed -E 's/v[0-9]+\.[0-9]+\.[0-9]+/ /g' \
+  | grep -oE 'v[0-9]+\.[0-9]+' | sort -u || true)"
+if [[ -z "$DRIFT_HARDCODE" ]]; then
+  ok "drift l: refresh-instance.sh's code holds no edition version of its own"
+else
+  bad "drift l: refresh-instance.sh's code holds no edition version of its own" "it names: $DRIFT_HARDCODE"
+fi
+DRIFT_ALIASES="$(awk -F'|' '
+  /^\| Tier \| Binding \|/ { f = 1; next }
+  f && /^\|[[:space:]]*---/ { next }
+  f && /^\|/ { n = split($3, p, "`"); for (i = 2; i <= n; i += 2) print p[i] }
+  f && !/^\|/ { f = 0 }
+' "$ROOT/setlist.md" | sort -u)"
+DRIFT_HELD=""
+for a in $DRIFT_ALIASES; do
+  grep -qE "(\"|')$a(\"|')|=$a\b" "$SCRIPTS/refresh-instance.sh" && DRIFT_HELD="$DRIFT_HELD $a"
+done
+if [[ -z "$DRIFT_HELD" ]]; then
+  ok "drift m: refresh-instance.sh holds no model alias of its own ($(printf '%s' "$DRIFT_ALIASES" | tr '\n' ' ')checked)"
+else
+  bad "drift m: refresh-instance.sh holds no model alias of its own" "it holds:$DRIFT_HELD"
+fi
+
+# AND THE PROOF THAT IT IS READ RATHER THAN HELD: ONE FIXTURE, TWO EDITIONS.
+# Cases l and m assert the script holds no edition and no alias; this asserts the
+# positive form, which is the one that would still pass if the value were read
+# from the wrong place. The SAME instance prose is driven twice: once against
+# this tree, where it matches and draws nothing, and once against a copy of the
+# plugin root whose Edition header and escalation binding are values nobody
+# ships. Prose that is clean against one edition and drift against another, with
+# no byte of the instance changing, is what "read, never copied" means.
+FAKE_ROOT="$WORK/fake-plugin-root"
+rm -rf "$FAKE_ROOT"
+mkdir -p "$FAKE_ROOT/scripts" "$FAKE_ROOT/templates" "$FAKE_ROOT/.claude-plugin"
+cp -R "$SCRIPTS"/. "$FAKE_ROOT/scripts/"
+cp -R "$ROOT/templates"/. "$FAKE_ROOT/templates/"
+cp "$ROOT/.claude-plugin/plugin.json" "$FAKE_ROOT/.claude-plugin/plugin.json"
+sed -e "s/^\*\*Edition v[0-9]*\.[0-9]*.*/**Edition v9.9 (a fixture edition)**/" \
+    -e "s/^| Escalation | .*/| Escalation | bound to \`zzalias\` here | fixture |/" \
+    "$ROOT/setlist.md" > "$FAKE_ROOT/setlist.md"
+INST="$WORK/inst-drift-moved"
+instance_fixture "$INST" 1.0.0 current
+printf '# The Project\n\nThis repository follows Setlist edition %s as its protocol.\n' "$ED_NEW" \
+  > "$INST/CLAUDE.md"
+mkdir -p "$INST/.claude/skills/house-style"
+printf '# House style\n\nSession zero runs on the escalation tier of the model ladder (`/model opusplan`).\n' \
+  > "$INST/.claude/skills/house-style/SKILL.md"
+# Against the fake root: the edition moved, so the same prose is drift, and every
+# value the report names is the fake root's.
+run_script bash "$FAKE_ROOT/scripts/refresh-instance.sh" "$INST"
+expect_script "drift p: move the edition header and the report follows it, naming the moved value" 0 \
+  "[SLH-EDITION-DRIFT]" "edition $ED_NEW" "moving to is v9.9"
+expect_script "drift q: move Part 2's escalation binding and the report follows that too" 0 \
+  "[SLH-BINDING-DRIFT]" "zzalias"
+if printf '%s' "$SCRIPT_OUT" | grep -q "moving to is $ED_NEW"; then
+  bad "drift r: the report names the edition it READ, never this tree's" \
+      "it named $ED_NEW as the target while reading a root whose header says v9.9"
+else
+  ok "drift r: the report names the edition it READ, never this tree's"
+fi
+# Against THIS tree: the identical instance, unchanged, draws nothing. The
+# fixture's skill still names opusplan beside the escalation tier, which is drift
+# under any bindings table, so the binding half is asserted rather than the whole
+# block: what this half proves is that the EDITION string follows the tree.
+run_script bash "$SCRIPTS/refresh-instance.sh" "$INST"
+if printf '%s' "$SCRIPT_OUT" | grep -q 'SLH-EDITION-DRIFT'; then
+  bad "drift s: the same prose is clean against the tree whose edition it names" \
+      "an edition string equal to this tree's edition was reported as drift: $SCRIPT_OUT"
+else
+  ok "drift s: the same prose is clean against the tree whose edition it names"
+fi
+
+# THE SHIPPED SKILLS TREE, HELD TO THE SAME COMPARISON (spec 0149 section 5,
+# requirement 4). This is the case that would have caught CL3's second drift at
+# the source: skills/new/SKILL.md told session zero to run `/model opus` on the
+# escalation tier while Part 2 bound that tier elsewhere. Zero binding hits
+# required; the edition-string arm is NOT asserted here, because every edition
+# string in the shipped skills is a provenance citation naming the edition a
+# field arrived in, which spec 0153 escalates as E-A rather than narrowing the
+# check by judgement.
+INST="$WORK/inst-drift-skills"
+instance_fixture "$INST" 1.0.0 current
+rm -rf "$INST/.claude/skills"
+cp -R "$ROOT/skills" "$INST/.claude/skills"
+run_script bash "$SCRIPTS/refresh-instance.sh" "$INST"
+SKILLS_HITS="$(printf '%s\n' "$SCRIPT_OUT" | grep -c 'SLH-BINDING-DRIFT' || true)"
+if [[ "${SKILLS_HITS:-0}" -eq 0 ]]; then
+  ok "drift n: the plugin's own skills name no tier beside an alias the edition binds elsewhere"
+else
+  bad "drift n: the plugin's own skills name no tier beside an alias the edition binds elsewhere" \
+      "$SKILLS_HITS line(s): $(printf '%s\n' "$SCRIPT_OUT" | grep 'SLH-BINDING-DRIFT')"
+fi
+
+# A SENTENCE THAT NAMES MORE THAN ONE TIER restates Part 2's table rather than
+# claiming one tier's binding, so it is not compared; it is PRINTED with its
+# file and line, because a reader has to be able to see what the check passed
+# over. skills/model-ladder/SKILL.md carries two of them by design.
+expect_script "drift o: a multi-tier sentence is named as not compared, never silently skipped" 0 \
+  "restate" "model-ladder"
+
+fi; shard_region_end
+# <<< SHARD-END edition-drift-0153

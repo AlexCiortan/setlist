@@ -87,14 +87,14 @@ Checks:
     (their duties ship as /setlist:checkpoint and /setlist:validate);
     report any survivor with the removal step from the upgrade protocol.
 11. Binding dependencies are installed: `jq` resolves on PATH (all four
-    stamped hooks need it; the scope hook reports its verdict and PERMITS and the bypass deny is silent (advisory since v1.7; the GIT hooks are what refuse, and they fail closed without jq)
-    without it, denying the writes, commits, and merges they govern rather
-    than allowing them unchecked, and the re-grounding pointer says so at
-    session start, so a missing jq presents as a blocked session rather than
-    silent damage), and, when `.claude/skills/browser-qa/` exists,
+    stamped hooks need it), and, when `.claude/skills/browser-qa/` exists,
     Playwright resolves (`npx playwright --version`) with its Chromium
-    installed. Report the exact install command for anything missing; install
-    nothing yourself.
+    installed. Without jq the session hooks report their verdict and PERMIT
+    (the scope hook says so in its own text, the bypass deny is silent; both
+    are advisory since v1.7), and the re-grounding pointer says so at session
+    start. The git hooks fail closed, so commits, merges and pushes are
+    refused until it is installed. Report the exact install command for
+    anything missing; install nothing yourself.
 12. The instance records which plugin stamped it: `.claude/sdd.json` carries
     `plugin.version`. An instance stamped before 1.0.2 records none, which is a
     finding recommending `/setlist:upgrade` (the refresh records it), not an
@@ -154,7 +154,7 @@ Checks:
     quietly produced an approval would be manufacturing the exact thing the
     mechanism exists to make somebody do deliberately.
 
-17. **The git-hook boundary is LIVE** (Part 6). The guarantee is the push-time
+18. **The git-hook boundary is LIVE** (Part 6). The guarantee is the push-time
     trunk audit, the per-merge hooks are its early warning, and all three parts
     below have to hold for either to run at all:
     - `.githooks/` exists and carries `pre-commit`, `pre-merge-commit`,
@@ -172,7 +172,7 @@ Checks:
     clone legitimately lacks them and the fix is to re-run the refresh.
     Report what is missing and the exact command that restores it.
 
-18. **The status record versus the page** (Part 3, edition v1.12). In a
+19. **The status record versus the page** (Part 3, edition v1.12). In a
     structured instance (`.claude/status.json` present), cross-check the
     record against specs/STATUS.md: a spec whose record token and inventory
     row disagree, a chore done in one and open in the other. **Divergence is
@@ -186,14 +186,14 @@ Checks:
     MALFORMED is a FINDING: every gate that reads it refuses, so the instance
     cannot close anything until it is fixed, and this check is the friendly
     version of the message the hooks will deliver anyway.
-19. **Double declaration** (Part 6, edition v1.12): one file in two specs'
+20. **Double declaration** (Part 6, edition v1.12): one file in two specs'
     `Owns:` sets, or in a spec's set and a chore's `files`. INFORMATION, never
     a finding: the audit checks coverage per closing spec, so a double
     declaration is legal and sometimes honest (a file that genuinely changed
     hands), and refusing it would need a cross-spec read at declaration time
     whose cost nobody has measured. Report the file and both owners; the human
     decides whether it is a handoff or a lie.
-20. **The two wiring files the refresh never replaces** (2.6.0, spec 0132, the
+21. **The two wiring files the refresh never replaces** (2.6.0, spec 0132, the
     owner's ruling 2 of 2026-09-07). `.github/workflows/setlist-forge-check.yml`
     and `.github/CODEOWNERS` are delivered by `/setlist:upgrade`'s refresh when
     ABSENT and LEFT AS IS when they differ from the plugin's templates, because
@@ -215,7 +215,7 @@ Checks:
     forge check` verifies nothing. Either file ABSENT is a finding recommending
     `/setlist:upgrade`, which delivers it. Replace neither yourself.
 
-21. **The diagram reports** (projects with `docs/diagrams/`). Where the
+22. **The diagram reports** (projects with `docs/diagrams/`). Where the
     directory does not exist, report nothing: the project has not opted in, and
     check 6 above is the whole diagram check for it. Where it does exist, these
     are REPORTS and never findings that block anything, because each has an

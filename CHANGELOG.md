@@ -9,6 +9,52 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.9.0
+
+**Edition v1.17 (the delivery edition).** What the session layer DELIVERS. A warning that
+reached nobody now reaches the agent, a hook that refused before the repository existed is
+silent there, and the upgrade reports the drift that let an instance describe a protocol it
+was no longer running.
+**The Known-limitations list as it stands in this release: 38 design boundaries, 2 open limitations, 1 upstream condition.**
+The upstream bullet saying the scope
+hook's reason was not delivered leaves, because the condition was measured and the fix ships
+in the same release; a Design boundary takes its place, and a second enters for a miss found
+by checking the scope hook's path matching case by case before its warning became visible.
+
+- **The scope hook's warning reaches the agent.** Its reason rides `additionalContext`, the
+  PreToolUse field Claude Code adds to the model's context and does not drop on `allow`, so
+  a session writing feature code on the trunk reads the advice before the write lands.
+  Through 2.8.0 the reason rode fields shown to you and not to the model, so the hook did
+  not in fact warn the agent for an entire edition. It persuades and does not refuse: an
+  agent may judge the write harmless and proceed, and the git hooks refuse at commit, merge
+  and push. `systemMessage` leaves the allow path, measured dead; the user-facing reason
+  stays. Delivery is re-checked at every release gate, and a release that finds it no longer
+  delivered treats that as a regression.
+- **The Stop hook is silent before the repository exists.** `/setlist:new` ends without a
+  refusal: a project root with no `.git` entry of any type is the state the bootstrap leaves
+  until `/scaffold` creates the repository. A linked worktree, a corrupt `.git` and a
+  repository with `core.hooksPath` unset are judged exactly as before, so the next turn that
+  leaves a spec or `specs/STATUS.md` change unstaged is still refused, except that a corrupt
+  `.git` beneath an enclosing repository is read through that repository, as it always was. This is a FIX: the
+  refusal was reproduced on unchanged bytes two releases running.
+- **The drift report, in `/setlist:upgrade`.** The refresh reads your `CLAUDE.md`,
+  `RUNBOOK.md`, `specs/TEMPLATE.md` and your own skills against the edition it is moving you
+  to, and names every line claiming an older edition, or naming a model-ladder tier beside a
+  model the edition binds elsewhere, with the file, the line, the string found and the value
+  the edition holds. It reports and never rewrites, and the migration chore does not close
+  while a listed line stands. Text inside a code fence or a blockquote is history and is not
+  compared, and the report says how many lines it passed over.
+- **The escalation tier is named by its binding, not by a model name.** The Quickstart and
+  the bootstrap skill say which tier session zero runs on and read the model from the
+  edition's Part 2 table, which is the one place a model name lives.
+
+**An upgraded instance receives two stamped hooks whose bytes changed and nothing else.** No
+file is removed, no `settings.json` entry moves, and the refresh's existing report names both
+before it replaces them. **And the framework got smaller where it could:** the three longest
+skills were read step by step against one question, whether a step produces bytes or instructs
+a thinking shape, and every candidate cut had to be decided by running the skill with and
+without the step rather than by reading it. One step was a candidate, and it stayed.
+
 ## 2.8.0
 
 **Edition v1.16 (the deletion edition).** The session layer loses its two Bash advisory gates,

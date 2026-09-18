@@ -13,7 +13,7 @@
 
 **How it differs from Spec Kit and BMAD.** They give the agent a process to follow. Setlist gives git a process to enforce. The specs are the same idea. The difference is where the discipline lives. Here it is tracked git hooks and a forge check, so it holds under any agent or none.
 
-**What it will not do.** It is a discipline control for cooperating use, not a security boundary. The Known limitations section lists forty places it stops, each with a date and a reason.
+**What it will not do.** It is a discipline control for cooperating use, not a security boundary. The Known limitations section lists forty-one places it stops, each with a date and a reason.
 
 ## Quickstart
 
@@ -24,14 +24,14 @@ Requires Claude Code 2.1.193 or later (the marketplace rename migration and the 
 /plugin install setlist@setlist
 ```
 
-Then open Claude Code in your project directory, set the session to Opus, and run the entry command that fits:
+Then open Claude Code in your project directory, set the session to the escalation tier of the model ladder, and run the entry command that fits:
 
 ```
-/model opus
+/model fable
 /setlist:new
 ```
 
-Session zero runs on **Opus**, not `opusplan`: it is pure architecture work, and you want full reasoning strength for the whole conversation. Day-to-day building afterward is where `/model opusplan` takes over, and day-to-day Git runs through the shipped `/setlist:checkpoint` command.
+Session zero runs on the **escalation tier** of the model ladder, not `opusplan`: it is pure architecture work, and you want full reasoning strength for the whole conversation. The edition's Part 2 holds the one table that says which model each tier is bound to, and it currently binds the escalation tier to `fable`, or to `best` where your organization has no Fable access. Day-to-day building afterward is where `/model opusplan` takes over, and day-to-day Git runs through the shipped `/setlist:checkpoint` command.
 
 One optional setting is worth making, and Setlist ships nothing for it: Claude Code's built-in **Concise** output style (Claude Code 2.1.237 or later). It shortens replies with no file to maintain, it keeps Claude Code's own engineering instructions, which a custom output style drops unless it asks to keep them, and it keeps error reports, security warnings and destructive-action confirmations in full.
 
@@ -174,7 +174,7 @@ Everything above works for one developer with one clone. Since 2.6.0 the same di
 - **The CODEOWNERS bridge.** The stamped `.github/CODEOWNERS` carries an `@OWNER` slot you fill and makes `.githooks/`, `.claude/`, `specs/attest/` and `.github/` reviewed changes; the audit and the check judge every spec's `Owns:` declarations against it, refusing a close that declares a file another owner's pattern claims. Boundary: *The CODEOWNERS bridge reads a subset of the file's grammar, and a pattern is a claim about paths.*
 - **Three gate tiers.** `gates.commit`, `gates.close` and `gates.push` in `.claude/sdd.json` name what runs at each layer (a lint at commit, the suite at the close, the full check at push); an absent block reads as today's single `gate_command`, and `/setlist:upgrade` writes exactly that. Boundary: *`git merge --ff-only` and `git merge --ff` skip the merge hooks*, so the close tier runs only on a real merge.
 - **The lite spec tier.** `Tier: lite` in a spec's header keeps the parts the gates read and drops the rest; a lite spec owns at most five files and is refused past that at every close as `SLH-LITE-OVERSIZED`; `/setlist:checkpoint` drafts its Closing report from the record and leaves the verdicts to you. Boundary: *The close audit's single-parent arm is as strong as your declarations.*
-- **The Stop hook.** The fifth session hook refuses to end a turn that leaves a spec or `specs/STATUS.md` change unstaged, once per turn, so a session cannot end with a record and a page that disagree. Boundary: *A session killed from outside fires no Stop, and the Stop hook is a nudge, never a lock.*
+- **The Stop hook.** One of the four session hooks: it refuses to end a turn that leaves a spec or `specs/STATUS.md` change unstaged, once per turn, so a session cannot end with a record and a page that disagree. Before the project has a repository, the state `/setlist:new` leaves until `/scaffold` creates one, it is silent. Boundary: *A session killed from outside fires no Stop, and the Stop hook is a nudge, never a lock.*
 
 ## Diagrams
 
@@ -197,6 +197,17 @@ The session layer is smaller since 2.8.0, and every piece that left is named wit
 - **The bypass deny, the session layer's one refusal.** `.claude/hooks/bypass-deny.sh` denies a command that would disarm the git hooks for its own run (`--no-verify`, `-c core.hooksPath`, an assignment of `SETLIST_SKIP_HOOKS=1`) and prints nothing for any other, and its reason is delivered to the agent. It answers that one question, reads no repository state, and its lexer is pinned, so a new spelling is a visible decision rather than a drift. Boundary: *The session layer's one hard deny is defeated by ordinary variable expansion, so read it as a nudge and never as a boundary.*
 - **The retired-hooks report, for an instance that upgrades.** `/setlist:upgrade` never deletes a file from your repository on its own authority. When an instance still carries the two retired gates, the refresh names both files and the `.claude/settings.json` entries that run them, and prints the exact edit that removes exactly those, which you run; a fork of either is reported and left alone. A new instance gets the deletion, and an existing one gets the report until you take it.
 - **Legibility ceilings for diagrams.** The `diagrams` skill holds a figure to twelve edges, 45 characters per arrow label, 400 characters of arrow-label text in all and no subgraph as an edge endpoint, beside the twelve-node bound, and sends a label that needs a clause into the prose under the figure. The container view below is drawn under them. Nothing mechanical reads these ceilings; the drawer holds them.
+
+## New in 2.9.0
+
+Four things you meet, and one place the framework got smaller. Each capability below is a bullet in this release's changelog entry, and each says where it stops.
+
+- **The advisory is delivered.** The scope hook's warning now reaches the agent: when a session writes feature code on the trunk, the agent reads the advice before the write lands, and it may still proceed, because advisories persuade and the git hooks refuse. Through 2.8.0 the hook carried its reason on fields Claude Code shows you and not the model on `allow`, so the warning reached nobody; it now rides `additionalContext`, measured delivered against a negative twin and a real deny control. Boundary: *The scope hook's warning reaches the agent, and the agent may proceed anyway: advisories persuade, hooks refuse.*
+- **The Stop hook is silent before the repository exists.** `/setlist:new` now ends without a refusal. A project root with no `.git` entry of any type is the state the bootstrap leaves until `/scaffold` creates the repository; every other case is judged exactly as before, so the next turn that leaves a spec unstaged is still refused. Boundary: *A session killed from outside fires no Stop, and the Stop hook is a nudge, never a lock.*
+- **`/setlist:upgrade` reports edition and binding drift by name.** The drift report reads your `CLAUDE.md`, `RUNBOOK.md`, `specs/TEMPLATE.md` and your own skills against the edition it is moving you to, and names every line that still claims an older edition, or that names a model-ladder tier beside a model the edition binds elsewhere, with the file, the line, the string found and the value the edition holds. It reports and never rewrites a word of your prose, and the migration chore does not close while a listed line stands. It exists because an instance upgraded two editions on could keep a `CLAUDE.md` header naming the old one: a stale version in prose is in no changelog delta, so no delta-driven rewrite reaches it.
+- **The escalation tier is named by its binding.** The Quickstart above and the bootstrap skill say which TIER session zero runs on and read the model from the edition's Part 2 table, which is the one place a model name lives. Three places naming a model is how they come to disagree.
+
+The framework also got smaller where it could: the three longest skills were read step by step against a single question, whether a step produces bytes or instructs a thinking shape, and every candidate cut was decided by running the skill with and without the step rather than by reading. One step was a candidate and it stayed, because the runs differed.
 
 ## Where the guarantee lives
 
@@ -241,7 +252,7 @@ Three of the four session hooks are not in the picture. The bypass deny is the o
 
 **The guarantee lives in the git hooks, not in your Claude Code session:** the session hooks carry no part of it (advisory in mechanism since 2026-08-04, the bypass deny's one refusal a nudge), and the push-time trunk audit is what stands between unreviewed work and a shared trunk. The list below is three kinds of thing: **design boundaries** are decisions with a date and a reason, **open limitations** are defects with a status, and **upstream conditions** are things this project does not control. Each bullet is a title and one sentence here, and its full text, with what to do and the history behind it, is in [LIMITATIONS.md](LIMITATIONS.md); **the counts live on the group headings below and nowhere else.**
 
-### Design boundaries (36)
+### Design boundaries (38)
 
 - **Git hooks are per-clone, and the tracked directory narrows that without closing it.** A fresh clone has the hooks but not the config that points at them, so it is unprotected until `refresh-instance.sh --apply` runs; the forge check is the layer that does not live in a clone. [Full text.](LIMITATIONS.md#per-clone-hooks)
 - **`--no-verify` skips git hooks**: A deliberate flag with an obvious name skips every git hook, the push-time audit included; the forge check has no such flag. [Full text.](LIMITATIONS.md#no-verify)
@@ -271,7 +282,7 @@ Three of the four session hooks are not in the picture. The bypass deny is the o
 - **The headless integrity chain is only as strong as where your signing key lives, and a key your build can reach is not custody.** A signature proves a key was used, not that a person decided; `forge` custody (2.6.0) has no key and rests on the forge's required review instead. [Full text.](LIMITATIONS.md#custody-key)
 - **The close audit's single-parent arm is as strong as your declarations, and a declaration is a claim, not a verified fact.** A close is audited file by file against its own `Owns:` lines, which travel in the commit they justify; the hooks verify coverage, not truth, and a spec that declares nothing closes under the older whole-commit exemption. [Full text.](LIMITATIONS.md#declarations-claim)
 - **The hashed range ends at the FIRST line reading `## Closing report`, fences included, and the ownership reader agrees with that cut.** A quoted copy of the template above your `Owns:` lines ends the signed range early and the declaration below it is refused as out of range; the refusal names the one-edit fix. [Full text.](LIMITATIONS.md#hashed-range-cut)
-- **A session killed from outside fires no Stop, and the Stop hook is a nudge, never a lock.** The Stop hook refuses to end a turn with an unstaged spec or `specs/STATUS.md` change, once; a session killed from outside fires nothing, and the git hooks are what refuse the work. [Full text.](LIMITATIONS.md#stop-hook)
+- **A session killed from outside fires no Stop, and the Stop hook is a nudge, never a lock.** The Stop hook refuses to end a turn with an unstaged spec or `specs/STATUS.md` change, once, in a project with its own repository; a session killed from outside fires nothing, and the git hooks are what refuse the work. [Full text.](LIMITATIONS.md#stop-hook)
 - **Merges crafted to evade the trunk audit can succeed, and the list of known routes is maintained rather than complete.** A chained merge and its octopus spelling hide unspecced work behind a compliant close; the checks that refused them broke `git pull` on a shared trunk and were removed, so the routes are documented, not defended. [Full text.](LIMITATIONS.md#crafted-merges)
 - **Sideways routes to the trunk.** `git cherry-pick` and a merge made on a detached HEAD bring spec work to the trunk with no merge hook seeing a close; for cooperating use the trunk audit catches both at push, the only layer that does, and `git pull <remote> spec/...` is refused at its merge. [Full text.](LIMITATIONS.md#sideways-routes)
 - **`git rebase` onto a spec branch brings that branch's commits to the trunk with no closing merge.** No merge, so no merge hook runs; the push is refused with a `VIOLATION` and the remote is untouched, unless composed with a compliant single-parent close that declares no ownership. [Full text.](LIMITATIONS.md#rebase-route)
@@ -279,15 +290,16 @@ Three of the four session hooks are not in the picture. The bypass deny is the o
 - **`git checkout <spec-branch> -- <path>` copies role-path files onto the trunk without any merge to read.** The pathspec checkout writes files straight into the working tree and the commit that follows is ordinary; refused at push, remote untouched, same qualification. [Full text.](LIMITATIONS.md#pathspec-checkout-route)
 - **The trunk audit cannot tell a merge that EDITS a file from ordinary conflict resolution.** The audit reports files a merge introduced that no parent carries; a merge that edits a file a parent already had reads as conflict resolution and is not flagged. [Full text.](LIMITATIONS.md#evil-merge-edit)
 - **The Bash escape hatch.** The scope hook watches the file-writing tools, so a write through Bash (`cat >`, `sed -i`) draws nothing, and a git command run through another interpreter is not one the bypass deny can read; the trunk audit is the designed catch. [Full text.](LIMITATIONS.md#bash-escape)
+- **The scope hook's warning reaches the agent, and the agent may proceed anyway: advisories persuade, hooks refuse.** Since 2.9.0 the scope hook's reason rides the field Claude Code delivers to the agent, and an agent may still judge the write harmless and proceed; the git hooks' refusals at commit, merge and push are what hold. [Full text.](LIMITATIONS.md#advisory-persuades)
+- **A relative write path is read against the project root, so the scope hook can miss a role-path write made from a subdirectory.** `a.txt` written from `src/` is read as a root file and draws no advisory; the push-time trunk audit refuses the committed role-path code. [Full text.](LIMITATIONS.md#relative-write-path)
 
 ### Open limitations (2)
 
 - **Completing a refused merge on the trunk side, as the hook's own message prescribes, is accepted at commit and refused at push.** Following the refusal text's own remedy writes the record on the trunk side, which `pre-commit` accepts and the push-time audit refuses; nothing unsafe reaches the remote. [Full text.](LIMITATIONS.md#merge-completion)
 - **Mermaid's inline edge-text form can refuse a close for a path nobody drew.** `a -- reads(src/gone.json) --> b` puts its text where a declaration's label goes, so the close reads a node nobody drew; the workaround is one edit, the pipe form `-->|"text"|` that every type reference teaches. [Full text.](LIMITATIONS.md#inline-edge-text)
 
-### Upstream conditions (2)
+### Upstream conditions (1)
 
-- **The scope hook's warnings do not reach the agent on current harnesses.** Claude Code drops a hook's reason when the decision is `allow`, and an advisory verdict always is, so the scope hook's verdict reaches nobody and the git hooks' refusals are the feedback you see; a sibling field on the same event is documented to carry context, and Setlist has not measured it. [Full text.](LIMITATIONS.md#advisory-not-rendered)
 - **A timed-out hook is a skipped gate.** Claude Code cancels a hook past its timeout and lets the tool call proceed; the stamped timeouts are 300 seconds since 2.6.0, and a gate command that fails only under the hook's non-interactive PATH is a false deny. [Full text.](LIMITATIONS.md#hook-timeout)
 
 ## Repository contents
@@ -320,9 +332,9 @@ The gates are the product, not ceremony: each one is a decision that stays yours
 
 ## What ships
 
-Setlist ships as an installable Claude Code plugin (`setlist`): seven slash commands (`new`, `retrofit`, `upgrade`, `checkpoint`, `validate`, `gate`, `journal`), five reference skills, and seven hooks stamped into every project it generates: three git hooks (a push-time trunk audit that carries the enforcement guarantee, plus two per-merge hooks that refuse early), the scope hook, which reports, the bypass deny, the session layer's one refusal, session re-grounding, and a Stop hook (2.6.0); beside them, a forge check that runs the same verification on every pull request where a team requires it. Since 2.7.0 the architecture diagrams are gate-checked source too (the Diagrams section above). The current edition of the framework document is **[setlist.md](setlist.md)** (edition v1.16, the deletion edition; the version lives inside the file); you do not need to read it to start. The plugin version and the edition version are separate counters: the plugin counts releases of the tooling, the edition counts revisions of the document.
+Setlist ships as an installable Claude Code plugin (`setlist`): seven slash commands (`new`, `retrofit`, `upgrade`, `checkpoint`, `validate`, `gate`, `journal`), five reference skills, and seven hooks stamped into every project it generates: three git hooks (a push-time trunk audit that carries the enforcement guarantee, plus two per-merge hooks that refuse early), the scope hook, which reports, the bypass deny, the session layer's one refusal, session re-grounding, and a Stop hook (2.6.0); beside them, a forge check that runs the same verification on every pull request where a team requires it. Since 2.7.0 the architecture diagrams are gate-checked source too (the Diagrams section above). The current edition of the framework document is **[setlist.md](setlist.md)** (edition v1.17, the delivery edition; the version lives inside the file); you do not need to read it to start. The plugin version and the edition version are separate counters: the plugin counts releases of the tooling, the edition counts revisions of the document.
 
-**Three numbers, and what each counts.** The edition version counts the protocol (`setlist.md`, v1.16 at this release; it moves when the document changes what a gate asks or what a close writes). The plugin version counts the binding (`.claude-plugin/plugin.json`, 2.8.0; it moves on every release of the tooling, edition turn or not). The plugin counter restarted at 1.0.0 when the plugin was renamed to `setlist`, so the releases numbered 1.6.0 through 1.8.0 that the edition's changelog names belong to the pre-rename plugin and a Setlist version below them is not a downgrade.
+**Three numbers, and what each counts.** The edition version counts the protocol (`setlist.md`, v1.17 at this release; it moves when the document changes what a gate asks or what a close writes). The plugin version counts the binding (`.claude-plugin/plugin.json`, 2.9.0; it moves on every release of the tooling, edition turn or not). The plugin counter restarted at 1.0.0 when the plugin was renamed to `setlist`, so the releases numbered 1.6.0 through 1.8.0 that the edition's changelog names belong to the pre-rename plugin and a Setlist version below them is not a downgrade.
 
 ## Where to start reading
 

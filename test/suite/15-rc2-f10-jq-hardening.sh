@@ -403,6 +403,14 @@ mkdir -p "$JCC/specs" "$JSC/specs"; printf '# inv\n' > "$JCC/specs/STATUS.md"; p
 
 jc_hook "$JC_QUIETJQ" "$HOOKS/scope-hook.sh" "$JSC" "$(edit_payload "$JSC/src/app.js")"
 expect_deny "0130 F6 c: the scope hook names SH-JQ-BROKEN under a quiet jq, not a config code" "SH-JQ-BROKEN"
+# The literal path (advise_literal, no jq to build JSON with) carries the same
+# channels as advise under design P (spec 0151): the reason in additionalContext,
+# no systemMessage. Read with the suite's working jq, not the stub.
+if printf '%s' "$HOOK_OUT" | jq -e '(.hookSpecificOutput.additionalContext // "" | contains("SH-JQ-BROKEN")) and (has("systemMessage") | not) and (.hookSpecificOutput.permissionDecisionReason // "" | contains("SH-JQ-BROKEN"))' >/dev/null 2>&1; then
+  ok "0151 P a: the scope hook's literal path carries the reason in additionalContext and permissionDecisionReason, no systemMessage"
+else
+  bad "0151 P a: the scope hook's literal path carries the reason in additionalContext and permissionDecisionReason, no systemMessage" "$(printf '%s' "$HOOK_OUT" | cut -c1-240)"
+fi
 jc_hook "$JC_QUIETJQ" "$HOOKS/regrounding-hook.sh" "$JCC" '{"source":"startup"}'
 expect_context "0130 F6 d: the regrounding hook still emits valid JSON carrying the jq warning under a quiet jq" "jq is not usable"
 

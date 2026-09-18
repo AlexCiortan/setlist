@@ -162,6 +162,23 @@ When the instance predates this plugin, also:
   wrong. The scope
   and close hooks read this field instead of assuming main. Note that hooks load at session start, so the
   gates bind from the NEXT session onward.
+- **Read the refresh's edition and binding drift report, and quote it.** The same
+  run prints, under the heading `edition and binding drift`, every line in this
+  instance's `CLAUDE.md`, `RUNBOOK.md`, `specs/TEMPLATE.md` and instance-owned
+  skills that names an edition other than the one you are moving to
+  (`SLH-EDITION-DRIFT`), or that names a model-ladder tier beside a model alias
+  the new edition's Part 2 binds to a different tier (`SLH-BINDING-DRIFT`), each
+  with its file, its line, the string found and the value the edition holds.
+  Quote the block to the human verbatim, the way section 0 quotes the skew check.
+  Then take the lines one at a time: a CURRENT-STATE sentence is rewritten to the
+  value named beside it, in this chore's own commits; a PROVENANCE citation (the
+  edition a field arrived in) is left as written and recorded as reconciled under
+  the umbrella ADR. The report changes no exit status and the script never edits
+  your prose, so nothing downstream catches what you skip here: **the migration
+  chore does not close while a listed line stands.** Re-run the report after the
+  rewrites and quote the clean run. This is the check that would have caught an
+  instance whose own `CLAUDE.md` header still named v1.6 after it had been
+  upgraded to v1.14, which is in no changelog delta and so in no rewrite list.
 - Refresh `specs/TEMPLATE.md` from the new edition:
   `bash "${CLAUDE_PLUGIN_ROOT}/scripts/part.sh" appendix-c` (the template body
   inside the fences). Existing specs are historical text and are not
@@ -198,7 +215,7 @@ When the instance predates this plugin, also:
   What is left for a person here is the VERIFICATION and the warning, not the
   install: confirm `git config core.hooksPath` reads `.githooks` and
   `git config merge.ff` reads `false` after the refresh (`/setlist:validate`
-  check 17 asserts exactly this), and warn the human that this is a BEHAVIOURAL
+  check 18 asserts exactly this), and warn the human that this is a BEHAVIOURAL
   change they will feel immediately, since merges that used to fast-forward now
   create merge commits. **Tell them about the squash too**: `merge.ff = false`
   implies `--no-ff`, and git refuses that with `--squash`, so

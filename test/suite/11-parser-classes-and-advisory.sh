@@ -256,7 +256,9 @@ for adv_gate in scope-hook; do
   adv_ver="$(printf '%s' "$adv_out" | jq -r '.setlistAdvisory.verdict // "MISSING"')"
   adv_gat="$(printf '%s' "$adv_out" | jq -r '.setlistAdvisory.gate // "MISSING"')"
   adv_rsn="$(printf '%s' "$adv_out" | jq -r '.setlistAdvisory.reason // "MISSING"')"
-  adv_sys="$(printf '%s' "$adv_out" | jq -r '.systemMessage // "MISSING"')"
+  adv_sys="$(printf '%s' "$adv_out" | jq -r 'if has("systemMessage") then "PRESENT" else "ABSENT" end')"
+  adv_ctx="$(printf '%s' "$adv_out" | jq -r '.hookSpecificOutput.additionalContext // "MISSING"')"
+  adv_pdr="$(printf '%s' "$adv_out" | jq -r '.hookSpecificOutput.permissionDecisionReason // "MISSING"')"
   [[ "$adv_dec" == "allow" ]] || ADV_BAD="$ADV_BAD
     $adv_gate still holds a veto: permissionDecision=$adv_dec"
   [[ "$adv_ver" == "deny" ]]  || ADV_BAD="$ADV_BAD
@@ -265,13 +267,25 @@ for adv_gate in scope-hook; do
     $adv_gate names no gate in setlistAdvisory"
   [[ "$adv_rsn" != "MISSING" && -n "$adv_rsn" ]] || ADV_BAD="$ADV_BAD
     $adv_gate carries no reason in setlistAdvisory"
-  [[ "$adv_sys" != "MISSING" && -n "$adv_sys" ]] || ADV_BAD="$ADV_BAD
-    $adv_gate emits no systemMessage, so the session is told nothing"
+  # DESIGN P (spec 0151, measured PreToolUse additionalContext SEEN at CLI
+  # 2.1.274): the reason reaches the MODEL through additionalContext, carrying
+  # its code; systemMessage, measured not reaching the model, is gone from the
+  # allow path; permissionDecisionReason, documented as shown to the user on
+  # allow, is kept (the owner's ruling E-3 of 2026-09-17).
+  case "$adv_ctx" in
+    *SH-TRUNK-WRITE*) ;;
+    *) ADV_BAD="$ADV_BAD
+    $adv_gate carries no additionalContext naming its code, so the agent is told nothing: $adv_ctx" ;;
+  esac
+  [[ "$adv_sys" == "ABSENT" ]] || ADV_BAD="$ADV_BAD
+    $adv_gate still emits systemMessage on the allow path, a channel measured not reaching the model"
+  [[ "$adv_pdr" != "MISSING" && -n "$adv_pdr" ]] || ADV_BAD="$ADV_BAD
+    $adv_gate dropped permissionDecisionReason, which ruling E-3 keeps for the user's view"
 done
 if [[ -z "$ADV_BAD" ]]; then
-  ok "advisory a: the scope hook ALLOWS while reporting its verdict, reason and systemMessage"
+  ok "advisory a: the scope hook ALLOWS while reporting its verdict and reason, the reason in additionalContext and permissionDecisionReason, no systemMessage"
 else
-  bad "advisory a: the scope hook ALLOWS while reporting its verdict, reason and systemMessage" \
+  bad "advisory a: the scope hook ALLOWS while reporting its verdict and reason, the reason in additionalContext and permissionDecisionReason, no systemMessage" \
       "the advisory contract is broken:$ADV_BAD"
 fi
 
@@ -332,7 +346,9 @@ ROLE_SHAPES='{"roles":{"src":"src","tests":"tests"}}
 {"roles":{"src":["packages/app","packages/lib"],"tests":"tests"}}
 {"roles":{}}
 {}
-{"roles":{"src":"src","tests":"tests","docs":"docs"}}'
+{"roles":{"src":"src","tests":"tests","docs":"docs"}}
+{"roles":{"src":{"path":"src"}}}
+{"roles":{"src":null,"tests":[]}}'
 # ANCHORED ON THE EXTRACTION, not on the first jq line mentioning .roles. Both
 # of these files now ALSO carry a shape check that mentions .roles and returns
 # "ok", and a first-match grep found that one and compared an "ok" against a
@@ -375,6 +391,33 @@ if [[ -n "$ROLE_JQ_LIB" && -n "$ROLE_JQ_AUD" && -n "$ROLE_JQ_SCP" ]]; then
 else
   bad "roles a: the three .roles readers agree on every role shape, and a list flattens" \
       "could not extract all three jq expressions, so this assertion checked nothing"
+fi
+
+# F10 of the 2.9.0 leg (spec 0154, fix round 1, ruled by the validator
+# 2026-09-18): the three expressions agree on a roles object whose values yield no
+# string (all read EMPTY, asserted in roles a above), and they DISAGREED on what
+# to do with that empty result: the trunk audit dies loudly, the hook library
+# returns nothing and its callers stand down, and the scope hook fell through its
+# loop to a silent exit. The expressions do not change; the scope hook's
+# disposition does, under the code it already had for an unreadable roles value.
+RB="$WORK/roles-empty"; rm -rf "$RB"; mkdir -p "$RB/src" "$RB/.claude"; git_init "$RB"
+git -C "$RB" commit -q --allow-empty -m seed >/dev/null 2>&1; git -C "$RB" branch -M main
+RB_BAD=""
+for rb_roles in '{"src":{"path":"src"}}' '{"src":null}' '{"src":[]}' '{"src":123}'; do
+  printf '{"trunk":"main","scaffolded":true,"roles":%s}' "$rb_roles" > "$RB/.claude/sdd.json"
+  rb_out="$(jq -nc --arg p "$RB/src/b.py" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"}}' \
+           | CLAUDE_PROJECT_DIR="$RB" bash "$HOOKS/scope-hook.sh" 2>/dev/null)"
+  printf '%s' "$rb_out" | jq -e '.setlistAdvisory.code == "SH-ROLES-SHAPE"' >/dev/null 2>&1 \
+    || RB_BAD="$RB_BAD $rb_roles->[$(printf '%s' "$rb_out" | cut -c1-60)]"
+done
+printf '{"trunk":"main","scaffolded":true,"roles":{"src":"src"}}' > "$RB/.claude/sdd.json"
+rb_ctl="$(jq -nc --arg p "$RB/src/b.py" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"}}' \
+         | CLAUDE_PROJECT_DIR="$RB" bash "$HOOKS/scope-hook.sh" 2>/dev/null | jq -r '.setlistAdvisory.code // empty' 2>/dev/null)"
+if [[ -z "$RB_BAD" && "$rb_ctl" == "SH-TRUNK-WRITE" ]]; then
+  ok "roles b: a roles object whose values yield no string advises SH-ROLES-SHAPE on a trunk write, never silence (a string role still reads SH-TRUNK-WRITE)"
+else
+  bad "roles b: a roles object whose values yield no string advises SH-ROLES-SHAPE on a trunk write, never silence" \
+      "silent or wrong for:$RB_BAD; control read [$rb_ctl]"
 fi
 
 # THE TWO DOCUMENTED TRADE-OFFS FROM THE 1.1.0 LEG'S SECOND RUN. The first, the
@@ -1126,3 +1169,83 @@ else
       "pre-commit has [$GHOOK_STATES] and the edition has [$CANON_STATES]"
 fi
 
+
+# ===========================================================================
+# THE SCOPE HOOK'S PATH PREDICATE, ENUMERATED BEFORE ITS ADVISORY GOES LOUD
+# (spec 0151, specs/0149-v2.9.0-intake.md section 2).
+#
+# Design P makes the scope hook's warning reach the agent, and a defective
+# verdict made visible is loud wrongness. Two misses of this exact predicate
+# were already on the public list (case variance, a symlinked leaf), and two is
+# the count someone went looking for. So the nine cases 0149 names are asserted
+# here, one each, the CORRECT verdict asserted first and watched red on the
+# shipped hook. A case that went red is a MISS, and it is PINNED BELOW IN ITS
+# OBSERVED DIRECTION with a comment naming it, so this region stays green while
+# the miss stands and turns red the day the predicate changes, which is when its
+# public bullet must change with it. Fixing a miss is NOT this spec's: the
+# predicate is the owner's (0149, the DE8 boundary).
+# ===========================================================================
+# >>> SHARD-BEGIN scope-predicate-0151 cost=2
+if shard_region scope-predicate-0151; then
+
+SPE="$WORK/scope-predicate-0151"
+rm -rf "$SPE"; mkdir -p "$SPE/src" "$SPE/docs" "$SPE/.claude"
+git -C "$SPE" init -q
+git -C "$SPE" config user.email t@example.invalid
+git -C "$SPE" config user.name T
+git -C "$SPE" config commit.gpgsign false
+printf '{"trunk":"main","scaffolded":true,"roles":{"src":"src","tests":"tests"}}\n' > "$SPE/.claude/sdd.json"
+printf 'x\n' > "$SPE/src/a.txt"
+git -C "$SPE" add -A >/dev/null; git -C "$SPE" commit -qm seed >/dev/null; git -C "$SPE" branch -M main
+ln -s ../src/a.txt "$SPE/docs/link.txt"
+ln -s src "$SPE/lib"
+spe_verdict() { # spe_verdict <file_path> [working directory] -> deny | allow
+  local out
+  out="$(jq -nc --arg f "$1" '{tool_name:"Write",tool_input:{file_path:$f,content:"x"}}' \
+         | (cd "${2:-$SPE}" && CLAUDE_PROJECT_DIR="$SPE" bash "$HOOKS/scope-hook.sh" 2>/dev/null))"
+  if [[ "$(printf '%s' "$out" | jq -r '.setlistAdvisory.verdict // empty' 2>/dev/null)" == "deny" ]]; then printf deny; else printf allow; fi
+}
+spe_case() { # spe_case <label> <want> <got>
+  if [[ "$3" == "$2" ]]; then ok "scope predicate $1: $2"; else bad "scope predicate $1: wanted $2" "got $3"; fi
+}
+
+# The control: the predicate is live in both directions on this fixture.
+spe_case "control, a role-path write on the trunk" deny "$(spe_verdict "$SPE/src/new.txt")"
+spe_case "control, a docs write on the trunk" allow "$(spe_verdict "$SPE/docs/x.md")"
+
+# 1. Case variance of a role path, where the filesystem folds case.
+if [[ -e "$SPE/SRC/a.txt" ]]; then
+  # MISS, pinned allow (watched red wanting deny, spec 0151). Disclosed: the
+  # public bullet anchored case-spelling. The guarantee layer holds at push.
+  spe_case "1, SRC/a.txt against roles.src \"src\" on a case-insensitive filesystem (MISS, pinned; bullet case-spelling)" allow "$(spe_verdict "$SPE/SRC/a.txt")"
+else
+  spe_case "1, SRC/a.txt against roles.src \"src\" on a case-SENSITIVE filesystem (a different directory)" allow "$(spe_verdict "$SPE/SRC/a.txt")"
+fi
+# 2. A symlinked leaf whose target is a role-path file.
+# MISS, pinned allow (watched red wanting deny). Disclosed in the case-spelling
+# bullet's history: canon_rel resolves the directory and re-attaches the leaf.
+spe_case "2, a symlinked leaf docs/link.txt -> src/a.txt (MISS, pinned; bullet case-spelling)" allow "$(spe_verdict "$SPE/docs/link.txt")"
+# 3. A symlinked role directory.
+spe_case "3, a symlinked role directory lib -> src" deny "$(spe_verdict "$SPE/lib/a.txt")"
+# 4. A path git would have to quote: a space, a double quote, a backslash.
+spe_case "4, a path git quotes (space, quote, backslash)" deny "$(spe_verdict "$SPE/src/a b\"c\\d.txt")"
+# 5. A byte outside ASCII.
+spe_case "5, a non-ASCII name under src" deny "$(spe_verdict "$SPE/src/$(printf '\303\251').txt")"
+# 6. Dot segments that resolve into a role path.
+spe_case "6, docs/../src/a.txt" deny "$(spe_verdict "$SPE/docs/../src/a.txt")"
+# 7. A trailing slash on the role path as recorded.
+cp "$SPE/.claude/sdd.json" "$SPE/sdd.saved"
+printf '{"trunk":"main","scaffolded":true,"roles":{"src":"src/","tests":"tests"}}\n' > "$SPE/.claude/sdd.json"
+spe_case "7, roles.src recorded as \"src/\"" deny "$(spe_verdict "$SPE/src/a.txt")"
+cp "$SPE/sdd.saved" "$SPE/.claude/sdd.json"
+# 8. A relative file_path resolved from a subdirectory working directory.
+# MISS, pinned allow (watched red wanting deny; NEW at spec 0151). canon_rel
+# resolves a relative path against the project root, never the working
+# directory, so a.txt written from src reads as a root file. Disclosed by the
+# public bullet anchored relative-write-path, in the release that makes the
+# advisory loud.
+spe_case "8, a relative a.txt written from the src working directory (MISS, pinned; bullet relative-write-path)" allow "$(spe_verdict a.txt "$SPE/src")"
+# 9. The false-positive direction: a docs path beginning with a role path's letters.
+spe_case "9, srcnotes.md against src stays silent" allow "$(spe_verdict "$SPE/srcnotes.md")"
+
+fi; shard_region_end

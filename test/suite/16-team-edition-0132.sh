@@ -1032,9 +1032,9 @@ else
   bad "codeowners template (amendment 5): STAMP-TREE's row names the fourth path" "the row does not mention /.github/"
 fi
 if grep -q 'fourth protected path' "$ROOT/skills/validate/SKILL.md" && grep -q 'fourth protected path' "$SCRIPTS/refresh-instance.sh"; then
-  ok "codeowners (amendment 5): the validate skill's check 20 and the refresh's report both know the fourth path by name"
+  ok "codeowners (amendment 5): the validate skill's check 21 and the refresh's report both know the fourth path by name"
 else
-  bad "codeowners (amendment 5): the validate skill's check 20 and the refresh's report both know the fourth path by name" "the phrase 'fourth protected path' is absent from one of them"
+  bad "codeowners (amendment 5): the validate skill's check 21 and the refresh's report both know the fourth path by name" "the phrase 'fourth protected path' is absent from one of them"
 fi
 # An instance stamped between T1 and this amendment carries the three-path
 # file with its slot filled. Ruling 2 leaves it alone; this amendment makes
@@ -1401,6 +1401,22 @@ fi
 git -C "$SHD" add specs/0001-thing.md
 printf '# new\n' > "$SHD/specs/0002-new.md"
 sh_run "$SHD" "$SH_STOP_OFF";                                        sh_case "an UNTRACKED spec is unstaged too" SP-UNSTAGED-SPEC
+# F8 of the 2.9.0 leg (spec 0154, fix round 1, ruled by the validator 2026-09-18):
+# an untracked file under specs/ that is not Markdown is no spec record. Finder
+# writes .DS_Store into any folder it opens, and an editor leaves swap files; the
+# hook used to refuse every turn on them with two remedies that fail on a file
+# git never tracked. The untracked Markdown spec above still refuses, and its
+# refusal now carries the remedy that works for a file git has never seen.
+if printf '%s' "$SH_OUT" | jq -e '.setlistAdvisory.reason | test("never tracked") and test("git add specs/0002-new.md")' >/dev/null 2>&1; then
+  ok "stop hook: an untracked spec's refusal gives the remedy for a file git never tracked"
+else
+  bad "stop hook: an untracked spec's refusal gives the remedy for a file git never tracked" "$(printf '%s' "$SH_OUT" | cut -c1-240)"
+fi
+rm -f "$SHD/specs/0002-new.md"
+printf '\0\0' > "$SHD/specs/.DS_Store"; printf 'x' > "$SHD/specs/.0001-thing.md.swp"
+sh_run "$SHD" "$SH_STOP_OFF";                                        sh_case "an untracked file under specs/ that is not Markdown (.DS_Store, a swap file) is not the spec record" allow
+rm -f "$SHD/specs/.DS_Store" "$SHD/specs/.0001-thing.md.swp"
+printf '# new\n' > "$SHD/specs/0002-new.md"
 rm -f "$SHD/specs/0002-new.md"
 printf 'more\n' >> "$SHD/specs/STATUS.md"; printf 'more\n' >> "$SHD/specs/0001-thing.md"
 sh_run "$SHD" "$SH_STOP_OFF";                                        sh_case "both changed: the inventory's code wins and the spec is named" SP-UNSTAGED-STATUS
@@ -1414,8 +1430,34 @@ printf 'y\n' >> "$SHD/src/app.js"
 sh_run "$SHD" "$SH_STOP_OFF";                                        sh_case "a change OUTSIDE specs/ is not this hook's question" allow
 SHN="$WORK/stop-notinst"; rm -rf "$SHN"; mkdir -p "$SHN/specs"; git_init "$SHN"; printf 'x\n' > "$SHN/specs/STATUS.md"
 sh_run "$SHN" "$SH_STOP_OFF";                                        sh_case "not an instance (no sdd.json): none of this hook's business" allow
-SHG="$WORK/stop-nogit"; rm -rf "$SHG"; mkdir -p "$SHG/.claude" "$SHG/specs"; printf '{}' > "$SHG/.claude/sdd.json"
-sh_run "$SHG" "$SH_STOP_OFF";                                        sh_case "no git work tree: refused by name, never a pass on silence" SP-NO-GIT
+# DE11 (spec 0150, the owner's ruling 1 of 2026-09-16 and E-1 of 2026-09-17):
+# silent when the root has no .git ENTRY of any type, which is the state
+# /setlist:new leaves (the stamp's skip-norepo), and in no other case. Every
+# fixture carries an untracked spec, so silence and refusal are told apart.
+SHG="$WORK/stop-nogit"; rm -rf "$SHG"; mkdir -p "$SHG/.claude" "$SHG/specs"; printf '{}' > "$SHG/.claude/sdd.json"; printf '# s\n' > "$SHG/specs/0001.md"
+sh_run "$SHG" "$SH_STOP_OFF";                                        sh_case "DE11: no repository at the root (/setlist:new's end state) ends the turn in silence" allow
+# E-1: an instance below an enclosing repository's top (the stamp's skip-subdir,
+# NOT ARMED by its own loud decision) has no .git at its root and is silent too,
+# the literal consequence the owner accepted and the Stop bullet names.
+SHE="$WORK/stop-enclosing"; rm -rf "$SHE"; git_init "$SHE"; mkdir -p "$SHE/app/.claude" "$SHE/app/specs"; printf '{}' > "$SHE/app/.claude/sdd.json"; printf '# s\n' > "$SHE/app/specs/0001.md"
+sh_run "$SHE/app" "$SH_STOP_OFF";                                    sh_case "DE11 E-1: an instance below an enclosing repository's top (skip-subdir) is silent" allow
+# The ENTRY reading keeps every other layout judged exactly as before.
+SHL="$WORK/stop-linked"; sh_fixture "$SHL"; rm -rf "$SHL-wt"; git -C "$SHL" worktree add -q -b wt "$SHL-wt" >/dev/null 2>&1; printf '# new\n' > "$SHL-wt/specs/0009-new.md"
+if [[ -f "$SHL-wt/.git" ]]; then
+  sh_run "$SHL-wt" "$SH_STOP_OFF";                                   sh_case "DE11: a linked worktree (.git is a FILE) is still refused on an unstaged spec" SP-UNSTAGED-SPEC
+else
+  bad "stop hook fixture: the linked worktree carries a .git file" "no .git file at $SHL-wt"
+fi
+SHC="$WORK/stop-corrupt"; rm -rf "$SHC"; mkdir -p "$SHC/.claude" "$SHC/specs" "$SHC/.git"; printf '{}' > "$SHC/.claude/sdd.json"; printf '# s\n' > "$SHC/specs/0001.md"; printf 'garbage\n' > "$SHC/.git/HEAD"
+sh_run "$SHC" "$SH_STOP_OFF";                                        sh_case "DE11: a corrupt .git directory is still refused by name" SP-NO-GIT
+SHS="$WORK/stop-dangling"; rm -rf "$SHS"; mkdir -p "$SHS/.claude" "$SHS/specs"; printf '{}' > "$SHS/.claude/sdd.json"; printf '# s\n' > "$SHS/specs/0001.md"; ln -s "$WORK/stop-no-such-gitdir" "$SHS/.git"
+sh_run "$SHS" "$SH_STOP_OFF";                                        sh_case "DE11: a dangling .git symlink is an entry (the -L half) and is still refused" SP-NO-GIT
+SHH="$WORK/stop-hookspath"; sh_fixture "$SHH"; git -C "$SHH" config --unset core.hooksPath >/dev/null 2>&1; printf '# new\n' > "$SHH/specs/0009-new.md"
+if [[ -z "$(git -C "$SHH" config core.hooksPath 2>/dev/null)" ]]; then
+  sh_run "$SHH" "$SH_STOP_OFF";                                      sh_case "DE11: an armed-later repository with core.hooksPath unset is still refused" SP-UNSTAGED-SPEC
+else
+  bad "stop hook fixture: core.hooksPath is unset" "reads $(git -C "$SHH" config core.hooksPath)"
+fi
 # jq is not load-bearing: the decision and the verdict survive a jq that
 # exits 0 printing nothing, and the state is REPORTED ahead of the refusal.
 SH_NOJQ="$WORK/stop-nojq-bin"; sh_nojq_bin "$SH_NOJQ"

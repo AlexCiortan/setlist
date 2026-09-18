@@ -13,10 +13,11 @@ edition wins. Never fork the protocol.
 
 - Output contract for your FIRST message: it opens with the model expectation,
   before any question or observation. Session zero is architecture work and
-  should run on the escalation tier of the model ladder (Part 2; `/model opus`
-  under the current bindings), not `opusplan`. Say so; do not assume the user
-  read the README, and do not let environment friction displace the line (a
-  cold run has skipped it exactly that way). Continue either way.
+  should run on the escalation tier of the model ladder (Part 2; `/model fable`
+  under the current bindings, or `/model best` where the organization has no
+  Fable access). It is not the day-to-day `opusplan` default. Say so; do not
+  assume the user read the README, and do not let environment friction displace
+  the line (a cold run has skipped it exactly that way). Continue either way.
 - Greenfield guard: if the current directory is not empty and not a git
   repository, stop and ask before touching anything. An existing codebase
   belongs to /setlist:retrofit instead.

@@ -1,0 +1,28 @@
+{
+  "type": "result",
+  "subtype": "error_max_turns",
+  "is_error": true,
+  "num_turns": 2,
+  "stop_reason": "tool_use",
+  "result": null,
+  "usage": {
+    "input_tokens": 2,
+    "output_tokens": 139,
+    "cache_read_input_tokens": 43173,
+    "cache_creation_input_tokens": 1682
+  },
+  "modelUsage": {
+    "claude-haiku-4-5-20251001": {
+      "inputTokens": 917,
+      "outputTokens": 12,
+      "cacheReadInputTokens": 0,
+      "cacheCreationInputTokens": 0
+    },
+    "claude-sonnet-5": {
+      "inputTokens": 2,
+      "outputTokens": 139,
+      "cacheReadInputTokens": 43173,
+      "cacheCreationInputTokens": 1682
+    }
+  }
+}

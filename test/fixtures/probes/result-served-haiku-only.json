@@ -1,0 +1,22 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 1,
+  "stop_reason": "end_turn",
+  "result": "[]",
+  "usage": {
+    "input_tokens": 20,
+    "output_tokens": 58159,
+    "cache_read_input_tokens": 57444,
+    "cache_creation_input_tokens": 21989
+  },
+  "modelUsage": {
+    "claude-haiku-4-5-20251001": {
+      "inputTokens": 20,
+      "outputTokens": 58159,
+      "cacheReadInputTokens": 57444,
+      "cacheCreationInputTokens": 21989
+    }
+  }
+}

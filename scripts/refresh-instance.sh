@@ -669,6 +669,228 @@ fi
 if [[ -n "$WIRING_GAPS" ]]; then
   printf 'settings wiring, NOT refreshed by this script (it holds your own permissions and model settings):%s\n' "$WIRING_GAPS"
 fi
+# THE EDITION AND BINDING DRIFT REPORT (spec 0153, SKEW part B; spec 0149
+# section 5 and the owner's ruling 6 of 2026-09-17, which put it here rather
+# than in a new file). Printed in report mode and under --apply alike, and like
+# the retired-hooks report below it changes NO exit status.
+#
+# THE CLASS, MEASURED THREE TIMES BEFORE THIS ARM EXISTED. An instance ran four
+# plugin versions and four editions behind its stamp with nothing surfacing it.
+# An instance upgraded to v1.14 kept a CLAUDE.md header naming v1.6, because the
+# CLAUDE.md rewrite is delta-driven and a stale edition string in phase-2 prose
+# is in no delta. And this plugin's own `new` skill told session zero to run
+# `/model opus` on the escalation tier while Part 2's bindings table bound that
+# tier to `fable`. Text that names a version or a model is a SECOND COPY of
+# something setlist.md already holds, and a second copy drifts.
+#
+# ONE VALUE, READ, NEVER COPIED. The new edition is read from the committed
+# setlist.md at this plugin's root, and the bindings from Part 2's table in the
+# same file, by the tier name in column 1 and the backticked aliases in column
+# 2. Nothing here holds an edition string or a model alias: a check that held
+# either would be this drift class itself, one layer down, and the suite asserts
+# the absence over these bytes rather than trusting the sentence.
+#
+# THE FAMILY NAMES IN THE BINDING CELLS ARE NOT THE VOCABULARY, and that is a
+# measured decision rather than a simplification: the escalation cell names Opus
+# twice in prose about what Fable sits above, so reading family names would put
+# `opus` in the escalation set and make the exact drift this arm was built to
+# catch invisible to it. Backticked aliases only.
+#
+# WHAT IT READS: the instance's CLAUDE.md, RUNBOOK.md, specs/TEMPLATE.md and
+# every markdown file under .claude/skills/. History is excluded by RULE, not by
+# judgement: ADRs, journal/ and closed specs are not in the set at all, and
+# inside the set a fenced code block or a blockquote is not compared, with the
+# number of lines skipped for that reason PRINTED rather than dropped.
+#
+# THE WINDOW FOR A BINDING CLAIM IS THE SENTENCE, cut at ". " inside a paragraph
+# whose wrapped lines are joined first, because these files wrap prose at their
+# own width and a line-sized window splits "the escalation tier ... /model opus"
+# in half. A sentence naming MORE THAN ONE tier restates Part 2's table rather
+# than claiming one tier's binding, so it is not compared; it is printed with
+# its file and line, on the same rule as every other thing this project skips.
+#
+# IT NEVER WRITES AND NEVER EDITS. Rewriting text in someone's repository is
+# their act, on the same precedent as the retired-hooks report. What holds the
+# migration chore open is the upgrade skill's step, which quotes this output.
+EDITION_SRC="$ROOT/setlist.md"
+DRIFT_ED=""
+DRIFT_BIND=""
+if [[ -f "$EDITION_SRC" ]]; then
+  DRIFT_ED="$(grep -oE '^\*\*Edition v[0-9]+\.[0-9]+' "$EDITION_SRC" | head -n1 | grep -oE 'v[0-9]+\.[0-9]+' || true)" # fail-open-ok: an edition header this grep cannot find yields the empty string, and the guard below runs the whole report only when BOTH the edition and the bindings were read, so an unreadable edition reports nothing rather than comparing against nothing
+  DRIFT_BIND="$(awk -F'|' '
+    /^\| Tier \| Binding \|/ { f = 1; next }
+    f && /^\|[[:space:]]*---/ { next }
+    f && /^\|/ {
+      t = $2
+      gsub(/^[ \t]+|[ \t]+$/, "", t)
+      n = split($3, p, "`")
+      printf "%s:", tolower(t)
+      for (i = 2; i <= n; i += 2) printf " %s", p[i]
+      printf ";"
+    }
+    f && !/^\|/ { f = 0 }
+  ' "$EDITION_SRC")"
+fi
+DRIFT_SET=()
+for f in CLAUDE.md RUNBOOK.md specs/TEMPLATE.md; do
+  [[ -f "$INSTANCE/$f" ]] && DRIFT_SET[${#DRIFT_SET[@]}]="$INSTANCE/$f"
+done
+if [[ -d "$INSTANCE/.claude/skills" ]]; then
+  while IFS= read -r f; do
+    [[ -n "$f" ]] && DRIFT_SET[${#DRIFT_SET[@]}]="$f"
+  done <<EOF
+$(find "$INSTANCE/.claude/skills" -type f -name '*.md' 2>/dev/null | sort)
+EOF
+fi
+if [[ -n "$DRIFT_ED" && -n "$DRIFT_BIND" && "${#DRIFT_SET[@]}" -gt 0 ]]; then
+  DRIFT_RAW="$(awk -v NEWED="$DRIFT_ED" -v BIND="$DRIFT_BIND" '
+BEGIN {
+  nb = split(BIND, rows, ";")
+  for (i = 1; i <= nb; i++) {
+    if (rows[i] == "") continue
+    p = index(rows[i], ":")
+    t = substr(rows[i], 1, p - 1)
+    al = substr(rows[i], p + 1)
+    tierset[t] = " " al " "
+    na = split(al, aa, " ")
+    for (j = 1; j <= na; j++) if (aa[j] != "") vocab[aa[j]] = 1
+  }
+  ntier = split("planning execution escalation", TIERS, " ")
+  skipped = 0; np = 0
+}
+function paraline(pat,   a) {
+  for (a = 1; a <= np; a++) if (index(tolower(ptext[a]), pat) > 0) return pline[a]
+  return pline[1]
+}
+function flushpara(   i, J, ns, s, low, k, tname, seen, cand, nc, c, tok, ln, rest) {
+  if (np == 0) return
+  J = ""
+  for (i = 1; i <= np; i++) J = (J == "" ? ptext[i] : J " " ptext[i])
+  gsub(/\. /, "\001", J)
+  ns = split(J, SENT, "\001")
+  for (s = 1; s <= ns; s++) {
+    low = tolower(SENT[s])
+    tname = ""; seen = 0
+    for (k = 1; k <= ntier; k++)
+      if (index(low, TIERS[k] " tier") > 0) { seen++; if (tname == "") tname = TIERS[k] }
+    if (seen == 0) continue
+    if (seen > 1) { printf "M\t%s\t%d\n", pfile, paraline(tname " tier"); continue }
+    cand = ""
+    rest = low
+    while (match(rest, /`[^`]*`/)) {
+      cand = cand " " substr(rest, RSTART + 1, RLENGTH - 2)
+      rest = substr(rest, RSTART + RLENGTH)
+    }
+    rest = low
+    while (match(rest, /\/model[ \t]+[a-z0-9_.-]+/)) {
+      c = substr(rest, RSTART, RLENGTH)
+      sub(/^\/model[ \t]+/, "", c)
+      cand = cand " " c
+      rest = substr(rest, RSTART + RLENGTH)
+    }
+    gsub(/\/model/, " ", cand)
+    nc = split(cand, CW, /[^a-z0-9_.-]+/)
+    for (c = 1; c <= nc; c++) {
+      tok = CW[c]
+      if (tok == "" || !(tok in vocab)) continue
+      if (index(tierset[tname], " " tok " ") > 0) continue
+      ln = paraline(tok)
+      if ((pfile SUBSEP ln SUBSEP tok) in reported) continue
+      reported[pfile SUBSEP ln SUBSEP tok] = 1
+      printf "B\t%s\t%d\t%s\t%s\n", pfile, ln, tok, tname
+    }
+  }
+  np = 0
+}
+# A FENCE, read the way CommonMark reads one (spec 0154, fix round 1; findings
+# F5 and F7 of the 2.9.0 leg): up to three spaces, then a run of at least three backticks or
+# tildes. It closes only on the SAME character at a run at least as long, with
+# nothing after it. Four spaces or a tab before the marker make it text, not a
+# delimiter. A fence still open at the end of a file is a GAP, reported by file
+# and line, never a clean read.
+function fencerun(s,   i, n, c) {
+  i = 1
+  while (substr(s, i, 1) == " ") i++
+  if (i > 4) return 0
+  c = substr(s, i, 1)
+  if (c != "`" && c != "~") return 0
+  n = 0
+  while (substr(s, i + n, 1) == c) n++
+  if (n < 3) return 0
+  FR_CHAR = c; FR_LEN = n; FR_REST = substr(s, i + n)
+  return 1
+}
+function fencegap() {
+  if (infence) printf "U\t%s\t%d\n", pfile, fstart
+  infence = 0
+}
+FNR == 1 { flushpara(); fencegap(); pfile = FILENAME }
+{
+  line = $0
+  if (infence) {
+    if (fencerun(line) && FR_CHAR == fchar && FR_LEN >= flen && FR_REST ~ /^[[:space:]]*$/) infence = 0
+    skipped++; next
+  }
+  if (fencerun(line) && !(FR_CHAR == "`" && index(FR_REST, "`") > 0)) {
+    flushpara(); infence = 1; fchar = FR_CHAR; flen = FR_LEN; fstart = FNR; skipped++; next
+  }
+  if (line ~ /^[[:space:]]*>/) { flushpara(); skipped++; next }
+  if (line ~ /^[[:space:]]*$/) { flushpara(); next }
+  low = tolower(line); off = 0
+  while (match(low, /edition v[0-9]+\.[0-9]+/)) {
+    ver = substr(low, RSTART, RLENGTH); ver = substr(ver, index(ver, "v"))
+    if (ver != tolower(NEWED))
+      printf "E\t%s\t%d\t%s\n", FILENAME, FNR, substr(line, off + RSTART, RLENGTH)
+    off = off + RSTART + RLENGTH - 1
+    low = substr(low, RSTART + RLENGTH)
+  }
+  np++; ptext[np] = line; pline[np] = FNR
+}
+END { flushpara(); fencegap(); printf "S\t%d\n", skipped }
+' "${DRIFT_SET[@]}")"
+  DRIFT_FINDINGS="$(printf '%s\n' "$DRIFT_RAW" | grep -E '^(E|B)	' || true)" # fail-open-ok: grep exits 1 when the awk pass found no drift, which is the CLEAN case and the only case this discards; the block below prints nothing for an empty value, which is what a clean instance should see
+  if [[ -n "$DRIFT_FINDINGS" ]]; then
+    printf 'edition and binding drift, REPORTED and never rewritten by this script (the words are yours):\n'
+    printf '  the edition this refresh moves you to is %s, and Part 2 binds the tiers as: %s\n' \
+      "$DRIFT_ED" "$(printf '%s' "$DRIFT_BIND" | sed -e 's/;$//' -e 's/;/; /g')"
+    printf '%s\n' "$DRIFT_FINDINGS" | while IFS="$(printf '\t')" read -r kind file line found tier; do
+      rel="${file#$INSTANCE/}"
+      case "$kind" in
+        E) printf '  %s:%s [SLH-EDITION-DRIFT] names "%s"; the edition this instance is moving to is %s.\n' \
+             "$rel" "$line" "$found" "$DRIFT_ED" ;;
+        B) printf '  %s:%s [SLH-BINDING-DRIFT] names the %s tier beside "%s"; Part 2 binds that tier to:%s.\n' \
+             "$rel" "$line" "$tier" "$found" \
+             "$(printf '%s' "$DRIFT_BIND" | tr ';' '\n' | sed -n "s/^$tier://p")" ;;
+      esac
+    done
+    printf '  Each line above is a second copy of something setlist.md already holds, and a second copy drifts:\n'
+    printf '  that is how an instance comes to describe a protocol it is no longer running. Rewrite a\n'
+    printf '  current-state sentence to the value named beside it; where the text is a provenance citation\n'
+    printf '  (the edition a field arrived in), record it as reconciled in the umbrella ADR. The migration\n'
+    printf '  chore does not close while a listed line stands.\n'
+    # fail-open-ok: grep exits 1 when no sentence named more than one tier, which is the ordinary case; an empty value prints no "not compared" line, and the drift lines themselves are unaffected
+    DRIFT_MULTI="$(printf '%s\n' "$DRIFT_RAW" | grep -E '^M	' | awk -F'\t' -v inst="$INSTANCE/" '{ f = $2; sub(inst, "", f); printf "%s%s:%s", (NR > 1 ? ", " : ""), f, $3 }' || true)"
+    [[ -n "$DRIFT_MULTI" ]] && \
+      printf '  These sentences name more than one tier and restate Part 2 rather than claim one tier, so they\n  were not compared: %s\n' "$DRIFT_MULTI"
+  fi
+  # THE COUNT OF WHAT WAS NOT READ, AND ANY FILE NOT READ TO ITS END, printed
+  # whether or not a line was listed (spec 0154, fix round 1; the 2.9.0 leg's F7):
+  # the run that lists nothing is the one where a reader most needs to know what
+  # it did not compare. Under the drift block when there is one; under its own
+  # lead-in when there is not, so a clean instance still draws no drift block.
+  DRIFT_SKIPPED="$(printf '%s\n' "$DRIFT_RAW" | sed -n 's/^S	//p' | head -n1)"
+  # fail-open-ok: grep exits 1 when every fence closed, the ordinary case; an empty value prints no gap line
+  DRIFT_GAPS="$(printf '%s\n' "$DRIFT_RAW" | grep -E '^U	' || true)"
+  if [[ "${DRIFT_SKIPPED:-0}" -gt 0 || -n "$DRIFT_GAPS" ]]; then
+    [[ -n "$DRIFT_FINDINGS" ]] || printf 'drift report: no stale edition or binding line was found in the text it compared.\n'
+    [[ "${DRIFT_SKIPPED:-0}" -gt 0 ]] && \
+      printf '  %s line(s) inside a code fence or a blockquote were not compared (history is excluded by rule).\n' "$DRIFT_SKIPPED"
+    [[ -n "$DRIFT_GAPS" ]] && printf '%s\n' "$DRIFT_GAPS" | while IFS="$(printf '\t')" read -r kind file line; do
+      printf '  %s:%s opens a code fence that never closes, so no line after it was compared: that file was NOT read to its end.\n' \
+        "${file#$INSTANCE/}" "$line"
+    done
+  fi
+fi
 # THE RETIRED-HOOKS REPORT (spec 0144; spec 0142 section 10, ruling R-D). Printed in
 # report mode and under --apply alike, and it changes no exit status: a stale
 # advisory gate PERMITS, the git hooks carry every refusal, so nothing this release

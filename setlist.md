@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.16 (the deletion edition)**
+**Edition v1.17 (the delivery edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -291,8 +291,9 @@ Two harness realities the loop must bind to explicitly:
 Convention first: the role boundary above plus the golden rules in CLAUDE.md, backed by the
 permission rules in `settings.json` (Part 3). As of v1.16, four session hooks are stamped
 into every instance (Part 6), beside the three git hooks that carry the refusals: two
-PreToolUse hooks (the scope hook, which reports on writes, and the bypass deny, which refuses
-a command that would disarm the git hooks), each deciding a predicate from the tool call alone
+PreToolUse hooks (the scope hook, which reports on writes and, since v1.17, delivers its
+reason to the agent, and the bypass deny, which refuses a command that would disarm the git
+hooks), each deciding a predicate from the tool call alone
 whose drift the field observed under prompting alone, one SessionStart re-grounding hook that
 injects the read-budget pointer instead of trusting every session to remember it, and one Stop
 hook that refuses to end a turn while a spec or `specs/STATUS.md` change sits unstaged, once
@@ -1974,22 +1975,25 @@ price that was measured rather than guessed: across four hostile reviews, five o
 findings and three majors were in parser code written the same day to fix the previous review,
 and while the parsers could deny, every one of those was a release blocker.
 
-The trade is stated rather than sold, and half of it did not survive contact with the
-harness. A parser false positive is now noise instead of a blocked command. But **on current
-Claude Code versions the advisory reason is not delivered to the model when the decision is
-`allow`**: measured on 2.1.221, with the control that makes it a harness finding rather than a
-wiring one, since a hook returning `deny` has its reason delivered verbatim. So the scope hook
-does not in fact warn the agent today.
+The trade is stated rather than sold. A parser false positive is now noise instead of a
+blocked command. The scope hook's reason reaches the agent: it rides `additionalContext`, the
+PreToolUse field Claude Code adds to the model's context beside the tool result and does not
+drop on `allow`, measured delivered with a marker, a sentinel and a behavioural token against a
+negative twin and a deny control at Claude Code 2.1.274. Until that measurement the hook carried
+its reason on `permissionDecisionReason` and `systemMessage`, which reach the user and not the
+model on `allow`, so through plugin 2.8.0 the scope hook did not in fact warn the agent;
+`systemMessage` has left the allow path and `permissionDecisionReason` stays for the user's view.
 
-What that leaves is honest and still useful. The in-session feedback surface is the git hooks'
-refusal messages, which arrive as ordinary command output at the moment of the attempt, and
-which is where the guarantee lives. The advisory verdict is still emitted in a machine-readable
-`setlistAdvisory` field, and nothing in the shipped plugin reads it: no skill, script or
-template consumes it, and the framework's own test suite is its only reader. The gap is filed upstream and re-checked at every release gate by the
-maintainer's probe, run in the source repository. The vendor documents the drop on `allow` as
-intended rather than as a defect, so it is not waiting to lift by itself; a sibling field on the
-same event, `additionalContext`, is documented to carry context to the model, and Setlist has not
-measured it.
+**Advisories persuade; hooks refuse.** A delivered warning is not an enforcement channel: an
+agent has been measured attributing an injected advisory correctly to the hook and then
+proceeding on its own judgement that the write was harmless. So the in-session feedback that
+holds is still the git hooks' refusal messages, which arrive as ordinary command output at the
+moment of the attempt, and which is where the guarantee lives. The advisory verdict is also
+emitted in a machine-readable `setlistAdvisory` field, and nothing in the shipped plugin reads
+it: no skill, script or template consumes it, and the framework's own test suite is its only
+reader. Delivery is re-checked at every release gate by the maintainer's probe, run in the
+source repository, and a release whose probe finds the reason no longer delivered treats that as
+a regression. The scope hook's path predicate has known misses, disclosed in Known limitations.
 
 The parsers and their test corpus are FROZEN together from that date. A newly discovered
 spelling they read wrongly is a documented limitation, not a fix: the review that priced this
@@ -2529,10 +2533,14 @@ Part 8c's v1.16 delta says how an existing instance learns that.
   or a spec file, tracked or untracked, changed and unstaged, because a session ending with
   a record and a page that disagree is the failure the one-writer rule exists for. A staged
   change passes (the session's deliberate act); a change outside `specs/` is not its
-  question; a repository with no `sdd.json` is not an instance. It refuses ONCE per end of
-  turn and allows the continuation the harness marks, so a change the session cannot stage
-  is a nudge, never a lock; and it is the one session hook whose reason the harness renders
-  (the scope hook's reason is dropped on `allow`, Known limitations). A session killed
+  question; a repository with no `sdd.json` is not an instance. Before the repository exists
+  it is silent: a root with no `.git` entry of any type is the state `/setlist:new` leaves
+  until `/scaffold` creates it, and that includes an instance stamped below an enclosing
+  repository's top, whose git layer the stamp reports NOT ARMED; a linked worktree, a
+  corrupt `.git` and a repository with `core.hooksPath` unset are judged as before. It
+  refuses ONCE per end of turn and allows the continuation the harness marks, so a change the session cannot stage
+  is a nudge, never a lock; and its reason is delivered to the agent, as the bypass deny's and the
+  scope hook's are (the scope hook's through `additionalContext`). A session killed
   from outside fires no Stop, which is the boundary it does not reach.
 
 - **The scope hook** (Write and Edit): REPORTS a verdict on writes under the src and tests role paths and permits them
@@ -3253,6 +3261,27 @@ action.
   a stale advisory gate permits and the git hooks carry every refusal; until the edit is taken
   the two gates keep running on every Bash call. A fork of a retired hook is reported and left
   alone. Record the edit, taken or deferred, under the umbrella ADR.
+- **The v1.17 delta: two stamped hooks change byte-verbatim, and the upgrade REPORTS
+  edition and binding drift (new in v1.17).** Nothing is removed from an instance and no
+  `settings.json` entry moves, so this delta asks for no hand edit at all. Two hook files
+  differ: `scope-hook.sh` carries its reason in `additionalContext`, the PreToolUse field
+  Claude Code adds to the model's context and does not drop on `allow`, so the advisory
+  reaches the agent for the first time, and `stop-hook.sh` is silent when the project root
+  has no `.git` entry of any type. Both arrive through the refresh's existing CHANGED arm
+  ("bytes differ, would be replaced"), which needed no new arm and got none. **And the
+  refresh now reads the instance's own prose against this edition.** Every `edition v1.N`
+  in `CLAUDE.md`, `RUNBOOK.md`, `specs/TEMPLATE.md` and the instance-owned skills that is
+  not this edition, and every sentence naming a model-ladder tier beside a model alias Part
+  2 binds to a different tier, is reported with its file, its line, the string found and the
+  value this document holds (`SLH-EDITION-DRIFT`, `SLH-BINDING-DRIFT`). The report reads the
+  edition from this file's own Edition header and the bindings from Part 2's table, so it
+  holds no copy of either; it names history by rule rather than by judgement, comparing
+  neither a fenced block nor a blockquote and printing how many lines it passed over; and it
+  REPORTS, never rewriting a word and changing no exit status, because prose in somebody's
+  repository is theirs. **The migration chore does not close while a listed line stands.**
+  This is the class that let an instance upgraded to v1.14 keep a `CLAUDE.md` header naming
+  v1.6: a stale edition string in phase-2 prose is in no changelog delta, so no delta-driven
+  rewrite ever reaches it, and until v1.17 nothing else looked.
 - **Accepted deviations are recorded, not erased.** If the repo keeps a non-canonical
   layout (paths are roles), say so inside the umbrella ADR; a future chore can relocate.
 - **Close like any chore:** gates pass (docs-only, so results must match pre-migration), a
@@ -3591,6 +3620,52 @@ judgment. Appendix A is the part worth keeping; everything else is implementatio
 ---
 
 ## Changelog
+
+- **v1.17 (the delivery edition).** This delta list is authoritative for
+  `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases
+  (this edition ships as plugin 2.9.0), the edition counts revisions of this document.
+  v1.17 moves because the PROTOCOL changes what the session layer DELIVERS: a warning
+  that reached nobody now reaches the agent, a hook that refused before the repository
+  existed is silent there, and the upgrade reports the drift that let an instance
+  describe a protocol it was no longer running.
+
+  **THE SCOPE HOOK'S REASON REACHES THE AGENT (Parts 2, 6).** The one advisory hook left
+  carries its reason in `additionalContext`, the PreToolUse field Claude Code adds to the
+  model's context and does not drop on `allow`, measured delivered with a marker, a
+  sentinel and a behavioural token against a negative twin and a real deny control at
+  Claude Code 2.1.274. Through plugin 2.8.0 the reason rode fields the harness shows the
+  user and not the model on `allow`, so the hook did not in fact warn the agent for an
+  entire edition while this document said it did. `systemMessage` leaves the allow path,
+  measured dead; `permissionDecisionReason` stays for the user's view. The machine-readable
+  `setlistAdvisory` field is unchanged, and nothing in the shipped plugin reads it. **And
+  the boundary is stated where a reader meets it: ADVISORIES PERSUADE; HOOKS REFUSE.** An
+  agent has been measured attributing an injected advisory correctly to the hook and then
+  proceeding on its own judgement, so a delivered warning is not an enforcement channel;
+  the git hooks' refusals are. Delivery is re-checked at every release gate, and a release
+  whose probe finds the reason no longer delivered treats that as a regression rather than
+  as a known condition.
+
+  **THE STOP HOOK IS SILENT BEFORE THE REPOSITORY EXISTS (Parts 2, 6).** A project root with no `.git` entry of any type is the state `/setlist:new` leaves
+  until `/scaffold` creates the repository, and that includes an instance stamped below an
+  enclosing repository's top, whose git layer the stamp already reports NOT ARMED. A linked
+  worktree, whose `.git` is a file, a corrupt `.git` and a repository with `core.hooksPath`
+  unset are judged exactly as before, and exactly as before a corrupt `.git` beneath an
+  enclosing repository is read through that repository. One guard, no refusal code added or
+  removed.
+
+  **THE UPGRADE REPORTS EDITION AND BINDING DRIFT BY NAME (Parts 6, 8c).** The refresh
+  reads the instance's `CLAUDE.md`, `RUNBOOK.md`, `specs/TEMPLATE.md` and instance-owned
+  skills against this edition and names every line that claims an older edition or names a
+  model-ladder tier beside a model alias Part 2 binds elsewhere, with the file, the line,
+  the string found and the value this document holds. It reports and never rewrites, it
+  changes no exit status, and the migration chore does not close while a listed line
+  stands. It holds no copy of the edition or of a binding: both are read from this file.
+
+  **THE TIER IS NAMED, AND THE MODEL IS READ FROM PART 2 (Part 2's table, unchanged).**
+  Session zero's instruction named a model in two places while Part 2's bindings table
+  named another, which is the same drift one layer down. The bindings table is the one
+  place a model name lives, and the derived text now names the TIER and reads the model
+  from the table.
 
 - **v1.16 (the deletion edition).** This delta list is authoritative for
   `/setlist:upgrade`. The counters stay separate: the plugin counts tooling releases
