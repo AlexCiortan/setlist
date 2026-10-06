@@ -106,6 +106,48 @@ FENCEDSPEC
 
 gh_landed() { git -C "$1" cat-file -e main:src/FEATURE.txt 2>/dev/null; }
 
+# Shared with later regions and shards (spec 0168, item 2): defined above the region, so a
+# shard that does not own it still has them.
+SECRET_LINE='const api_key = "EXAMPLE_NOT_A_REAL_SECRET_0123456789";'
+scan_ref_fixture() { # scan_ref_fixture <dir>
+  local d="$1"; rm -rf "$d" "$d-rem.git"
+  mkdir -p "$d/src" "$d/specs" "$d/.claude/hooks" "$d/.githooks"
+  git_init "$d"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+  printf 'x\n' > "$d/src/app.js"
+  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$d/specs/STATUS.md"
+  cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" \
+     "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
+  chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit" "$d/.githooks/pre-push"
+  # pre-push looks for the audit HERE; without it the hook refuses for an
+  # unrelated reason and every case below would pass while testing nothing.
+  # That exact fixture gap produced a false refutation of this finding during
+  # triage, so the fixture is built to reach the scan rather than to fail early.
+  cp "$ROOT/scripts/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  git -C "$d" config core.hooksPath .githooks
+  git -C "$d" add -A >/dev/null 2>&1
+  git -C "$d" -c core.hooksPath=/dev/null commit -qm stamp >/dev/null 2>&1
+  git init -q --bare "$d-rem.git"
+  git -C "$d" remote add origin "$d-rem.git"
+  # Seed the remote with a trunk so it is NOT empty. Pushing a spec branch is the
+  # ordinary case of pushing to a repo that already has a trunk: the branch is
+  # content-scanned but not trunk-audited. Since the F1 empty-remote fix
+  # (plugin-2.0.0 leg), a branch pushed FIRST to an EMPTY remote is a trunk
+  # candidate and IS audited, so these scan/toolchain controls -- which push spec
+  # branches carrying role-path code -- would be refused as trunk on an empty
+  # remote. That refusal is correct behaviour but not the false-denial these
+  # controls exist to catch, so the fixture models the real scenario. The seed
+  # push bypasses the hooks; it only needs to populate the remote's default ref.
+  git -C "$d" -c core.hooksPath=/dev/null push -q origin main:refs/heads/main >/dev/null 2>&1
+  git -C "$d-rem.git" symbolic-ref HEAD refs/heads/main >/dev/null 2>&1
+  git -C "$d" fetch -q origin >/dev/null 2>&1
+}
+SCAN_SECRET='const token = "ghp_abcdefghijklmnop1234"'
+
+# >>> SHARD-BEGIN git-hooks-early-08 cost=9
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region git-hooks-early-08; then
+
 # ===========================================================================
 # THE AUDIT'S EXCUSE IS ABOUT AGE, SO IT ASKS ABOUT AGE (F2/F7, 2026-08-05).
 #
@@ -225,6 +267,48 @@ else
       "the audit condemned pre-rule history by its parent count, which is age inferred from shape"
 fi
 
+# audit age e (spec 0180, 0174's E-e as the validator ruled it): the octopus refusal is a 2.11.0
+# rule, so it is dated as 0174's arms and 0175's reader are, by the plugin.version the merge's OWN
+# tree stamps (rule_in_force), with post_baseline beside it. A post-adoption octopus of two docs
+# branches made under 2.10.0 was accepted when it was made and must not refuse the upgraded
+# instance's every push; the same octopus made under 2.11.0 is refused by name. Watched RED on the
+# pre-fix audit (the 2.10.0 octopus refused SLH-OCTOPUS-MERGE).
+tae_octo() { # tae_octo <dir> <plugin.version in the merge's tree>
+  local d="$1" v="$2"
+  rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude" "$d/docs"
+  git_init "$d"
+  jq -n --arg v "$v" '{trunk:"main",scaffolded:true,gate_command:"true",roles:{src:"src",tests:"tests"},plugin:{version:$v}}' > "$d/.claude/sdd.json"
+  printf 'x\n' > "$d/src/app.js"
+  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$d/specs/STATUS.md"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm "stamp: adopt the rules" >/dev/null 2>&1
+  local base; base="$(git -C "$d" rev-parse HEAD)"
+  git -C "$d" checkout -q -b docs/a "$base"; mkdir -p "$d/docs"; printf 'a\n' > "$d/docs/a.md"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm "docs: a" >/dev/null 2>&1
+  git -C "$d" checkout -q -b docs/b "$base"; mkdir -p "$d/docs"; printf 'b\n' > "$d/docs/b.md"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm "docs: b" >/dev/null 2>&1
+  git -C "$d" checkout -q main
+  git -C "$d" merge -q --no-ff --no-verify -m "an octopus of two docs branches" docs/a docs/b >/dev/null 2>&1
+}
+TAE="$WORK/ta-octo-dated"
+tae_octo "$TAE" 2.10.0
+if [ "$(git -C "$TAE" rev-list --parents -n1 HEAD | wc -w | tr -d ' ')" != "4" ]; then
+  bad "audit age e: a post-adoption octopus made under 2.10.0 (its own tree) is not refused by a 2.11.0 rule" "fixture error: the octopus folded"
+elif bash "$ROOT/scripts/trunk-audit.sh" "$TAE" >"$WORK/tae.out" 2>&1; then
+  ok "audit age e: a post-adoption octopus made under 2.10.0 (its own tree) is not refused by a 2.11.0 rule"
+else
+  bad "audit age e: a post-adoption octopus made under 2.10.0 (its own tree) is not refused by a 2.11.0 rule" \
+      "the audit refused history made before the rule existed: $(grep -E 'VIOLATION|SLH-' "$WORK/tae.out" | head -n2 | tr '\n' ' ' | cut -c1-240)"
+fi
+tae_octo "$TAE" 2.11.0
+if bash "$ROOT/scripts/trunk-audit.sh" "$TAE" >"$WORK/tae.out" 2>&1; then
+  bad "audit age e: the same octopus made under 2.11.0 is refused by name (SLH-OCTOPUS-MERGE)" "the audit accepted it"
+elif grep -q 'SLH-OCTOPUS-MERGE' "$WORK/tae.out"; then
+  ok "audit age e: the same octopus made under 2.11.0 is refused by name (SLH-OCTOPUS-MERGE)"
+else
+  bad "audit age e: the same octopus made under 2.11.0 is refused by name (SLH-OCTOPUS-MERGE)" \
+      "refused, but not by name: $(grep -E 'VIOLATION' "$WORK/tae.out" | head -n2 | tr '\n' ' ' | cut -c1-240)"
+fi
+
 # ===========================================================================
 # THE RECORDED TRUNK NAME IS THE ONLY TRUNK TEST (F1 and F9, 2026-08-07).
 #
@@ -328,7 +412,7 @@ fi
 #
 # Both directions, because a scan that refuses everything is not a scan.
 # ===========================================================================
-SECRET_LINE='const api_key = "EXAMPLE_NOT_A_REAL_SECRET_0123456789";'
+# (SECRET_LINE is defined above region git-hooks-early-08.)
 
 # CONTROL, and it is the one that makes the rest mean anything: the ordinary
 # commit path still refuses these bytes.
@@ -396,40 +480,7 @@ else ok "scan cherry b: the push-time range scan refuses a cherry-picked secret"
 # So the corpus is the ref name as its own axis, across all three routes git
 # gives no commit-time hook for, with a clean spec branch as the control that
 # stops this being satisfied by a hook that refuses every push.
-scan_ref_fixture() { # scan_ref_fixture <dir>
-  local d="$1"; rm -rf "$d" "$d-rem.git"
-  mkdir -p "$d/src" "$d/specs" "$d/.claude/hooks" "$d/.githooks"
-  git_init "$d"
-  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
-  printf 'x\n' > "$d/src/app.js"
-  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$d/specs/STATUS.md"
-  cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" \
-     "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
-  chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit" "$d/.githooks/pre-push"
-  # pre-push looks for the audit HERE; without it the hook refuses for an
-  # unrelated reason and every case below would pass while testing nothing.
-  # That exact fixture gap produced a false refutation of this finding during
-  # triage, so the fixture is built to reach the scan rather than to fail early.
-  cp "$ROOT/scripts/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
-  git -C "$d" config core.hooksPath .githooks
-  git -C "$d" add -A >/dev/null 2>&1
-  git -C "$d" -c core.hooksPath=/dev/null commit -qm stamp >/dev/null 2>&1
-  git init -q --bare "$d-rem.git"
-  git -C "$d" remote add origin "$d-rem.git"
-  # Seed the remote with a trunk so it is NOT empty. Pushing a spec branch is the
-  # ordinary case of pushing to a repo that already has a trunk: the branch is
-  # content-scanned but not trunk-audited. Since the F1 empty-remote fix
-  # (plugin-2.0.0 leg), a branch pushed FIRST to an EMPTY remote is a trunk
-  # candidate and IS audited, so these scan/toolchain controls -- which push spec
-  # branches carrying role-path code -- would be refused as trunk on an empty
-  # remote. That refusal is correct behaviour but not the false-denial these
-  # controls exist to catch, so the fixture models the real scenario. The seed
-  # push bypasses the hooks; it only needs to populate the remote's default ref.
-  git -C "$d" -c core.hooksPath=/dev/null push -q origin main:refs/heads/main >/dev/null 2>&1
-  git -C "$d-rem.git" symbolic-ref HEAD refs/heads/main >/dev/null 2>&1
-  git -C "$d" fetch -q origin >/dev/null 2>&1
-}
-SCAN_SECRET='const token = "ghp_abcdefghijklmnop1234"'
+# (scan_ref_fixture and SCAN_SECRET are defined above region git-hooks-early-08.)
 SCAN_REF_BAD=""
 SCAND="$WORK/scan-refs"; scan_ref_fixture "$SCAND"
 
@@ -484,10 +535,12 @@ if gh_landed "$GHMC"; then
 else
   bad "scan merge control: a clean closed spec still merges" "the scan refuses compliant work, which is the false-denial direction"
 fi
+fi; shard_region_end
+# <<< SHARD-END git-hooks-early-08
 
 
 # --- the refusal direction ---
-# >>> SHARD-BEGIN scan-ref-refusal cost=27
+# >>> SHARD-BEGIN scan-ref-refusal cost=30
 if shard_region scan-ref-refusal; then
 GH="$WORK/gh-open"; gh_fixture "$GH" no
 ( cd "$GH" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m "Merge spec/0001-thing" spec/0001-thing ) >/dev/null 2>&1
@@ -930,6 +983,26 @@ chain_close() { # chain_close <dir>
   printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | First | CLOSED | done |\n' > "$d/specs/STATUS.md"
   git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm "spec 0001 + code" >/dev/null 2>&1
 }
+
+# Shared with later shards (spec 0168, item 2): defined above the region.
+rfi_fixture() { # rfi_fixture <dir> <existing-hookspath-or-empty>
+  local d="$1" hp="$2"; rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude/hooks"
+  git_init "$d"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$d/.claude/sdd.json"
+  printf 'x\n' > "$d/src/app.js"
+  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$d/specs/STATUS.md"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm stamp >/dev/null 2>&1
+  if [[ -n "$hp" ]]; then
+    mkdir -p "$d/$hp"
+    printf '#!/bin/sh\necho "foreign hook refusing"\nexit 1\n' > "$d/$hp/pre-commit"
+    chmod +x "$d/$hp/pre-commit"
+    git -C "$d" config core.hooksPath "$hp"
+  fi
+}
+
+# >>> SHARD-BEGIN chain-refresh-08 cost=3
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region chain-refresh-08; then
 CHA="$WORK/chain-attack"; chain_fixture "$CHA"
 git -C "$CHA" checkout -q -b junk main
 printf 'export const sneaky = 1\n' > "$CHA/src/sneaky.js"
@@ -970,20 +1043,7 @@ fi
 # displace" case PASSED that way, vacuously, because core.hooksPath was left
 # alone by a command that had done nothing at all. The control beside it failed
 # and is the only reason it was caught.
-rfi_fixture() { # rfi_fixture <dir> <existing-hookspath-or-empty>
-  local d="$1" hp="$2"; rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude/hooks"
-  git_init "$d"
-  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$d/.claude/sdd.json"
-  printf 'x\n' > "$d/src/app.js"
-  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n' > "$d/specs/STATUS.md"
-  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" commit -qm stamp >/dev/null 2>&1
-  if [[ -n "$hp" ]]; then
-    mkdir -p "$d/$hp"
-    printf '#!/bin/sh\necho "foreign hook refusing"\nexit 1\n' > "$d/$hp/pre-commit"
-    chmod +x "$d/$hp/pre-commit"
-    git -C "$d" config core.hooksPath "$hp"
-  fi
-}
+# (rfi_fixture is defined above region chain-refresh-08: later shards call it.)
 
 # REPORT MODE must NAME the value it is about to displace.
 RFI="$WORK/rfi-report"; rfi_fixture "$RFI" .husky
@@ -1058,5 +1118,663 @@ if grep -qE 'REFUS|WOULD DISPLACE' "$WORK/rfi-ghours.out"; then
 else
   ok "refresh F6b: re-refreshing an instance armed by Setlist is not a displacement"
 fi
+fi; shard_region_end
+# <<< SHARD-END chain-refresh-08
 
 
+
+# >>> SHARD-BEGIN scan-bytes-0164 cost=6
+if shard_region scan-bytes-0164; then
+# =============================================================================
+# THE CONTENT SCANS READ BYTES, NOT CHARACTERS (spec 0164, fix round 1, the
+# 2.10.0 cold run's F-b). Measured on this project's own release candidate and on
+# the published 2.9.0 hooks, identically: under a UTF-8 locale the macOS system
+# awk (BWK, 20200816) aborts on an added line holding a byte that is not valid
+# UTF-8 ("awk: towc: multibyte conversion failure"), the scans fail closed with
+# SLH-SCAN-FILTER-FAILED, and pre-commit, pre-merge-commit and pre-push each
+# refuse a file with a Latin-1 byte in it. The push added a false reason ("the
+# history being pushed carries content the commit-time scans never saw").
+#
+# Every git call below runs under an explicit UTF-8 locale, because the suite
+# inherits its caller's and a C locale would hide the defect. Where the host has
+# no such locale, or its awk reads invalid bytes without aborting (GNU awk,
+# mawk), the cases still assert the allow direction and the controls; the red
+# was watched on BWK awk.
+#
+# Both directions: the byte is scanned, not refused; a secret or an em-dash in
+# the same file, and on the same line as the byte, is still refused.
+# =============================================================================
+SB_U8="en_US.UTF-8"
+SB_LATIN="$(printf 'caf\351 cr\350me\n')"
+
+SBC="$WORK/sb-commit"; gh_fixture "$SBC" yes
+printf '%s\n' "$SB_LATIN" > "$SBC/src/notes.txt"
+git -C "$SBC" add src/notes.txt >/dev/null 2>&1
+if LC_ALL="$SB_U8" LANG="$SB_U8" git -C "$SBC" commit -qm "latin-1 notes" >"$WORK/sb-commit.out" 2>&1; then
+  ok "scan bytes a: pre-commit scans a line holding a byte that is not valid UTF-8, and commits it"
+else
+  bad "scan bytes a: pre-commit scans a line holding a byte that is not valid UTF-8, and commits it" \
+      "refused: $(LC_ALL=C tr -d '\200-\377' < "$WORK/sb-commit.out" | tr '\n' ' ' | cut -c1-200)"
+fi
+
+SBS="$WORK/sb-secret"; gh_fixture "$SBS" yes
+{ printf '%s\n' "$SB_LATIN"; printf '%s\n' "$SECRET_LINE"; } > "$SBS/src/notes.txt"
+git -C "$SBS" add src/notes.txt >/dev/null 2>&1
+if LC_ALL="$SB_U8" LANG="$SB_U8" git -C "$SBS" commit -qm "latin-1 and a secret" >"$WORK/sb-secret.out" 2>&1; then
+  bad "scan bytes b: a secret in the same file as the byte is still refused" "the commit landed a secret-shaped line"
+elif grep -q 'SLH-SECRET' "$WORK/sb-secret.out"; then
+  ok "scan bytes b: a secret in the same file as the byte is still refused, by SLH-SECRET"
+else
+  bad "scan bytes b: a secret in the same file as the byte is still refused" \
+      "refused, but not by SLH-SECRET: $(LC_ALL=C tr -d '\200-\377' < "$WORK/sb-secret.out" | tr '\n' ' ' | cut -c1-200)"
+fi
+
+SBL="$WORK/sb-sameline"; gh_fixture "$SBL" yes
+printf 'caf\351 const api_key = "EXAMPLE_NOT_A_REAL_SECRET_0123456789";\n' > "$SBL/src/notes.txt"
+git -C "$SBL" add src/notes.txt >/dev/null 2>&1
+if LC_ALL="$SB_U8" LANG="$SB_U8" git -C "$SBL" commit -qm "same line" >"$WORK/sb-sameline.out" 2>&1; then
+  bad "scan bytes c: a secret on the same line as the byte is still refused" "the commit landed a secret-shaped line"
+elif grep -q 'SLH-SECRET' "$WORK/sb-sameline.out"; then
+  ok "scan bytes c: a secret on the same line as the byte is still refused, by SLH-SECRET"
+else
+  bad "scan bytes c: a secret on the same line as the byte is still refused" \
+      "refused, but not by SLH-SECRET: $(LC_ALL=C tr -d '\200-\377' < "$WORK/sb-sameline.out" | tr '\n' ' ' | cut -c1-200)"
+fi
+
+SBE="$WORK/sb-emdash"; gh_fixture "$SBE" yes
+printf 'caf\351 then a dash \342\200\224 here\n' > "$SBE/src/notes.txt"
+git -C "$SBE" add src/notes.txt >/dev/null 2>&1
+if LC_ALL="$SB_U8" LANG="$SB_U8" git -C "$SBE" commit -qm "emdash" >"$WORK/sb-emdash.out" 2>&1; then
+  bad "scan bytes d: an em-dash beside the byte is still refused" "the commit landed an em-dash"
+elif grep -q 'SLH-EMDASH' "$WORK/sb-emdash.out"; then
+  ok "scan bytes d: an em-dash beside the byte is still refused, by SLH-EMDASH"
+else
+  bad "scan bytes d: an em-dash beside the byte is still refused" \
+      "refused, but not by SLH-EMDASH: $(LC_ALL=C tr -d '\200-\377' < "$WORK/sb-emdash.out" | tr '\n' ' ' | cut -c1-200)"
+fi
+
+# The merge path: pre-merge-commit scans the merge's content with the same code.
+SBM="$WORK/sb-merge"; gh_fixture "$SBM" yes
+git -C "$SBM" checkout -q spec/0001-thing
+printf '%s\n' "$SB_LATIN" > "$SBM/src/notes.txt"
+git -C "$SBM" add -A >/dev/null 2>&1
+git -C "$SBM" -c core.hooksPath=/dev/null commit -qm "latin-1 on the branch" >/dev/null 2>&1
+git -C "$SBM" checkout -q main
+( cd "$SBM" && LC_ALL="$SB_U8" LANG="$SB_U8" GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m "Merge spec/0001-thing" spec/0001-thing ) >"$WORK/sb-merge.out" 2>&1
+if git -C "$SBM" cat-file -e main:src/notes.txt 2>/dev/null; then
+  ok "scan bytes e: pre-merge-commit scans the byte and the merge lands"
+else
+  bad "scan bytes e: pre-merge-commit scans the byte and the merge lands" \
+      "refused: $(LC_ALL=C tr -d '\200-\377' < "$WORK/sb-merge.out" | tr '\n' ' ' | cut -c1-200)"
+fi
+
+# The push path: the same bytes reach a remote, and a refusal that is about
+# the content still says so.
+sb_push_fixture() { # sb_push_fixture <dir> <file-content-printf-format>
+  local d="$1" fmt="$2"
+  gh_fixture "$d" yes
+  cp "$ROOT/templates/git-hooks/pre-push" "$d/.githooks/pre-push"; chmod +x "$d/.githooks/pre-push"
+  # pre-push refuses before any scan when it cannot find the audit, so the
+  # fixture delivers it where the stamp does; without it every push case here
+  # would read red or green for that reason and not for the one it names.
+  mkdir -p "$d/.claude/hooks"; cp "$ROOT/scripts/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  git -C "$d" checkout -q main
+  # A NON-ROLE path: a direct commit of role code on the trunk is the audit's
+  # own refusal, which is not what these cases are about.
+  mkdir -p "$d/docs"
+  # shellcheck disable=SC2059
+  printf "$fmt" > "$d/docs/notes.txt"
+  git -C "$d" add -A >/dev/null 2>&1
+  git -C "$d" -c core.hooksPath=/dev/null commit -qm "notes" >/dev/null 2>&1
+  rm -rf "$d-rem.git"; git init -q --bare "$d-rem.git"
+  git -C "$d" remote add origin "$d-rem.git" >/dev/null 2>&1
+}
+SBP="$WORK/sb-push"; sb_push_fixture "$SBP" 'caf\351 cr\350me\n'
+if LC_ALL="$SB_U8" LANG="$SB_U8" git -C "$SBP" push -q origin main >"$WORK/sb-push.out" 2>&1; then
+  ok "scan bytes f: pre-push scans the byte and the history reaches the remote"
+else
+  bad "scan bytes f: pre-push scans the byte and the history reaches the remote" \
+      "refused: $(LC_ALL=C tr -d '\200-\377' < "$WORK/sb-push.out" | tr '\n' ' ' | cut -c1-240)"
+fi
+SBQ="$WORK/sb-push-secret"; sb_push_fixture "$SBQ" 'caf\351\nconst api_key = "EXAMPLE_NOT_A_REAL_SECRET_0123456789";\n'
+if LC_ALL="$SB_U8" LANG="$SB_U8" git -C "$SBQ" push -q origin main >"$WORK/sb-push-secret.out" 2>&1; then
+  bad "scan bytes g: a pushed secret beside the byte is still refused, and the refusal says the content is the reason" "the push landed a secret-shaped line"
+elif grep -q 'SLH-SECRET' "$WORK/sb-push-secret.out" && grep -q 'carries content' "$WORK/sb-push-secret.out"; then
+  ok "scan bytes g: a pushed secret beside the byte is still refused, and the refusal says the content is the reason"
+else
+  bad "scan bytes g: a pushed secret beside the byte is still refused, and the refusal says the content is the reason" \
+      "$(LC_ALL=C tr -d '\200-\377' < "$WORK/sb-push-secret.out" | tr '\n' ' ' | cut -c1-240)"
+fi
+# A push refused for a reason that is NOT the content must not be told the
+# content is the reason. A pushed tip that does not resolve here is the one
+# no-content refusal a fixture reaches without breaking the toolchain
+# (SLH-SCAN-UNRESOLVED-TIP), fed to the hook on stdin as git would.
+SBR="$WORK/sb-push-norun"; sb_push_fixture "$SBR" 'plain\n'
+( cd "$SBR" && printf 'refs/heads/main %s refs/heads/main %s\n' "0123456789012345678901234567890123456789" 0000000000000000000000000000000000000000 \
+    | LC_ALL="$SB_U8" LANG="$SB_U8" bash .githooks/pre-push origin "$SBR-rem.git" ) >"$WORK/sb-norun.out" 2>&1
+SBR_RC=$?
+if [[ "$SBR_RC" -ne 0 ]] && ! grep -q 'carries content' "$WORK/sb-norun.out"; then
+  ok "scan bytes h: a push refused for a reason other than the content does not say the content is the reason"
+else
+  bad "scan bytes h: a push refused for a reason other than the content does not say the content is the reason" \
+      "rc=$SBR_RC: $(LC_ALL=C tr -d '\200-\377' < "$WORK/sb-norun.out" | tr '\n' ' ' | cut -c1-240)"
+fi
+fi; shard_region_end
+# <<< SHARD-END scan-bytes-0164
+
+# --- EVERY READER OF THE RECORDS READS BYTES (spec 0169; L2 F2, F11) --------
+#
+# Fix round 1 of 2.10.0 put LC_ALL=C on the five content-scan stages and not on
+# the readers of specs/STATUS.md and of the spec records, so one byte that is
+# not valid UTF-8 aborted macOS awk and sed mid-read under a UTF-8 locale: a
+# compliant close was refused at merge and at every push after it (F2), and a
+# second close after the byte was never seen, so a spec with no Closing report
+# merged (F11). Since 0169 the hook library and the trunk audit export LC_ALL=C
+# once, at their tops, so every reader in their processes reads bytes.
+#
+# Every case below runs its hook or its reader under an EXPLICIT UTF-8 locale
+# the host has, because the suite inherits its caller's and a C harness would
+# hide the defect. On Linux the awks read the byte without aborting, so there
+# the cases are the control: green before and after.
+RB_U8="$(locale -a 2>/dev/null | grep -iE '^(en_US\.utf-?8|C\.utf-?8)$' | head -n1)"
+RB_LIB="$ROOT/templates/git-hooks/setlist-hook-lib.sh"
+RB_SPEC_OK='# Spec %s\n\nStatus: CLOSED\n\n## Closing report\n\n- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n\n- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n'
+rb_lib() { # rb_lib <script>: the library sourced by a shell under the host's UTF-8 locale, then <script>
+  LC_ALL="$RB_U8" LANG="$RB_U8" bash -c '. "$1"; eval "$2"' _ "$RB_LIB" "$1" 2>/dev/null
+}
+rb_out() { # the lines that say why, else the head of the output
+  local w; w="$(LC_ALL=C tr -d '\200-\377' < "$1" | grep -E 'SLH-|VIOLATION|awk:|sed:|refus' | tr '\n' ' ' | cut -c1-300)"
+  [[ -n "$w" ]] && printf '%s' "$w" || LC_ALL=C tr -d '\200-\377' < "$1" | tr '\n' ' ' | cut -c1-300
+}
+rb_merge() { # rb_merge <dir> <branch>: merge under the UTF-8 locale, output in <dir>.out
+  ( cd "$1" && LC_ALL="$RB_U8" LANG="$RB_U8" GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m "Merge $2" "$2" ) >"$1.out" 2>&1
+}
+rb_branch_close() { # rb_branch_close <dir> <status-printf> <spec-printf>: rewrite the spec branch's close, hooks off
+  local d="$1"
+  git -C "$d" checkout -q spec/0001-thing
+  # shellcheck disable=SC2059
+  printf "$2" > "$d/specs/STATUS.md"
+  # shellcheck disable=SC2059
+  printf "$3" > "$d/specs/0001-thing.md"
+  git -C "$d" add -A >/dev/null 2>&1
+  git -C "$d" -c core.hooksPath=/dev/null commit -q --amend --no-edit >/dev/null 2>&1
+  git -C "$d" checkout -q main
+}
+rb_push_ready() { # rb_push_ready <dir>: deliver pre-push and the audit, seed a bare remote with main
+  local d="$1"
+  cp "$ROOT/templates/git-hooks/pre-push" "$d/.githooks/pre-push"; chmod +x "$d/.githooks/pre-push"
+  mkdir -p "$d/.claude/hooks"; cp "$ROOT/scripts/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" -c core.hooksPath=/dev/null commit -qm "deliver pre-push" >/dev/null 2>&1
+  rm -rf "$d-rem.git"; git init -q --bare "$d-rem.git"
+  git -C "$d" remote add origin "$d-rem.git" >/dev/null 2>&1
+  git -C "$d" -c core.hooksPath=/dev/null push -q origin main >/dev/null 2>&1
+}
+rb_push() { ( cd "$1" && LC_ALL="$RB_U8" LANG="$RB_U8" git push -q origin main ) >"$1.push" 2>&1; }
+RB_ROW_HDR='# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n'
+
+# >>> SHARD-BEGIN record-bytes-0169 cost=8
+if shard_region record-bytes-0169; then
+if [[ -z "$RB_U8" ]]; then
+  ok "record bytes: SKIPPED BY NAME, this host has no UTF-8 locale (en_US.UTF-8 or C.UTF-8), so the byte cannot abort a reader here"
+else
+# The export's POSITION is the fix, so it is pinned: in both files the line
+# must precede the first function definition, or a reader could run before it.
+for rb_f in "$RB_LIB" "$ROOT/scripts/trunk-audit.sh"; do
+  rb_exp="$(grep -n '^LC_ALL=C; export LC_ALL' "$rb_f" | head -n1 | cut -d: -f1)"
+  rb_fn="$(grep -nE '^[a-z_]+\(\) *\{' "$rb_f" | head -n1 | cut -d: -f1)"
+  if [[ -n "$rb_exp" && -n "$rb_fn" && "$rb_exp" -lt "$rb_fn" ]]; then
+    ok "record bytes 0: ${rb_f##*/} exports LC_ALL=C (line $rb_exp) before its first function (line $rb_fn)"
+  else
+    bad "record bytes 0: ${rb_f##*/} exports LC_ALL=C before its first function" "export line [${rb_exp:-none}], first function [${rb_fn:-none}]"
+  fi
+done
+
+# THE READERS, ONE BY ONE, with the byte AHEAD of the text each one decides by.
+rb_st="$(printf "$RB_ROW_HDR"'| 0009 | Caf\351 menu | ACTIVE | wip |\n| 0001 | One | CLOSED | done |\n| 0003 | Three | ACTIVE | wip |\n')"
+rb_old="$(printf "$RB_ROW_HDR"'| 0009 | Caf\351 menu | ACTIVE | wip |\n| 0001 | One | ACTIVE | wip |\n| 0003 | Three | ACTIVE | wip |\n')"
+rb_r="$(ST="$rb_st" rb_lib 'slh_row_closed "$ST" 0001 && echo CLOSED || echo NOT')"
+[[ "$rb_r" == "CLOSED" ]] && ok "record bytes r1: slh_row_closed reads a row after a Latin-1 row whole (CLOSED)" \
+  || bad "record bytes r1: slh_row_closed reads a row after a Latin-1 row whole" "read [$rb_r]"
+rb_r="$(ST="$rb_st" OLD="$rb_old" rb_lib 'slh_rows_newly_closed "$ST" "$OLD"' | tr '\n' ' ')"
+[[ "$rb_r" == "0001 " ]] && ok "record bytes r2: slh_rows_newly_closed sees the close after the byte" \
+  || bad "record bytes r2: slh_rows_newly_closed sees the close after the byte" "read [$rb_r]"
+rb_r="$(ST="$rb_st" rb_lib 'slh_attest_active_specs "$ST"' | tr '\n' ' ')"
+[[ "$rb_r" == "0009 0003 " ]] && ok "record bytes r3: slh_attest_active_specs reads every ACTIVE row, the byte's own and the one after it" \
+  || bad "record bytes r3: slh_attest_active_specs reads every ACTIVE row" "read [$rb_r]"
+rb_r="$(NEW="$(printf 'caf\351 notes\n- CHORE-001: DONE 2026-09-24. a chore\n')" rb_lib 'slh_chores_completed "$NEW" ""' | tr '\n' ' ')"
+[[ "$rb_r" == "CHORE-001 " ]] && ok "record bytes r4: slh_chores_completed sees an archive line after the byte" \
+  || bad "record bytes r4: slh_chores_completed sees an archive line after the byte" "read [$rb_r]"
+rb_txt="$(printf '# Spec 0001\n\ncaf\351 goal\n\nStatus: ACTIVE\n\n## Goal\nbuild\n\n## Closing report\n- pending\n')"
+rb_c="$(printf '%s\n' "$rb_txt" | LC_ALL=C bash -c '. "$1"; slh_attest_hash_stdin' _ "$RB_LIB" 2>/dev/null)"
+rb_r="$(TXT="$rb_txt" rb_lib 'printf "%s\n" "$TXT" | slh_attest_hash_stdin')"
+[[ -n "$rb_c" && "$rb_r" == "$rb_c" ]] && ok "record bytes r5: the spec hash covers every byte above the Closing report under a UTF-8 caller" \
+  || bad "record bytes r5: the spec hash covers every byte above the Closing report under a UTF-8 caller" "C [$rb_c] UTF-8 [$rb_r]"
+rb_r="$(TXT="$(printf '# Spec 0001\n\ncaf\351\n\n- Architecture diagram: no impact\n')" rb_lib 'slh_diagram_field_line "$TXT"')"
+[[ "$rb_r" == *"Architecture diagram: no impact"* ]] && ok "record bytes r6: the diagram field reader finds the field after the byte" \
+  || bad "record bytes r6: the diagram field reader finds the field after the byte" "read [$rb_r]"
+
+# THE LAYERS. F2 at merge: the closing row itself carries the byte.
+RBM="$WORK/rb-merge-f2"; gh_fixture "$RBM" yes
+rb_branch_close "$RBM" "$RB_ROW_HDR"'| 0001 | Caf\351 menu | CLOSED | done |\n' "$(printf "$RB_SPEC_OK" 0001)"
+rb_merge "$RBM" spec/0001-thing
+if gh_landed "$RBM"; then ok "record bytes m1 (F2): a compliant close whose row carries a Latin-1 byte merges"
+else bad "record bytes m1 (F2): a compliant close whose row carries a Latin-1 byte merges" "refused: $(rb_out "$RBM.out")"; fi
+
+# F11 at merge, the fail-open half: two closes, the byte between their rows,
+# the second with no Closing report. Refused with the byte and without it.
+for rb_t in 'Caf\351' 'Cafe'; do
+  RBF="$WORK/rb-merge-f11"; gh_fixture "$RBF" yes
+  git -C "$RBF" checkout -q main
+  printf "$RB_ROW_HDR"'| 0001 | One | ACTIVE | wip |\n| 0009 | '"$rb_t"' menu | ACTIVE | wip |\n| 0002 | Two | ACTIVE | wip |\n' > "$RBF/specs/STATUS.md"
+  printf '# Spec 0001\n\nStatus: ACTIVE\n' > "$RBF/specs/0001-thing.md"
+  printf '# Spec 0002\n\nStatus: ACTIVE\n' > "$RBF/specs/0002-two.md"
+  printf '# Spec 0009\n\nStatus: ACTIVE\n' > "$RBF/specs/0009-menu.md"
+  git -C "$RBF" add -A >/dev/null 2>&1; git -C "$RBF" -c core.hooksPath=/dev/null commit -qm "three active specs" >/dev/null 2>&1
+  git -C "$RBF" checkout -q spec/0001-thing
+  git -C "$RBF" -c core.hooksPath=/dev/null merge -q --no-ff -m "sync" main >/dev/null 2>&1
+  printf "$RB_ROW_HDR"'| 0001 | One | CLOSED | done |\n| 0009 | '"$rb_t"' menu | ACTIVE | wip |\n| 0002 | Two | CLOSED | done |\n' > "$RBF/specs/STATUS.md"
+  printf "$RB_SPEC_OK" 0001 > "$RBF/specs/0001-thing.md"
+  printf '# Spec 0002\n\nStatus: CLOSED\n' > "$RBF/specs/0002-two.md"
+  git -C "$RBF" add -A >/dev/null 2>&1; git -C "$RBF" -c core.hooksPath=/dev/null commit -qm "close two" >/dev/null 2>&1
+  git -C "$RBF" checkout -q main
+  rb_merge "$RBF" spec/0001-thing
+  if gh_landed "$RBF"; then
+    bad "record bytes m2 (F11, row [$rb_t]): a second close after the byte with no Closing report is refused" "the merge landed: $(rb_out "$RBF.out")"
+  elif grep -q 'SLH-NO-CLOSING-REPORT' "$RBF.out" && grep -q '0002' "$RBF.out"; then
+    ok "record bytes m2 (F11, row [$rb_t]): a second close after the byte with no Closing report is refused, naming spec 0002"
+  else
+    bad "record bytes m2 (F11, row [$rb_t]): a second close after the byte with no Closing report is refused, naming spec 0002" "$(rb_out "$RBF.out")"
+  fi
+done
+
+# The spec text's readers at merge: the byte above the Closing report, above
+# the diagram field, and above an Owns: line.
+rb_i=0
+for rb_spec in \
+  '# Spec 0001\n\ncaf\351 notes\n\nStatus: CLOSED\n\n## Closing report\n\n- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n\n- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n' \
+  '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\n- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n\n- QA Pass 2 (human): caf\351 done\n\n- Architecture diagram: no impact\n' \
+  '# Spec 0001\n\ncaf\351 notes\nOwns: src/FEATURE.txt\n\nStatus: CLOSED\n\n## Closing report\n\n- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n\n- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n'; do
+  rb_i=$((rb_i + 1))
+  RBS="$WORK/rb-spec-$rb_i"; gh_fixture "$RBS" yes
+  rb_branch_close "$RBS" "$RB_ROW_HDR"'| 0001 | Thing | CLOSED | done |\n' "$rb_spec"
+  rb_merge "$RBS" spec/0001-thing
+  if gh_landed "$RBS"; then ok "record bytes s$rb_i: the close verification reads the spec text whole past a Latin-1 byte, and the merge lands"
+  else bad "record bytes s$rb_i: the close verification reads the spec text whole past a Latin-1 byte, and the merge lands" "refused: $(rb_out "$RBS.out")"; fi
+done
+
+# A chore at merge: the archive line comes after a line carrying the byte.
+RBC="$WORK/rb-chore"; gh_fixture "$RBC" no
+git -C "$RBC" checkout -q main
+git -C "$RBC" checkout -q -b chore/bump
+printf 'bump\n' > "$RBC/src/app.js"
+printf "$RB_ROW_HDR"'| 0001 | Thing | ACTIVE | wip |\n\ncaf\351 archive\n\n- CHORE-001: DONE 2026-09-24. a bump\n' > "$RBC/specs/STATUS.md"
+git -C "$RBC" add -A >/dev/null 2>&1; git -C "$RBC" -c core.hooksPath=/dev/null commit -qm "chore" >/dev/null 2>&1
+git -C "$RBC" checkout -q main
+rb_merge "$RBC" chore/bump
+if [[ "$(git -C "$RBC" show main:src/app.js 2>/dev/null)" == "bump" ]]; then ok "record bytes c1: a chore whose archive line follows a Latin-1 byte merges"
+else bad "record bytes c1: a chore whose archive line follows a Latin-1 byte merges" "refused: $(rb_out "$RBC.out")"; fi
+
+# F2 at commit: the squash route, where pre-commit completes the close.
+RBQ="$WORK/rb-squash"; gh_fixture "$RBQ" yes
+rb_branch_close "$RBQ" "$RB_ROW_HDR"'| 0001 | Caf\351 menu | CLOSED | done |\n' "$(printf "$RB_SPEC_OK" 0001)"
+( cd "$RBQ" && LC_ALL="$RB_U8" LANG="$RB_U8" git -c merge.ff=true merge --squash spec/0001-thing \
+  && LC_ALL="$RB_U8" LANG="$RB_U8" git commit -qm "Squash spec/0001-thing" ) >"$RBQ.out" 2>&1
+if gh_landed "$RBQ"; then ok "record bytes q1 (F2 at commit): the squash commit completing a close whose row carries the byte is accepted"
+else bad "record bytes q1 (F2 at commit): the squash commit completing a close whose row carries the byte is accepted" "refused: $(rb_out "$RBQ.out")"; fi
+
+# F2 at push: the audit's row reader, its spec-text reader, and the squash
+# commit's single-parent route, each on a trunk the merge put there.
+rb_j=0
+for rb_case in merge-row merge-spec squash; do
+  rb_j=$((rb_j + 1))
+  RBP="$WORK/rb-push-$rb_j"; gh_fixture "$RBP" yes; git -C "$RBP" checkout -q main; rb_push_ready "$RBP"
+  case "$rb_case" in
+    merge-row) rb_branch_close "$RBP" "$RB_ROW_HDR"'| 0001 | Caf\351 menu | CLOSED | done |\n' "$(printf "$RB_SPEC_OK" 0001)" ;;
+    merge-spec) rb_branch_close "$RBP" "$RB_ROW_HDR"'| 0001 | Thing | CLOSED | done |\n' '# Spec 0001\n\ncaf\351 notes\n\nStatus: CLOSED\n\n## Closing report\n\n- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n\n- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n' ;;
+    squash) rb_branch_close "$RBP" "$RB_ROW_HDR"'| 0001 | Caf\351 menu | CLOSED | done |\n' "$(printf "$RB_SPEC_OK" 0001)" ;;
+  esac
+  if [[ "$rb_case" == squash ]]; then
+    git -C "$RBP" -c core.hooksPath=/dev/null -c merge.ff=true merge -q --squash spec/0001-thing >/dev/null 2>&1
+    git -C "$RBP" -c core.hooksPath=/dev/null commit -qm "Squash spec/0001-thing" >/dev/null 2>&1
+  else
+    git -C "$RBP" -c core.hooksPath=/dev/null merge -q --no-ff -m "Merge spec/0001-thing" spec/0001-thing >/dev/null 2>&1
+  fi
+  if rb_push "$RBP"; then ok "record bytes p$rb_j (F2 at push, $rb_case): the audit reads the record whole past the byte and the push lands"
+  else bad "record bytes p$rb_j (F2 at push, $rb_case): the audit reads the record whole past the byte and the push lands" "refused: $(rb_out "$RBP.push")"; fi
+done
+fi
+fi; shard_region_end
+# <<< SHARD-END record-bytes-0169
+
+# --- A ROLE IS A LITERAL PREFIX AT EVERY LAYER (spec 0169, E-e) ------------------
+# The hook library and pre-commit matched a role against staged paths as a
+# regular expression while the trunk audit matches it literally: `c++` (an
+# ordinary directory name) made BSD grep exit 2 ("repetition-operator operand
+# invalid"), so the merge hook read "no feature code" and the closes-no-spec
+# refusal never fired, and `a.b` matched `axb/`. Since 0169 every layer reads the
+# role as the audit does. THE THREE READERS AGREEING IS THE THESIS.
+rl_fixture() { # rl_fixture <dir> <role> <branch-file> [owns-line]: a spec branch adding one file, closing nothing
+  local d="$1" role="$2" file="$3"
+  rm -rf "$d"; mkdir -p "$d/specs" "$d/.claude" "$d/.githooks" "$d/docs"
+  git_init "$d"
+  jq -nc --arg r "$role" '{trunk:"main",scaffolded:true,gate_command:"true",roles:{src:$r,tests:"tests"}}' > "$d/.claude/sdd.json"
+  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | ACTIVE | wip |\n' > "$d/specs/STATUS.md"
+  printf '# Spec 0001\n\nStatus: ACTIVE\n' > "$d/specs/0001-thing.md"
+  printf 'seed\n' > "$d/docs/readme.txt"
+  cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" \
+     "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
+  chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" -c core.hooksPath=/dev/null commit -qm seed >/dev/null 2>&1
+  git -C "$d" config core.hooksPath .githooks
+  git -C "$d" checkout -q -b spec/0001-thing
+  mkdir -p "$d/$(dirname "$file")"; printf 'work\n' > "$d/$file"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" -c core.hooksPath=/dev/null commit -qm "work" >/dev/null 2>&1
+  git -C "$d" checkout -q main
+}
+rl_merge() { ( cd "$1" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m "Merge spec/0001-thing" spec/0001-thing ) >"$1.out" 2>&1; }
+rl_landed() { git -C "$1" cat-file -e "main:$2" 2>/dev/null; }
+
+# >>> SHARD-BEGIN role-literal-0169 cost=2
+if shard_region role-literal-0169; then
+# c++ : feature code under the role, merged without closing a spec.
+RL="$WORK/rl-cpp"; rl_fixture "$RL" 'c++' 'c++/x.cpp'; rl_merge "$RL"
+if ! rl_landed "$RL" 'c++/x.cpp' && grep -q 'SLH-CLOSES-NO-SPEC' "$RL.out"; then
+  ok "role literal 1: a role named c++ is feature code at merge, refused SLH-CLOSES-NO-SPEC when no spec closes"
+else
+  bad "role literal 1: a role named c++ is feature code at merge, refused SLH-CLOSES-NO-SPEC when no spec closes" \
+      "$(LC_ALL=C tr -d '\200-\377' < "$RL.out" | grep -E 'SLH-|grep|Merge made' | tr '\n' ' ' | cut -c1-240)"
+fi
+# the audit agrees at push: the same role, the same file straight onto main
+RLA="$WORK/rl-cpp-audit"; rl_fixture "$RLA" 'c++' 'docs/other.txt'
+mkdir -p "$RLA/c++"; printf 'x\n' > "$RLA/c++/y.cpp"
+git -C "$RLA" add -A >/dev/null 2>&1; git -C "$RLA" -c core.hooksPath=/dev/null commit -qm "c++ straight onto main" >/dev/null 2>&1
+rl_a="$(bash "$SCRIPTS/trunk-audit.sh" "$RLA" 2>&1)"; rl_arc=$?
+if [[ "$rl_arc" -eq 1 && "$rl_a" == *"VIOLATION"* ]]; then
+  ok "role literal 2: the trunk audit reads the c++ role literally too, reporting the direct commit (the three readers agree)"
+else
+  bad "role literal 2: the trunk audit reads the c++ role literally too" "rc $rl_arc: $(printf '%s' "$rl_a" | tail -n2 | tr '\n' ' ')"
+fi
+# a.b : axb/ is not the role, so a docs-shaped merge that closes nothing lands.
+RL="$WORK/rl-dot"; rl_fixture "$RL" 'a.b' 'axb/f.txt'; rl_merge "$RL"
+if rl_landed "$RL" 'axb/f.txt'; then
+  ok "role literal 3: a role named a.b does not match axb/, so a merge touching only axb/ is not feature code"
+else
+  bad "role literal 3: a role named a.b does not match axb/" "refused: $(LC_ALL=C tr -d '\200-\377' < "$RL.out" | grep -E 'SLH-' | tr '\n' ' ' | cut -c1-240)"
+fi
+# the control: a.b/ itself is the role
+RL="$WORK/rl-dot-ctl"; rl_fixture "$RL" 'a.b' 'a.b/f.txt'; rl_merge "$RL"
+if ! rl_landed "$RL" 'a.b/f.txt' && grep -q 'SLH-CLOSES-NO-SPEC' "$RL.out"; then
+  ok "role literal 4: a.b/f.txt is under the role a.b, refused when no spec closes (the control)"
+else
+  bad "role literal 4: a.b/f.txt is under the role a.b, refused when no spec closes (the control)" "$(LC_ALL=C tr -d '\200-\377' < "$RL.out" | tr '\n' ' ' | cut -c1-200)"
+fi
+# The Owns: reader: a declaring close whose role-path file under c++ is not declared.
+RL="$WORK/rl-owns"; rl_fixture "$RL" 'c++' 'c++/x.cpp'
+# the per-file check runs where the status record decides, so the instance carries one
+printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{}}\n' > "$RL/.claude/status.json"
+git -C "$RL" add -A >/dev/null 2>&1; git -C "$RL" -c core.hooksPath=/dev/null commit -qm "record" >/dev/null 2>&1
+git -C "$RL" checkout -q spec/0001-thing
+git -C "$RL" -c core.hooksPath=/dev/null merge -q --no-ff -m sync main >/dev/null 2>&1
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$RL/.claude/status.json"
+mkdir -p "$RL/c++"; printf 'more\n' > "$RL/c++/undeclared.cpp"
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n' > "$RL/specs/STATUS.md"
+printf '# Spec 0001\n\nStatus: CLOSED\nOwns: c++/x.cpp\n\n## Closing report\n\n- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n\n- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n' > "$RL/specs/0001-thing.md"
+git -C "$RL" add -A >/dev/null 2>&1; git -C "$RL" -c core.hooksPath=/dev/null commit -qm "close, one file undeclared" >/dev/null 2>&1
+git -C "$RL" checkout -q main
+# The file-by-file check is the SINGLE-PARENT close's (a --no-ff merge takes the provenance arm), so the squash route.
+( cd "$RL" && git -c merge.ff=true merge --squash spec/0001-thing >/dev/null 2>&1 && git commit -qm "Squash spec/0001-thing" ) >"$RL.out" 2>&1
+if ! rl_landed "$RL" 'c++/undeclared.cpp' && grep -q 'SLH-OWNS-UNDECLARED' "$RL.out"; then
+  ok "role literal 5: under a c++ role, a declaring squash close's undeclared role-path file is refused SLH-OWNS-UNDECLARED"
+else
+  bad "role literal 5: under a c++ role, a declaring squash close's undeclared role-path file is refused SLH-OWNS-UNDECLARED" \
+      "landed=$(rl_landed "$RL" 'c++/undeclared.cpp' && echo yes || echo no): $(LC_ALL=C tr -d '\200-\377' < "$RL.out" | tr '\n' ' ' | cut -c1-300)"
+fi
+fi; shard_region_end
+# <<< SHARD-END role-literal-0169
+
+# THE CLOSE REVIEW (spec 0175): one block, one reader, two layers. cr_fixture builds an
+# instance in e174_fixture's shape (roles src and tests, the four git hooks armed from this
+# tree, the audit beside them), record-carrying or page-only (DE15), "plugin":{"version"}
+# 2.11.0 unless told otherwise, and spec 0001 closed on spec/0001 with a complete Closing
+# report whose close-review block is the case's text (empty: no block at all). cr_judge
+# merges it --no-ff through the armed gate, completes a refused merge with hooks off so the
+# audit has the close to read, and prints "<gate> <audit>", each "ok" or the [SLH-...]
+# code it refused with ("rc<N>" for a refusal carrying no code).
+# cr_fixture <dir> <record|page> <block-text> [branch-file] [plugin-version|none] [pasted-text]
+# pasted-text (spec 0180, F-a): written between the qa-pass-1 block and the close-review block,
+# the place /setlist:checkpoint pastes the QA report verbatim.
+cr_fixture() {
+  local d="$1" kind="$2" blk="$3" f="${4:-src/a.txt}" v="${5:-2.11.0}" pv="" pasted="${6:-}"
+  rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude/hooks" "$d/.githooks"
+  git_init "$d"
+  [[ "$v" == "none" ]] || pv=',"plugin":{"version":"'"$v"'"}'
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}%s}\n' "$pv" > "$d/.claude/sdd.json"
+  [[ "$kind" == "page" ]] || printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{}}\n' > "$d/.claude/status.json"
+  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | A | ACTIVE | wip |\n' > "$d/specs/STATUS.md"
+  cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" \
+     "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
+  chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit" "$d/.githooks/pre-push"
+  cp "$SCRIPTS/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" -c core.hooksPath=/dev/null commit -qm base >/dev/null 2>&1
+  git -C "$d" checkout -qb spec/0001
+  { printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\nArchitecture diagram: no impact\n\n```qa-pass-1\n1: PASS\n2: PASS\n```\n'
+    [[ -z "$pasted" ]] || printf '\n%s\n' "$pasted"
+    [[ -z "$blk" ]] || printf '\n```close-review\n%s\n```\n\nThe reviewer'"'"'s report, pasted verbatim.\n' "$blk"; } > "$d/specs/0001-x.md"
+  mkdir -p "$(dirname "$d/$f")"; printf 'A\n' > "$d/$f"
+  if [[ "$kind" != "page" ]]; then
+    jq '.specs["0001"]={"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}' "$d/.claude/status.json" > "$d/.claude/status.json.new" \
+      && mv "$d/.claude/status.json.new" "$d/.claude/status.json"
+  fi
+  sed -e 's/^| 0001 | A | ACTIVE |/| 0001 | A | CLOSED |/' "$d/specs/STATUS.md" > "$d/specs/STATUS.md.new" && mv "$d/specs/STATUS.md.new" "$d/specs/STATUS.md"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" -c core.hooksPath=/dev/null commit -qm "close 0001" >/dev/null 2>&1
+  git -C "$d" checkout -q main
+  git -C "$d" config core.hooksPath .githooks
+}
+cr_code() { # cr_code <rc> <output> -> ok | [SLH-...] | rc<N>
+  local c
+  if [[ "$1" -eq 0 ]]; then printf 'ok'; return; fi
+  c="$(grep -oE '\[SLH-(NO-CLOSE-REVIEW|CLOSE-REVIEW-[A-Z-]+)\]' <<< "$2" | head -1)"
+  printf '%s' "${c:-rc$1}"
+}
+cr_judge() { # cr_judge <dir> [squash] -> "<gate> <audit>"
+  local d="$1" out rc g a
+  if [[ "${2:-}" == "squash" ]]; then
+    out="$( { git -C "$d" merge -q --squash spec/0001 && git -C "$d" commit -qm "squash close 0001"; } 2>&1)"; rc=$?
+    g="$(cr_code "$rc" "$out")"
+    if [[ "$rc" -ne 0 ]]; then git -C "$d" -c core.hooksPath=/dev/null commit -qm "squash close 0001" >/dev/null 2>&1; fi
+  else
+    out="$(git -C "$d" merge -q --no-ff -m "merge spec/0001" spec/0001 2>&1)"; rc=$?
+    g="$(cr_code "$rc" "$out")"
+    if [[ "$rc" -ne 0 ]]; then
+      git -C "$d" merge --abort >/dev/null 2>&1
+      git -C "$d" -c core.hooksPath=/dev/null merge -q --no-ff -m "merge spec/0001" spec/0001 >/dev/null 2>&1
+    fi
+  fi
+  out="$(bash "$SCRIPTS/trunk-audit.sh" "$d" 2>&1)"; rc=$?
+  a="$(cr_code "$rc" "$(grep '^VIOLATION' <<< "$out")")"
+  printf '%s %s' "$g" "$a"
+}
+CR_ROUND1_FAIL=$'round 1: FAIL\n1: PASS\n2: FAIL\nF1 | 2 | MAJOR | src/a.txt:1 | the file says A where criterion 2 wants B | write B'
+CR_ROUND2_PASS=$'round 2: PASS\n1: PASS\n2: PASS'
+
+# >>> SHARD-BEGIN close-review-0175 cost=8
+if shard_region close-review-0175; then
+# The corpus (groups A, B and C): each shape through the gate and the audit, on a record-
+# carrying and a record-less instance, against the outcome the design names. One table,
+# so the two layers are compared shape by shape rather than case by case.
+CR_BAD=""; CR_ROWS=0
+while IFS='|' read -r CR_NAME CR_FILE CR_WANT; do
+  [[ -n "$CR_NAME" ]] || continue
+  case "$CR_NAME" in
+    absent)       CR_BLK="" ;;
+    fail)         CR_BLK="$CR_ROUND1_FAIL" ;;
+    malformed-fl) CR_BLK=$'round 1: FAIL\n2: FAIL\nF1 | 2 | MAJOR | src/a.txt | no line here | fix' ;;
+    malformed-r3) CR_BLK="$CR_ROUND1_FAIL"$'\nround 2: FAIL\n2: FAIL\nF2 | 2 | MAJOR | src/a.txt:1 | w | f\nround 3: PASS\n1: PASS\n2: PASS' ;;
+    malformed-pre) CR_BLK=$'1: PASS\nround 1: PASS\n1: PASS' ;;
+    malformed-pm) CR_BLK=$'round 1: PASS\n1: PASS\n2: PASS\nF1 | 2 | MAJOR | src/a.txt:1 | w | f' ;;
+    pass)         CR_BLK=$'round 1: PASS\n1: PASS\n2: PASS\nF1 | - | MINOR | src/a.txt:1 | a nit | optional' ;;
+    two-rounds)   CR_BLK="$CR_ROUND1_FAIL"$'\n'"$CR_ROUND2_PASS" ;;
+    skip)         CR_BLK='round 1: SKIP-DOCS-ONLY' ;;
+    skip-role)    CR_BLK='round 1: SKIP-DOCS-ONLY' ;;
+    accepted)     CR_BLK="$CR_ROUND1_FAIL"$'\nround 2: FAIL\n1: PASS\n2: FAIL\nF2 | 2 | MAJOR | src/a.txt:1 | still A | write B\nverdict: ACCEPTED-BY-HUMAN F2' ;;
+    accepted-r1)  CR_BLK="$CR_ROUND1_FAIL"$'\nverdict: ACCEPTED-BY-HUMAN F1' ;;
+    accepted-bad) CR_BLK="$CR_ROUND1_FAIL"$'\nround 2: FAIL\n2: FAIL\nF2 | 2 | MAJOR | src/a.txt:1 | w | f\nverdict: ACCEPTED-BY-HUMAN F7' ;;
+  esac
+  for CR_KIND in record page; do
+    CR_D="$WORK/cr-$CR_NAME-$CR_KIND"
+    cr_fixture "$CR_D" "$CR_KIND" "$CR_BLK" "$CR_FILE"
+    CR_GOT="$(cr_judge "$CR_D")"; CR_ROWS=$((CR_ROWS + 1))
+    [[ "$CR_GOT" == "$CR_WANT $CR_WANT" ]] || CR_BAD="$CR_BAD $CR_NAME/$CR_KIND: gate,audit=$CR_GOT want $CR_WANT;"
+  done
+done <<'CRTABLE'
+absent|src/a.txt|[SLH-NO-CLOSE-REVIEW]
+fail|src/a.txt|[SLH-CLOSE-REVIEW-FAIL]
+malformed-fl|src/a.txt|[SLH-NO-CLOSE-REVIEW]
+malformed-r3|src/a.txt|[SLH-NO-CLOSE-REVIEW]
+malformed-pre|src/a.txt|[SLH-NO-CLOSE-REVIEW]
+malformed-pm|src/a.txt|[SLH-NO-CLOSE-REVIEW]
+pass|src/a.txt|ok
+two-rounds|src/a.txt|ok
+skip|docs/x.md|ok
+skip-role|src/a.txt|[SLH-CLOSE-REVIEW-SKIP-REFUSED]
+accepted|src/a.txt|ok
+accepted-r1|src/a.txt|[SLH-NO-CLOSE-REVIEW]
+accepted-bad|src/a.txt|[SLH-NO-CLOSE-REVIEW]
+CRTABLE
+if [[ -z "$CR_BAD" && "$CR_ROWS" -eq 26 ]]; then
+  ok "0175 cr corpus: 13 block shapes, record and page, read identically by the close gate and the trunk audit, each as designed"
+else
+  bad "0175 cr corpus: 13 block shapes, record and page, read identically by the close gate and the trunk audit, each as designed" "rows=$CR_ROWS:$CR_BAD"
+fi
+# A PASTED REPORT CARRYING HEADINGS (spec 0180, F-a of the 2.11.0 cold run, and fix round 2 as the
+# validator ruled). /setlist:checkpoint pastes the QA report verbatim above the close-review block,
+# and an agent's report can carry `##` headings; the reader ended the Closing report at the first
+# one and said the block was absent. Fix round 1 read to the end of the file, which also read a
+# block in a SECTION AFTER the Closing report when the report carried none (the widening the leg's
+# triage recorded): a pasted heading and a real later section are the same bytes. So a report is
+# pasted inside a fence, where its headings are content (a); a report with no block is still
+# refused (b); and an unfenced paste, F-a's own shape, is refused with the heading that ended the
+# section named, never read as absent (c). Both record kinds, the gate and the audit.
+CR_PASTED=$'## QA Pass 1 report\n\nEvery criterion passed.\n\n## Findings\n\n### Minor\n\nNone.'
+CR_FENCED=$'````text\n'"$CR_PASTED"$'\n````'
+CR_H_BAD=""
+for CR_KIND in record page; do
+  CR_D="$WORK/cr-heading-$CR_KIND"; cr_fixture "$CR_D" "$CR_KIND" $'round 1: PASS\n1: PASS\n2: PASS' src/a.txt 2.11.0 "$CR_FENCED"
+  CR_GOT="$(cr_judge "$CR_D")"; [[ "$CR_GOT" == "ok ok" ]] || CR_H_BAD="$CR_H_BAD a/$CR_KIND: gate,audit=$CR_GOT want ok;"
+  CR_D="$WORK/cr-heading-none-$CR_KIND"; cr_fixture "$CR_D" "$CR_KIND" "" src/a.txt 2.11.0 "$CR_FENCED"
+  CR_GOT="$(cr_judge "$CR_D")"; [[ "$CR_GOT" == "[SLH-NO-CLOSE-REVIEW] [SLH-NO-CLOSE-REVIEW]" ]] || CR_H_BAD="$CR_H_BAD b/$CR_KIND: gate,audit=$CR_GOT want [SLH-NO-CLOSE-REVIEW];"
+  CR_D="$WORK/cr-heading-bare-$CR_KIND"; cr_fixture "$CR_D" "$CR_KIND" $'round 1: PASS\n1: PASS\n2: PASS' src/a.txt 2.11.0 "$CR_PASTED"
+  CR_GOT="$(cr_judge "$CR_D")"; [[ "$CR_GOT" == "[SLH-NO-CLOSE-REVIEW] [SLH-NO-CLOSE-REVIEW]" ]] || CR_H_BAD="$CR_H_BAD c/$CR_KIND: gate,audit=$CR_GOT want [SLH-NO-CLOSE-REVIEW];"
+  bash "$SCRIPTS/trunk-audit.sh" "$CR_D" 2>&1 | grep -q 'sits after the heading "## QA Pass 1 report"' || CR_H_BAD="$CR_H_BAD c/$CR_KIND: the reason does not name the heading;"
+done
+if [[ -z "$CR_H_BAD" ]]; then
+  ok "0180 cr heading: a report pasted inside a fence is read through, record and page, gate and audit; with no block it is refused; unfenced, its heading ends the section and is named"
+else
+  bad "0180 cr heading: a report pasted inside a fence is read through, record and page, gate and audit; with no block it is refused; unfenced, its heading ends the section and is named" "$CR_H_BAD"
+fi
+# THE SECTION AND THE FENCE, READ AS MARKDOWN READS THEM (spec 0180, fix round 2, the leg's F3,
+# F12 and F16). F3: a heading that merely BEGAN "Closing report" ("## Closing report contract")
+# opened the section, and first-wins let a decoy PASS above the real section pre-empt a real FAIL.
+# F12: the info string was compared with every space deleted, so "close - review", a `close`
+# block to every renderer, was taken as the block and pre-empted the real one. F16: an unclosed
+# ordinary fence above a valid block hid it and the refusal said no block was carried; it names
+# the unclosed fence by line now. Each row through the gate and the audit, page kind.
+CR_FAIL_BLK=$'```close-review\nround 1: FAIL\n1: PASS\n2: FAIL\nF1 | 2 | BLOCKER | src/a.txt:1 | criterion 2 is not met | implement it\n```'
+CR_S_BAD=""
+cr_spec_case() { # cr_spec_case <name> <spec text> <want gate,audit> [<reason text the refusal must carry>]
+  local d="$WORK/cr-s-$1" got out
+  cr_fixture "$d" page ""
+  git -C "$d" checkout -q spec/0001
+  printf '%s\n' "$2" > "$d/specs/0001-x.md"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" -c core.hooksPath=/dev/null commit -qm "close 0001, shaped" >/dev/null 2>&1
+  git -C "$d" checkout -q main
+  got="$(cr_judge "$d")"
+  [[ "$got" == "$3" ]] || CR_S_BAD="$CR_S_BAD $1: gate,audit=$got want $3;"
+  if [[ -n "${4:-}" ]]; then
+    out="$(bash "$SCRIPTS/trunk-audit.sh" "$d" 2>&1)"
+    grep -qF "$4" <<< "$out" || CR_S_BAD="$CR_S_BAD $1: the audit's reason does not carry '$4';"
+  fi
+}
+CR_HEAD=$'# Spec 0001\n\nStatus: CLOSED\n'
+CR_QA=$'Architecture diagram: no impact\n\n```qa-pass-1\n1: PASS\n2: PASS\n```\n'
+cr_spec_case decoy-heading "$CR_HEAD"$'\n## Closing report contract (filled in at the close)\n\n```close-review\nround 1: PASS\n1: PASS\n2: PASS\n```\n\n## Design\n\nwork happened.\n\n## Closing report\n\n'"$CR_QA"$'\n'"$CR_FAIL_BLK" "[SLH-CLOSE-REVIEW-FAIL] [SLH-CLOSE-REVIEW-FAIL]"
+cr_spec_case template-heading "$CR_HEAD"$'\n## Closing report (completed at close; checkpoint gates on this section)\n\n'"$CR_QA"$'\n```close-review\nround 1: PASS\n1: PASS\n2: PASS\n```' "ok ok"
+cr_spec_case squeezed-info "$CR_HEAD"$'\n## Closing report\n\n'"$CR_QA"$'\n```close - review\nround 1: PASS\n1: PASS\n2: PASS\n```\n\n'"$CR_FAIL_BLK" "[SLH-CLOSE-REVIEW-FAIL] [SLH-CLOSE-REVIEW-FAIL]"
+cr_spec_case padded-info "$CR_HEAD"$'\n## Closing report\n\n'"$CR_QA"$'\n```  close-review  \nround 1: PASS\n1: PASS\n2: PASS\n```' "ok ok"
+cr_spec_case unclosed-fence "$CR_HEAD"$'\n## Closing report\n\n'"$CR_QA"$'\n- QA Pass 1 report (pasted verbatim): the suite output was\n\n  ```\n  12 tests, 0 failures\n\n- Close review:\n\n  ```close-review\n  round 1: PASS\n  1: PASS\n  2: PASS\n  ```' "[SLH-NO-CLOSE-REVIEW] [SLH-NO-CLOSE-REVIEW]" "the close-review fence at line 21 opens inside a fence opened at line 16"
+cr_spec_case late-section "$CR_HEAD"$'\n## Closing report\n\n'"$CR_QA"$'\n## Appendix: an example\n\n```close-review\nround 1: PASS\n1: PASS\n2: PASS\n```' "[SLH-NO-CLOSE-REVIEW] [SLH-NO-CLOSE-REVIEW]" 'sits after the heading "## Appendix: an example"'
+cr_spec_case unclosed-eof "$CR_HEAD"$'\n## Closing report\n\n'"$CR_QA"$'\n````\nthe transcript was cut here\n' "[SLH-NO-CLOSE-REVIEW] [SLH-NO-CLOSE-REVIEW]" "an unclosed fence opened at line 14"
+if [[ -z "$CR_S_BAD" ]]; then
+  ok "0180 cr section: only a heading that IS Closing report opens the section, a later section is not read, the info string is compared trimmed, and an unclosed fence above the block is named by line; gate and audit"
+else
+  bad "0180 cr section: only a heading that IS Closing report opens the section, a later section is not read, the info string is compared trimmed, and an unclosed fence above the block is named by line; gate and audit" "$CR_S_BAD"
+fi
+# THE TREE THE GATE READ (spec 0180, fix round 2, the leg's F9). The gate reads the close-review
+# block from the index, which becomes the merge commit; the audit read it from the MERGED
+# PARENT's copy, so one close was judged two ways. D1: a block written in the merge resolution
+# passed the gate and was refused at push. D2: a FAIL block written in the resolution over the
+# branch's PASS reached the trunk and the audit called it clean. The audit reads the merge
+# commit's own tree now, both kinds, both directions.
+CR_T_BAD=""
+for CR_KIND in record page; do
+  CR_D="$WORK/cr-tree-d1-$CR_KIND"; cr_fixture "$CR_D" "$CR_KIND" ""
+  git -C "$CR_D" merge -q --no-commit --no-ff spec/0001 >/dev/null 2>&1
+  printf '\n```close-review\nround 1: PASS\n1: PASS\n2: PASS\n```\n' >> "$CR_D/specs/0001-x.md"
+  git -C "$CR_D" add -A >/dev/null 2>&1
+  CR_OUT="$(git -C "$CR_D" commit -qm "merge spec/0001" 2>&1)"; CR_RC=$?
+  [[ "$CR_RC" -eq 0 ]] || CR_T_BAD="$CR_T_BAD d1/$CR_KIND: the gate refused ($(tr '\n' ' ' <<< "$CR_OUT" | cut -c1-120));"
+  CR_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$CR_D" 2>&1)"; CR_RC=$?
+  [[ "$CR_RC" -eq 0 ]] || CR_T_BAD="$CR_T_BAD d1/$CR_KIND: audit rc=$CR_RC $(grep -m1 '^VIOLATION' <<< "$CR_OUT" | cut -c1-120);"
+  CR_D="$WORK/cr-tree-d2-$CR_KIND"; cr_fixture "$CR_D" "$CR_KIND" $'round 1: PASS\n1: PASS\n2: PASS'
+  git -C "$CR_D" merge -q --no-commit --no-ff spec/0001 >/dev/null 2>&1
+  awk '/^```close-review$/{print; print "round 1: FAIL"; print "1: PASS"; print "2: FAIL"; print "F1 | 2 | BLOCKER | src/a.txt:1 | criterion 2 is not met | implement it"; skip=1; next} skip && /^```$/{skip=0} !skip' \
+    "$CR_D/specs/0001-x.md" > "$CR_D/specs/0001-x.md.new" && mv "$CR_D/specs/0001-x.md.new" "$CR_D/specs/0001-x.md"
+  git -C "$CR_D" add -A >/dev/null 2>&1
+  git -C "$CR_D" -c core.hooksPath=/dev/null commit -qm "merge spec/0001" >/dev/null 2>&1
+  CR_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$CR_D" 2>&1)"; CR_RC=$?
+  [[ "$CR_RC" -eq 1 ]] && grep -q '^VIOLATION .*\[SLH-CLOSE-REVIEW-FAIL\]' <<< "$CR_OUT" \
+    || CR_T_BAD="$CR_T_BAD d2/$CR_KIND: audit rc=$CR_RC, no [SLH-CLOSE-REVIEW-FAIL];"
+done
+if [[ -z "$CR_T_BAD" ]]; then
+  ok "0180 cr tree: the audit reads the close-review block from the merge commit's own tree, as the gate reads the index: a block written in the resolution passes both, a FAIL written over a PASS is refused; record and page"
+else
+  bad "0180 cr tree: the audit reads the close-review block from the merge commit's own tree, as the gate reads the index: a block written in the resolution passes both, a FAIL written over a PASS is refused; record and page" "$CR_T_BAD"
+fi
+# The reason names what the reader found (a malformed block says why).
+CR_D="$WORK/cr-reason"; cr_fixture "$CR_D" page $'round 1: PASS\n1: PASS\n2: PASS\nF1 | 2 | MAJOR | src/a.txt:1 | w | f'
+CR_OUT="$(git -C "$CR_D" merge -q --no-ff -m m spec/0001 2>&1)"
+if grep -q 'SLH-NO-CLOSE-REVIEW' <<< "$CR_OUT" && grep -q 'round 1 reads PASS beside F1 MAJOR' <<< "$CR_OUT"; then
+  ok "0175 cr reason: a PASS round beside a MAJOR finding is refused with the disagreement named"
+else
+  bad "0175 cr reason: a PASS round beside a MAJOR finding is refused with the disagreement named" "$(tr '\n' ' ' <<< "$CR_OUT" | cut -c1-300)"
+fi
+# Group D: the dating (not in force before 2.11, at both layers).
+CR_BAD=""
+for CR_V in 2.10.0 none; do
+  for CR_KIND in record page; do
+    CR_D="$WORK/cr-dated-$CR_V-$CR_KIND"; cr_fixture "$CR_D" "$CR_KIND" "" src/a.txt "$CR_V"
+    CR_GOT="$(cr_judge "$CR_D")"; [[ "$CR_GOT" == "ok ok" ]] || CR_BAD="$CR_BAD $CR_V/$CR_KIND=$CR_GOT;"
+  done
+done
+if [[ -z "$CR_BAD" ]]; then
+  ok "0175 cr dated: a block-less close under plugin 2.10.0 or no version is not judged by the review rule, at either layer"
+else
+  bad "0175 cr dated: a block-less close under plugin 2.10.0 or no version is not judged by the review rule, at either layer" "$CR_BAD"
+fi
+# Group D: the squash close, through pre-commit and the audit's linear arm.
+CR_BAD=""
+for CR_KIND in record page; do
+  CR_D="$WORK/cr-squash-$CR_KIND"; cr_fixture "$CR_D" "$CR_KIND" ""
+  CR_GOT="$(cr_judge "$CR_D" squash)"; [[ "$CR_GOT" == "[SLH-NO-CLOSE-REVIEW] [SLH-NO-CLOSE-REVIEW]" ]] || CR_BAD="$CR_BAD absent/$CR_KIND=$CR_GOT;"
+  CR_D="$WORK/cr-squash-pass-$CR_KIND"; cr_fixture "$CR_D" "$CR_KIND" $'round 1: PASS\n1: PASS\n2: PASS'
+  CR_GOT="$(cr_judge "$CR_D" squash)"; [[ "$CR_GOT" == "ok ok" ]] || CR_BAD="$CR_BAD pass/$CR_KIND=$CR_GOT;"
+  CR_D="$WORK/cr-squash-skip-$CR_KIND"; cr_fixture "$CR_D" "$CR_KIND" 'round 1: SKIP-DOCS-ONLY' docs/x.md
+  CR_GOT="$(cr_judge "$CR_D" squash)"; [[ "$CR_GOT" == "ok ok" ]] || CR_BAD="$CR_BAD skip/$CR_KIND=$CR_GOT;"
+done
+if [[ -z "$CR_BAD" ]]; then
+  ok "0175 cr squash: a squash close is read by pre-commit and the audit's linear arm alike (absent refused, PASS and a docs-only skip accepted)"
+else
+  bad "0175 cr squash: a squash close is read by pre-commit and the audit's linear arm alike (absent refused, PASS and a docs-only skip accepted)" "$CR_BAD"
+fi
+fi; shard_region_end
+# <<< SHARD-END close-review-0175

@@ -17,6 +17,9 @@
 # that LOOKS like it is not the governed thing.
 # =============================================================================
 
+# >>> SHARD-BEGIN canon-skills-12 cost=2
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region canon-skills-12; then
 CANON="$WORK/canonical"
 close_fixture "$CANON" no no answered no no true
 mkdir -p "$CANON/docs" "$CANON/src"
@@ -160,9 +163,83 @@ else
   bad "skill frontmatter control: the scan catches the line that shipped" \
       "it did not flag the design-surface description, so the clean result above means nothing"
 fi
+fi; shard_region_end
+# <<< SHARD-END canon-skills-12
+
+# --- A `..` AFTER A SYMLINKED COMPONENT, JUDGED WHERE THE KERNEL WRITES IT ------
+# (spec 0169, L2 F8.) The scope hook collapsed `..` in the TEXT, and bash's
+# logical cd did the same before pwd -P ran, so `link/../a.txt` with link ->
+# src/sub (the kernel writes src/a.txt, a role path) drew no advisory and
+# `src/lnk/../a.txt` with src/lnk -> ../docs/sub (the kernel writes docs/a.txt)
+# drew SH-TRUNK-WRITE: both verdicts inverted. Each case below writes the file
+# through the same spelling first, so the filesystem is the oracle the verdict
+# is compared with, not an expectation typed into the test.
+sd_fixture() { # sd_fixture <dir>: an armed instance on the trunk, with the two links of the finding
+  local d="$1"
+  rm -rf "$d"; mkdir -p "$d/src/sub" "$d/docs/sub" "$d/specs" "$d/.claude"
+  git_init "$d"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+  printf 'seed\n' > "$d/docs/readme.txt"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" -c core.hooksPath=/dev/null commit -qm seed >/dev/null 2>&1
+  ln -s src/sub "$d/link" 2>/dev/null
+  ln -s ../docs/sub "$d/src/lnk" 2>/dev/null
+}
+sd_verdict() { # sd_verdict <dir> <path-as-given> -> the advisory code, or "silent"
+  local o
+  # The path reaches the hook as the MSYS shell that writes the file spells it (spec 0179):
+  # without MSYS2_ARG_CONV_EXCL, MSYS hands jq.exe /tmp/... as C:/..., and a Win32 path
+  # resolves .. lexically, as a Windows program writing it does, while the probe write
+  # below goes through MSYS and resolves it physically. No effect off MSYS.
+  o="$(MSYS2_ARG_CONV_EXCL='*' jq -nc --arg p "$2" --arg c "$1" '{tool_name:"Write",tool_input:{file_path:$p,content:"x"},cwd:$c}' \
+    | CLAUDE_PROJECT_DIR="$1" bash "$HOOKS/scope-hook.sh" 2>/dev/null | jq -r '.setlistAdvisory.code // "silent"' 2>/dev/null)"
+  printf '%s' "${o:-silent}"
+}
+sd_lands() { # sd_lands <dir> <path-as-given> -> the path the kernel wrote, relative to the project, via a probe write
+  local d="$1" p="$2" f
+  ( cd "$d" && printf 'k\n' > "$p" ) 2>/dev/null || { printf 'unwritable'; return 0; }
+  f="$(cd "$d" && find . -name "$(basename "$p")" -newer "$d/.claude/sdd.json" -type f 2>/dev/null | sed 's|^\./||' | head -n1)"
+  rm -f "$d/$f" 2>/dev/null
+  printf '%s' "$f"
+}
+
+# >>> SHARD-BEGIN scope-dotdot-0169 cost=2
+if shard_region scope-dotdot-0169; then
+SD="$WORK/sd-links"; sd_fixture "$SD"
+if [[ -L "$SD/link" && -L "$SD/src/lnk" ]]; then
+  sd_i=0
+  for sd_case in 'link/../a.txt|src/a.txt|SH-TRUNK-WRITE' 'src/lnk/../b.txt|docs/b.txt|silent' \
+                 "$SD/link/../c.txt|src/c.txt|SH-TRUNK-WRITE" "$SD/src/lnk/../d.txt|docs/d.txt|silent"; do
+    sd_i=$((sd_i + 1))
+    sd_p="${sd_case%%|*}"; sd_rest="${sd_case#*|}"; sd_where="${sd_rest%%|*}"; sd_want="${sd_rest#*|}"
+    sd_got_where="$(sd_lands "$SD" "$sd_p")"
+    sd_got="$(sd_verdict "$SD" "$sd_p")"
+    if [[ "$sd_got_where" != "$sd_where" ]]; then
+      bad "scope dotdot $sd_i: [$sd_p] (the oracle)" "the kernel wrote [$sd_got_where], not [$sd_where]; the fixture does not build the finding's shape"
+    elif [[ "$sd_got" == "$sd_want" ]]; then
+      ok "scope dotdot $sd_i: [$sd_p] lands in $sd_where, and the scope hook says [$sd_got], following the filesystem"
+    else
+      bad "scope dotdot $sd_i: [$sd_p] lands in $sd_where, and the scope hook follows the filesystem" "wanted [$sd_want], got [$sd_got]"
+    fi
+  done
+  # CONTROLS: a `..` with no link in the way, and a `..` inside a directory the
+  # write creates, read as they always did.
+  sd_got="$(sd_verdict "$SD" 'docs/../src/e.txt')"
+  [[ "$sd_got" == "SH-TRUNK-WRITE" ]] && ok "scope dotdot control 1: docs/../src/e.txt, no link in the way, is a role-path write" \
+    || bad "scope dotdot control 1: docs/../src/e.txt, no link in the way, is a role-path write" "got [$sd_got]"
+  sd_got="$(sd_verdict "$SD" 'newdir/../src/f.txt')"
+  [[ "$sd_got" == "SH-TRUNK-WRITE" ]] && ok "scope dotdot control 2: newdir/../src/f.txt, through a directory the write would create, is a role-path write" \
+    || bad "scope dotdot control 2: newdir/../src/f.txt, through a directory the write would create, is a role-path write" "got [$sd_got]"
+  sd_got="$(sd_verdict "$SD" 'link/g.txt')"
+  [[ "$sd_got" == "SH-TRUNK-WRITE" ]] && ok "scope dotdot control 3: link/g.txt, the symlinked directory without a .., is a role-path write" \
+    || bad "scope dotdot control 3: link/g.txt, the symlinked directory without a .., is a role-path write" "got [$sd_got]"
+else
+  ok "scope dotdot: SKIPPED BY NAME, this host cannot make the two symbolic links the finding needs"
+fi
+fi; shard_region_end
+# <<< SHARD-END scope-dotdot-0169
 
 # =============================================================================
-# >>> SHARD-BEGIN heading-markdown cost=12
+# >>> SHARD-BEGIN heading-markdown cost=11
 if shard_region heading-markdown; then
 # THE QA READER IS SCOPED, AND THE LAYERS AGREE BY OUTCOME (2.0.0 leg, F8/F3).
 #
@@ -345,6 +422,9 @@ fi
 
 fi; shard_region_end
 # <<< SHARD-END heading-markdown
+# >>> SHARD-BEGIN scope-headings-late-12 cost=3
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region scope-headings-late-12; then
 # =============================================================================
 # A HEADING IS WHAT MARKDOWN SAYS A HEADING IS (second 2.0.0 leg, F1).
 #
@@ -947,3 +1027,5 @@ for trunk_spelling in 'refs/remotes/origin/main' 'refs/heads/main' 'heads/main' 
   run_hook "$HOOKS/scope-hook.sh" "$TRB" "$(edit_payload "$TRB/src/app.js")"
   expect_deny "trunk spelling: [$trunk_spelling] still guards trunk writes" "SH-"
 done
+fi; shard_region_end
+# <<< SHARD-END scope-headings-late-12

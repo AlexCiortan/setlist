@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Setlist trunk audit as a git pre-push hook. STAMPED AND LIVE since edition v1.7:
 # scripts/stamp.sh and scripts/refresh-instance.sh both install it to
 # .githooks/pre-push and set core.hooksPath, so it runs on every push without
@@ -64,6 +65,36 @@
 
 set -u
 
+# THE CHAIN RUNNER'S ENTRY (spec 0173, item 2). One EXIT trap, set before anything
+# can exit, so whatever this hook decides (a pass, a refusal, the SETLIST_SKIP_HOOKS
+# escape), a hook manager recorded as "hooks_chain" in .claude/sdd.json then runs
+# its hook of the same name with the same arguments, and the exit status carries
+# both verdicts (slh_chain_displaced in the library says how). The library is
+# sourced here when this hook exited before sourcing it. This hook's private copy of
+# a pushed commit's configuration is removed here too, on every exit, and only that:
+# CFG_TMPD is emptied before the trap is set, so the path it removes is the one
+# mktemp gave this process, never one the caller's environment named (spec 0180, F11).
+SETLIST_HOOK_ARGS=("$@")
+CFG_TMPD=""
+setlist_chain_on_exit() {
+  local rc=$? lib top
+  trap - EXIT
+  [ -z "${CFG_TMPD:-}" ] || rm -rf "$CFG_TMPD"
+  if ! declare -F slh_chain_displaced >/dev/null; then
+    lib="$(dirname "$0")/setlist-hook-lib.sh"
+    [ -f "$lib" ] || exit "$rc"
+    # shellcheck source=/dev/null
+    . "$lib" || exit "$rc"
+  fi
+  # A library without the chain runner (a mixed generation the refresh's atomic
+  # delivery never produces) leaves the hook's own status in charge.
+  declare -F slh_chain_displaced >/dev/null || exit "$rc"
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit "$rc"
+  slh_chain_displaced "$top" "${0##*/}" "$rc" ${SETLIST_HOOK_ARGS[@]+"${SETLIST_HOOK_ARGS[@]}"}
+  exit $?
+}
+trap setlist_chain_on_exit EXIT
+
 if [[ "${SETLIST_SKIP_HOOKS:-}" == "1" ]]; then
   printf 'setlist: pre-push skipped ENTIRELY by SETLIST_SKIP_HOOKS=1 (scan and audit both)\n' >&2
   # fail-open-ok: the DOCUMENTED whole-hook escape hatch, announced on stderr so
@@ -79,9 +110,42 @@ if [[ "${SETLIST_SKIP_TRUNK_AUDIT:-}" == "1" ]]; then
 fi
 
 REPO="$(git rev-parse --show-toplevel 2>/dev/null || printf '.')"
-[[ -f "$REPO/.claude/sdd.json" ]] || exit 0   # not a framework instance
 
-# HISTORY: ruling PP-01 (undated), in the framework source's private hook-rulings record: The audit ships with the plugin.
+# THE CHECKOUT SWITCH, CLOSED AT PUSH FOR EVERY CHECKOUT THAT STILL HAS THIS HOOK
+# (spec 0173, item 1). This line used to be `[[ -f "$REPO/.claude/sdd.json" ]] ||
+# exit 0`: a push was governed only when the CHECKED-OUT branch carried the file,
+# so the identical push of the identical unclosed merge was refused from main and
+# accepted after `git checkout --orphan` (measured, the suite's `sdd switch`). The
+# guard's purpose is right, a hooksPath must not govern unrelated work, and the
+# question it asked was the wrong one: whether the work being PUSHED is governed is
+# a fact about the pushed commits. So the ref lines are read first, and a push is
+# governed when the checkout carries the file (today's reading, preferred, every
+# existing verdict unchanged) OR a pushed tip does. In the second case the push's
+# readers read the FIRST governed tip's configuration (slh_sdd in the library), and
+# the trunk audit reads EACH audited tip's own (--config-from that tip; spec 0180,
+# fix round 2, the 2.11.0 leg's F7: one configuration chosen for the whole push
+# audited a trunk under a sibling branch's roles, and a violating trunk reached the
+# remote reading clean). A ref is audited as a trunk when the first governed tip's
+# configuration or its own names it, and a trunk tip that carries no .claude/sdd.json
+# of its own is ungoverned, as below, and reported unaudited by name rather than read
+# clean under another tip's. A push whose tips carry no .claude/sdd.json from a checkout without one
+# stays ungoverned: that is unrelated work. What no hook reaches: a checkout of a
+# branch that does not carry .githooks/ has no pre-push on disk at all, so git runs
+# none (Known limitations, "checkout-switch"); pre-commit and pre-merge-commit keep
+# the checked-out reading.
+PUSH_LINES="$(cat)"
+CFG_FROM=""
+if [[ ! -f "$REPO/.claude/sdd.json" ]]; then
+  while read -r _l _lo _r _ro; do
+    [[ -n "${_r:-}" ]] || continue
+    case "$_lo" in *[!0]*) ;; *) continue ;; esac
+    if git -C "$REPO" cat-file -e "$_lo:.claude/sdd.json" 2>/dev/null; then CFG_FROM="$_lo"; break; fi
+  done <<< "$PUSH_LINES"
+  # fail-open-ok: neither the checkout nor any pushed tip carries .claude/sdd.json, so this push is not a framework instance's work; the guard's purpose
+  [[ -n "$CFG_FROM" ]] || exit 0
+fi
+
+# HISTORY: ruling PP-01 (undated): The audit ships with the plugin.
 AUDIT=""
 for cand in \
   "${CLAUDE_PLUGIN_ROOT:-}/scripts/trunk-audit.sh" \
@@ -95,7 +159,7 @@ if [[ -z "$AUDIT" ]]; then
   exit 1
 fi
 
-# HISTORY: ruling PP-02 (plugin 1.1.0), in the framework source's private hook-rulings record: THE STATUS IS CAPTURED FROM THE AUDIT, NOT FROM THE IF-COMPOUND.
+# HISTORY: ruling PP-02 (plugin 1.1.0): THE STATUS IS CAPTURED FROM THE AUDIT, NOT FROM THE IF-COMPOUND.
 LIB=""
 for cand in "$(dirname "$0")/setlist-hook-lib.sh" "$REPO/.githooks/setlist-hook-lib.sh"; do
   [[ -f "$cand" ]] && { LIB="$cand"; break; }
@@ -109,7 +173,31 @@ fi
 # shellcheck source=/dev/null
 . "$LIB"
 
-# HISTORY: ruling PP-03 (plugin v1.7), in the framework source's private hook-rulings record: THE TOOLCHAIN PROBE, WHICH THIS HOOK DID NOT RUN (v1.7 claims audit, R2-3).
+# The pushed tip's configuration, materialised ONCE, read by every reader through
+# slh_sdd (set only here, after sourcing, which empties it). A copy that cannot be
+# made refuses: a push this hook decided is governed is never waved through because
+# a workspace was unavailable.
+if [[ -n "$CFG_FROM" ]]; then
+  CFG_TMPD="$(mktemp -d 2>/dev/null)" || CFG_TMPD=""
+  if [[ -z "$CFG_TMPD" ]] || ! git -C "$REPO" show "$CFG_FROM:.claude/sdd.json" > "$CFG_TMPD/sdd.json" 2>/dev/null; then
+    printf 'setlist pre-push: the checked-out branch carries no .claude/sdd.json and the pushed commit %s does,
+' "$CFG_FROM" >&2
+    printf 'but its copy could not be read into a private workspace. Refusing rather than pushing
+' >&2
+    printf 'governed history ungoverned. Check TMPDIR and the repository.
+' >&2
+    [[ -z "$CFG_TMPD" ]] || rm -rf "$CFG_TMPD"
+    exit 1
+  fi
+  # shellcheck disable=SC2034  # read by the sourced library through slh_sdd
+  SLH_SDD="$CFG_TMPD/sdd.json"
+  printf 'setlist pre-push: the checked-out branch carries no .claude/sdd.json; this push is governed by
+' >&2
+  printf 'the configuration of the commit it pushes (%s).
+' "$CFG_FROM" >&2
+fi
+
+# HISTORY: ruling PP-03 (plugin v1.7): THE TOOLCHAIN PROBE, WHICH THIS HOOK DID NOT RUN (v1.7 claims audit, R2-3).
 slh_require_toolchain || {
   printf '\nsetlist pre-push: the push-time scan cannot run (see above).\n' >&2
   printf 'Refusing the push rather than reporting a clean scan it did not perform.\n' >&2
@@ -123,7 +211,7 @@ TRUNK_NAME="$(slh_trunk "$REPO")" || {
 }
 [[ -n "$TRUNK_NAME" ]] || { printf 'setlist pre-push: the reduced trunk is empty; refusing.\n' >&2; exit 1; }
 
-# HISTORY: ruling PP-04 (2026-08-07), in the framework source's private hook-rulings record: THE REMOTE'S TRUNK MAY NOT SHARE THE LOCAL NAME (F11).
+# HISTORY: ruling PP-04 (2026-08-07): THE REMOTE'S TRUNK MAY NOT SHARE THE LOCAL NAME (F11).
 REMOTE_ARG="${1:-}"
 
 REMOTE_TRUNK=""
@@ -135,7 +223,7 @@ if [[ -n "${1:-}" ]]; then
   if [[ -z "$REMOTE_TRUNK" ]]; then
     if SYMREF_OUT="$(git -C "$REPO" ls-remote --symref "$1" HEAD 2>/dev/null)"; then
       REMOTE_TRUNK="$(printf '%s\n' "$SYMREF_OUT" | awk '$1 == "ref:" { sub(/^refs\/heads\//, "", $2); print $2; exit }')"
-      # HISTORY: ruling PP-05 (undated), in the framework source's private hook-rulings record: No HEAD symref AND no branch refs at all is an EMPTY remote.
+      # HISTORY: ruling PP-05 (undated): No HEAD symref AND no branch refs at all is an EMPTY remote:
       if [[ -z "$REMOTE_TRUNK" && -z "$(git -C "$REPO" ls-remote --heads "$1" 2>/dev/null)" ]]; then
         REMOTE_EMPTY=1
       fi
@@ -147,9 +235,9 @@ fi
 
 PUSH_REFS=""
 
-# HISTORY: ruling PP-06 (plugin 2.6.0), in the framework source's private hook-rulings record: THE SCAN WALKS THE RANGE PER COMMIT, and the walk lives in the library since.
+# HISTORY: ruling PP-06 (plugin 2.6.0): THE SCAN WALKS THE RANGE PER COMMIT, and the walk lives in the library since.
 
-# HISTORY: ruling PP-07 (undated), in the framework source's private hook-rulings record: TWO CHECKS, TWO SCOPES, AND THEY ARE NOT THE SAME SCOPE (F2, verdict leg).
+# HISTORY: ruling PP-07 (undated): TWO CHECKS, TWO SCOPES, AND THEY ARE NOT THE SAME SCOPE (F2, verdict leg).
 while read -r _lref _loid rref _roid; do
   [[ -n "${rref:-}" ]] || continue
 
@@ -157,7 +245,7 @@ while read -r _lref _loid rref _roid; do
   # history is arriving, so there is nothing to scan and nothing to audit.
   case "$_loid" in *[!0]*) ;; *) continue ;; esac
 
-  # HISTORY: ruling PP-08 (plugin v1.0.0), in the framework source's private hook-rulings record: A TAG PUSH CARRIES HISTORY AND WAS NOT SCANNED AT ALL (SC sub-hole 5).
+  # HISTORY: ruling PP-08 (plugin v1.0.0): A TAG PUSH CARRIES HISTORY AND WAS NOT SCANNED AT ALL (SC sub-hole 5).
   case "$rref" in
     refs/tags/*)
       tname="${rref#refs/tags/}"
@@ -195,7 +283,7 @@ while read -r _lref _loid rref _roid; do
   esac
   rname="${rref#refs/heads/}"
 
-  # HISTORY: ruling PP-09 (undated), in the framework source's private hook-rulings record: --- half one: THE CONTENT SCAN, over EVERY pushed ref -------------------.
+  # HISTORY: ruling PP-09 (undated): --- half one: THE CONTENT SCAN, over EVERY pushed ref -------------------.
   case "$_roid" in
     *[!0]*) SCAN_ARGV=("$_roid..$_loid") ;;
     *)      if [[ -n "$REMOTE_ARG" && -n "$(git -C "$REPO" for-each-ref --count=1 "refs/remotes/$REMOTE_ARG" 2>/dev/null)" ]]; then
@@ -206,23 +294,36 @@ while read -r _lref _loid rref _roid; do
   esac
   if git -C "$REPO" rev-parse --quiet --verify "${_loid}^{commit}" >/dev/null 2>&1; then
     slh_scan_walk "$REPO" "the history this push adds to $rname" "${SCAN_ARGV[@]}" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below, so a non-zero return must not abort before every ref is read
-    # HISTORY: ruling PP-10 (undated), in the framework source's private hook-rulings record: --- half one-b: THE APPROVAL CHECK, over the same refs and the same range.
+    # HISTORY: ruling PP-10 (undated): --- half one-b: THE APPROVAL CHECK, over the same refs and the same range.
     slh_attest_walk "$REPO" "the history this push adds to $rname" "$_loid" "${SCAN_ARGV[@]}" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below, so a non-zero return must not abort before every ref is read
   else
     slh_refuse "SLH-SCAN-UNRESOLVED-TIP" "the tip this push would put on $rname ($_loid) does not resolve to a commit here, so what it publishes cannot be read. Refusing rather than reporting a scan that did not run."
   fi
 
-  # HISTORY: ruling PP-11 (undated), in the framework source's private hook-rulings record: --- half two: THE TRUNK AUDIT, over trunk refs only ---------------------.
-  if [[ "$rname" == "$TRUNK_NAME" || ( -n "$REMOTE_TRUNK" && "$rname" == "$REMOTE_TRUNK" ) || "$REMOTE_EMPTY" -eq 1 ]]; then
+  # HISTORY: ruling PP-11 (undated): --- half two: THE TRUNK AUDIT, over trunk refs only ---------------------.
+  # From a checkout without the file, a tip's own configuration names a trunk too (F7, above).
+  _own_trunk=""
+  if [[ -n "$CFG_FROM" && "$_loid" != "$CFG_FROM" ]] && git -C "$REPO" show "$_loid:.claude/sdd.json" > "$CFG_TMPD/tip.json" 2>/dev/null; then
+    _own_trunk="$(SLH_SDD="$CFG_TMPD/tip.json" slh_trunk "$REPO" 2>/dev/null)" || _own_trunk="" # fail-open-ok: a tip whose trunk cannot be read adds no trunk; the first governed tip's reading above still decides
+  fi
+  if [[ "$rname" == "$TRUNK_NAME" || ( -n "$_own_trunk" && "$rname" == "$_own_trunk" ) || ( -n "$REMOTE_TRUNK" && "$rname" == "$REMOTE_TRUNK" ) || "$REMOTE_EMPTY" -eq 1 ]]; then
     PUSH_REFS="$PUSH_REFS $_loid"
   fi
-done
+done <<< "$PUSH_LINES"
 
-# HISTORY: ruling PP-12 (undated), in the framework source's private hook-rulings record: slh_refuse RECORDS a refusal, it does not exit, so the scan above is only a.
+# HISTORY: ruling PP-12 (undated): slh_refuse RECORDS a refusal, it does not exit, so the scan above is only a guarantee if this reads it.
 if [[ "${SLH_REFUSED:-0}" -ne 0 ]]; then
-  printf '\nsetlist pre-push: the history being pushed carries content the commit-time\n' >&2
-  printf 'scans never saw (cherry-pick, rebase and am create commits without firing\n' >&2
-  printf 'pre-commit). Fix the content. Skipping the trunk audit does NOT skip this scan.\n' >&2
+  # The content paragraph is said only when a content scan refused (spec 0164):
+  # a scan that could not run, or a check that is not about the content, is told
+  # to fix what the lines above name, not the content.
+  if [[ "${SLH_SCAN_CONTENT_REFUSED:-0}" -ne 0 ]]; then
+    printf '\nsetlist pre-push: the history being pushed carries content the commit-time\n' >&2
+    printf 'scans never saw (cherry-pick, rebase and am create commits without firing\n' >&2
+    printf 'pre-commit). Fix the content. Skipping the trunk audit does NOT skip this scan.\n' >&2
+  else
+    printf '\nsetlist pre-push: refusing this push. Fix what the lines above name; skipping\n' >&2
+    printf 'the trunk audit does NOT skip these checks.\n' >&2
+  fi
   exit 1
 fi
 
@@ -238,18 +339,27 @@ fi
 RC=0
 if [[ -n "$PUSH_REFS" ]]; then
   for _oid in $PUSH_REFS; do
-    bash "$AUDIT" "$REPO" --until "$_oid" || RC=$?
+    _cfg="$CFG_FROM"
+    if [[ -n "$CFG_FROM" ]]; then
+      if git -C "$REPO" cat-file -e "$_oid:.claude/sdd.json" 2>/dev/null; then
+        _cfg="$_oid"
+      else
+        slh_report "SLH-REF-NOT-AUDITED" "no trunk audit ran for the pushed trunk tip $_oid: it carries no .claude/sdd.json of its own and neither does this checkout, so that work is ungoverned by these hooks (Known limitations, checkout-switch); it is not audited under another pushed branch's configuration. Push from a checkout that carries the file, and require the forge check on the trunk."
+        continue
+      fi
+    fi
+    bash "$AUDIT" "$REPO" --until "$_oid" ${_cfg:+--config-from "$_cfg"} || RC=$?
     [[ "$RC" -eq 0 ]] || break
   done
 elif [[ "$REMOTE_UNREACHABLE" -eq 1 ]]; then
-  # HISTORY: ruling PP-13 (plugin 2.6.0), in the framework source's private hook-rulings record: The remote could not be reached, so which of its refs is the trunk is.
+  # HISTORY: ruling PP-13 (plugin 2.6.0): The remote could not be reached, so which of its refs is the trunk is unknown, and auditing the local trunk instead would report on a ref this push may not touch.
   printf 'setlist pre-push [SLH-REMOTE-UNRESOLVED]: cannot reach %s to ask which branch\n' "${1:-the remote}" >&2
   printf 'is its trunk, so this push cannot be audited. A check that cannot run has not\n' >&2
   printf 'passed. Fix connectivity.\n' >&2
   RC=1
 else
-  # HISTORY: ruling PP-14 (undated), in the framework source's private hook-rulings record: No line named the trunk, or stdin was empty because a caller invoked this.
-  bash "$AUDIT" "$REPO" || RC=$?
+  # HISTORY: ruling PP-14 (undated): No line named the trunk, or stdin was empty because a caller invoked this hook by hand.
+  bash "$AUDIT" "$REPO" ${CFG_FROM:+--config-from "$CFG_FROM"} || RC=$?
 fi
 if [[ "$RC" -eq 0 ]]; then
   # fail-open-ok: the audit ran and reported a clean trunk. This is the allow.

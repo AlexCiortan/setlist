@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Setlist pre-merge-commit hook: the EXPENSIVE close verification, run once, at
 # the moment a merge commit is about to be created.
 #
@@ -33,6 +34,33 @@
 
 set -u
 
+# THE CHAIN RUNNER'S ENTRY (spec 0173, item 2). One EXIT trap, set before anything
+# can exit, so whatever this hook decides (a pass, a refusal, the SETLIST_SKIP_HOOKS
+# escape), a hook manager recorded as "hooks_chain" in .claude/sdd.json then runs
+# its hook of the same name with the same arguments, and the exit status carries
+# both verdicts (slh_chain_displaced in the library says how). The library is
+# sourced here when this hook exited before sourcing it. It deletes nothing: this
+# hook creates no directory (spec 0180, F11: a line copied from pre-push removed
+# whatever path the caller's environment named CFG_TMPD).
+SETLIST_HOOK_ARGS=("$@")
+setlist_chain_on_exit() {
+  local rc=$? lib top
+  trap - EXIT
+  if ! declare -F slh_chain_displaced >/dev/null; then
+    lib="$(dirname "$0")/setlist-hook-lib.sh"
+    [ -f "$lib" ] || exit "$rc"
+    # shellcheck source=/dev/null
+    . "$lib" || exit "$rc"
+  fi
+  # A library without the chain runner (a mixed generation the refresh's atomic
+  # delivery never produces) leaves the hook's own status in charge.
+  declare -F slh_chain_displaced >/dev/null || exit "$rc"
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit "$rc"
+  slh_chain_displaced "$top" "${0##*/}" "$rc" ${SETLIST_HOOK_ARGS[@]+"${SETLIST_HOOK_ARGS[@]}"}
+  exit $?
+}
+trap setlist_chain_on_exit EXIT
+
 if [ "${SETLIST_SKIP_HOOKS:-}" = "1" ]; then
   printf 'setlist: pre-merge-commit skipped by SETLIST_SKIP_HOOKS=1\n' >&2
   # fail-open-ok: the DOCUMENTED escape hatch, announced on stderr so the bypass
@@ -58,6 +86,11 @@ if [ -z "$LIB" ]; then
 fi
 # shellcheck source=/dev/null
 . "$LIB"
+
+# THE CHAINED HOOK RUNS FIRST HERE (spec 0180, F4): the index this hook judges becomes
+# the commit, and a chained hook that restages would otherwise change it after the
+# scan below read it. Its status waits for the exit trap, which combines both verdicts.
+slh_chain_first "$PROJ" "${0##*/}" ${SETLIST_HOOK_ARGS[@]+"${SETLIST_HOOK_ARGS[@]}"}
 
 # The tools the library runs on must actually work before anything it decides can
 # be trusted. A broken grep turned this hook into a silent pass (v1.7 gate, F2).
@@ -85,6 +118,10 @@ fi
 # say: the operator gets ALL the reasons at once rather than one per retry.
 # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below.
 
+# The octopus onto the trunk (spec 0173, item 4): no MERGE_HEAD exists while this hook
+# runs, so the merged heads are counted from git's GITHEAD_<sha> variables (the library's
+# slh_refuse_octopus says why that is an early refusal and the audit the guarantee).
+slh_refuse_octopus "$TRUNK" "$(compgen -e | grep -cE '^GITHEAD_[0-9a-f]{40}$' || true)" # fail-open-ok: grep -c prints 0 and exits 1 on a two-parent merge; the count, not the status, decides
 slh_verify_close "$PROJ" "$TRUNK" "this merge" || true
 
 # THE MERGE'S OWN CONTENT (F1). pre-commit does not fire for a true merge, so
@@ -102,6 +139,9 @@ slh_verify_close "$PROJ" "$TRUNK" "this merge" || true
 # 0129): the reasons are written out once, at pre-commit's scan site, and this
 # is the same rule at the second of the sites that render a diff for a scan.
 if __DIFF="$(git -C "$PROJ" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ HEAD 2>/dev/null)"; then
+  # Text past a -diff or binary attribute (spec 0173, item 5; the library says how and why).
+  __DIFF="$__DIFF
+$(slh_scan_text_past_attributes "$PROJ" cached HEAD)"
   slh_scan_added "$PROJ" "$__DIFF" "this merge's content"
 else
   slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render this merge's diff, so the scan of this merge's content read nothing and has judged nothing. A scan that could not run has not passed. Run 'git diff --cached HEAD' here to see the failure (a configuration value git cannot parse, or a diff driver that fails, looks like this)."

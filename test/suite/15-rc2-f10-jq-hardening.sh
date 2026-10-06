@@ -4,7 +4,7 @@
 # program of its own: every helper it calls is defined in the driver or in an
 # earlier shard, and the driver's verdict, TMPDIR and exit trap are its own.
 
-# >>> SHARD-BEGIN rc2-config-blind cost=16
+# >>> SHARD-BEGIN rc2-config-blind cost=13
 if shard_region rc2-config-blind; then
 # =============================================================================
 # RC2-2026: CONFIGURATION-DRIVEN DIFF RENDERING BLINDS THE CONTENT SCANS (spec
@@ -277,7 +277,7 @@ else rc2_refused "RC2 o: prefix settings do not blind the positional filter (mea
 
 fi; shard_region_end
 # <<< SHARD-END rc2-config-blind
-# >>> SHARD-BEGIN merge-completion-f10 cost=4
+# >>> SHARD-BEGIN merge-completion-f10 cost=16
 if shard_region merge-completion-f10; then
 # =============================================================================
 # F10-2026, THE DOCUMENTED HOLE PINNED IN ITS DOCUMENTED DIRECTION (2.4.1 leg F2,
@@ -323,18 +323,280 @@ else
   bad "F10-2026 b: KNOWN-HOLE, completing the merge with the archive line on the trunk side is ACCEPTED by pre-commit" \
       "refused: $(tr '\n' ' ' < "$WORK/f10-complete.out" | cut -c1-200). If this is the fix landing, delete the public bullet, its ledger row and this region in the same commit"
 fi
+# FIXED IN 2.10.0 (spec 0157): the audit's merge arm asks the merge COMMIT the
+# question pre-commit asks of the index, for a two-parent merge whose merged
+# parent answers it with nothing. The case keeps its fixture and flips its
+# direction; the public bullet and its ledger row leave in 0162, which lands the
+# whole list in one commit.
 if bash "$SCRIPTS/trunk-audit.sh" "$F10" >"$WORK/f10-audit.out" 2>&1; then
-  bad "F10-2026 c: KNOWN-HOLE, the trunk audit then REFUSES the same commit at push" \
-      "the audit passed it: the two layers now agree, so the bullet, its ledger row and this region leave together"
-elif grep -q 'no recorded completion' "$WORK/f10-audit.out"; then
-  ok "F10-2026 c: KNOWN-HOLE, the trunk audit then REFUSES the same commit at push"
+  ok "F10-2026 c: the trunk audit ACCEPTS the merge completed on the trunk side, the route the refusal text prescribes"
 else
-  bad "F10-2026 c: KNOWN-HOLE, the trunk audit then REFUSES the same commit at push" "refused for another reason: $(tr '\n' ' ' < "$WORK/f10-audit.out" | cut -c1-200)"
+  bad "F10-2026 c: the trunk audit ACCEPTS the merge completed on the trunk side, the route the refusal text prescribes" \
+      "still refused at push: $(tr '\n' ' ' < "$WORK/f10-audit.out" | cut -c1-200)"
 fi
 
+# THE SAME QUESTION ON THE SHAPE EVERY INSTANCE SINCE v1.12 ACTUALLY HAS (DE15):
+# the record-carrying route. Both branches of MRG_STRUCTURED are exercised,
+# because the merge arm reads the completion from .claude/status.json when the
+# merged branch carries one and from specs/STATUS.md when it does not.
+f10_fixture() { # f10_fixture <dir> <record|page>
+  local d="$1" shape="$2"
+  rm -rf "$d"; mkdir -p "$d/.claude/hooks" "$d/.githooks" "$d/src" "$d/specs"
+  git_init "$d"
+  git -C "$d" config merge.ff false
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+  printf '# Inventory\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n\n## Archive\n\n' > "$d/specs/STATUS.md"
+  printf 'x\n' > "$d/src/a.txt"
+  [[ "$shape" == "record" ]] && printf '{"setlist_status":1,"specs":{},"chores":{}}\n' > "$d/.claude/status.json"
+  cp "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" \
+     "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$d/.githooks/"
+  cp "$SCRIPTS/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  chmod +x "$d/.githooks/pre-push" "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+  git -C "$d" config core.hooksPath .githooks
+  git -C "$d" add -A >/dev/null 2>&1; SETLIST_SKIP_HOOKS=1 git -C "$d" commit -qm "adopt" >/dev/null 2>&1
+}
+f10_chore_branch() { # f10_chore_branch <dir> <branch>
+  local d="$1" b="$2"
+  git -C "$d" checkout -q -b "$b" main
+  printf 'bump\n' >> "$d/src/a.txt"
+  git -C "$d" add -A >/dev/null 2>&1
+  SETLIST_SKIP_HOOKS=1 git -C "$d" commit -qm "chore work on $b" >/dev/null 2>&1
+  git -C "$d" checkout -q main
+}
+f10_audits_clean() { # f10_audits_clean <dir> <out>
+  bash "$SCRIPTS/trunk-audit.sh" "$1" >"$2" 2>&1
+}
+
+F10R="$WORK/f10-completion-record"; f10_fixture "$F10R" record
+f10_chore_branch "$F10R" chore/bump
+if git -C "$F10R" merge --no-ff chore/bump -m "chore: merge" >"$WORK/f10r-merge.out" 2>&1; then
+  bad "F10-2026 d: the record-carrying chore merge with no completion is refused at merge time" "it merged clean, so the case below tests nothing"
+else
+  ok "F10-2026 d: the record-carrying chore merge with no completion is refused at merge time"
+fi
+jq '.chores["CHORE-007"] = {"status":"done"}' "$F10R/.claude/status.json" > "$F10R/t" && mv "$F10R/t" "$F10R/.claude/status.json"
+printf -- '- CHORE-007: DONE 2026-09-22. dependency bump\n' >> "$F10R/specs/STATUS.md"
+git -C "$F10R" add -A >/dev/null 2>&1
+if git -C "$F10R" commit -q --no-edit >"$WORK/f10r-complete.out" 2>&1; then
+  ok "F10-2026 e: completing it with the record written on the trunk side is ACCEPTED by pre-commit, as it always was"
+else
+  bad "F10-2026 e: completing it with the record written on the trunk side is ACCEPTED by pre-commit, as it always was" \
+      "refused: $(tr '\n' ' ' < "$WORK/f10r-complete.out" | cut -c1-200)"
+fi
+if f10_audits_clean "$F10R" "$WORK/f10r-audit.out"; then
+  ok "F10-2026 f: and the audit ACCEPTS it on the record route too, so both shapes agree with pre-commit"
+else
+  bad "F10-2026 f: and the audit ACCEPTS it on the record route too, so both shapes agree with pre-commit" \
+      "refused: $(tr '\n' ' ' < "$WORK/f10r-audit.out" | cut -c1-200)"
+fi
+
+# A CLOSE completed the same way: the refusal text prescribes this route for a
+# missing close record or CLOSED row just as it does for an archive line.
+f10_spec_branch() { # f10_spec_branch <dir> <shape>
+  local d="$1" shape="$2"
+  git -C "$d" checkout -q -b spec/0001-thing main
+  printf 'feature\n' > "$d/src/f.js"
+  {
+    printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\n'
+    printf -- '- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n\n'
+    printf -- '- QA Pass 2 (human): done\n- Architecture diagram: no impact\n'
+  } > "$d/specs/0001-thing.md"
+  git -C "$d" add -A >/dev/null 2>&1
+  SETLIST_SKIP_HOOKS=1 git -C "$d" commit -qm "close 0001 on the branch" >/dev/null 2>&1
+  git -C "$d" checkout -q main
+}
+for F10C_SHAPE in page record; do
+  F10C="$WORK/f10-close-$F10C_SHAPE"; f10_fixture "$F10C" "$F10C_SHAPE"
+  f10_spec_branch "$F10C" "$F10C_SHAPE"
+  if git -C "$F10C" merge --no-ff spec/0001-thing -m "Merge spec/0001-thing" >"$WORK/f10c-merge.out" 2>&1; then
+    bad "F10-2026 g ($F10C_SHAPE): a close whose row and record are not on the branch is refused at merge time" \
+        "it merged clean, so the case below tests nothing"
+  else
+    ok "F10-2026 g ($F10C_SHAPE): a close whose row and record are not on the branch is refused at merge time"
+  fi
+  printf '| 0001 | Thing | CLOSED | |\n' >> "$F10C/specs/STATUS.md"
+  if [[ "$F10C_SHAPE" == "record" ]]; then
+    jq '.specs["0001"] = {"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}' "$F10C/.claude/status.json" > "$F10C/t" \
+      && mv "$F10C/t" "$F10C/.claude/status.json"
+  fi
+  git -C "$F10C" add -A >/dev/null 2>&1
+  if git -C "$F10C" commit -q --no-edit >"$WORK/f10c-complete.out" 2>&1; then
+    ok "F10-2026 h ($F10C_SHAPE): completing the close on the trunk side is ACCEPTED by pre-commit"
+  else
+    bad "F10-2026 h ($F10C_SHAPE): completing the close on the trunk side is ACCEPTED by pre-commit" \
+        "refused: $(tr '\n' ' ' < "$WORK/f10c-complete.out" | cut -c1-200)"
+  fi
+  if f10_audits_clean "$F10C" "$WORK/f10c-audit.out"; then
+    ok "F10-2026 i ($F10C_SHAPE): and the audit ACCEPTS the same commit, so the close route agrees at both layers"
+  else
+    bad "F10-2026 i ($F10C_SHAPE): and the audit ACCEPTS the same commit, so the close route agrees at both layers" \
+        "refused: $(tr '\n' ' ' < "$WORK/f10c-audit.out" | cut -c1-200)"
+  fi
+done
+
+# THE CONTROLS. What the fix widens is where the completion may be written, and
+# nothing else: a merge completed with the record on NEITHER side is still a
+# violation, and an octopus is not credited with a record on the merge commit,
+# because crediting one record to several merged parents re-opens the
+# laundering route the B6 fix closed (decision 9 of the intake).
+for F10N_SHAPE in page record; do
+  F10N="$WORK/f10-neither-$F10N_SHAPE"; f10_fixture "$F10N" "$F10N_SHAPE"
+  f10_chore_branch "$F10N" chore/bump
+  SETLIST_SKIP_HOOKS=1 git -C "$F10N" merge -q --no-ff chore/bump -m "chore: merge with no completion anywhere" >/dev/null 2>&1
+  if f10_audits_clean "$F10N" "$WORK/f10n-audit.out"; then
+    bad "F10-2026 j ($F10N_SHAPE): a merge with the completion on NEITHER side is still refused" \
+        "the audit passed a chore merge nothing records: $(tr '\n' ' ' < "$WORK/f10n-audit.out" | cut -c1-200)"
+  elif grep -q 'no recorded completion' "$WORK/f10n-audit.out"; then
+    ok "F10-2026 j ($F10N_SHAPE): a merge with the completion on NEITHER side is still refused"
+  else
+    bad "F10-2026 j ($F10N_SHAPE): a merge with the completion on NEITHER side is still refused" \
+        "refused for another reason: $(tr '\n' ' ' < "$WORK/f10n-audit.out" | cut -c1-200)"
+  fi
+done
+
+F10O="$WORK/f10-octopus"; f10_fixture "$F10O" page
+f10_chore_branch "$F10O" chore/one
+f10_chore_branch "$F10O" chore/two
+printf -- '- CHORE-009: DONE 2026-09-22. both at once\n' >> "$F10O/specs/STATUS.md"
+git -C "$F10O" add -A >/dev/null 2>&1
+SETLIST_SKIP_HOOKS=1 git -C "$F10O" commit -qm "the archive line, staged for the octopus" >/dev/null 2>&1
+SETLIST_SKIP_HOOKS=1 git -C "$F10O" merge -q --no-ff chore/one chore/two -m "chore: octopus" >/dev/null 2>&1
+if f10_audits_clean "$F10O" "$WORK/f10o-audit.out"; then
+  bad "F10-2026 k: an OCTOPUS is not credited with a completion written on the merge commit" \
+      "one record excused several merged parents: $(tr '\n' ' ' < "$WORK/f10o-audit.out" | cut -c1-200)"
+else
+  ok "F10-2026 k: an OCTOPUS is not credited with a completion written on the merge commit"
+fi
+
+
+# THE MIXED SHAPE (spec 0167, decision 3; L2 F6 of the 2.10.0 second leg): a
+# branch cut BEFORE the instance adopted .claude/status.json, merged after it.
+# pre-commit chooses record or page from the INDEX of the commit completing the
+# merge, which carries the trunk's record, so it judged by the record; the
+# audit chose from the merged parent P2, which has none, so it judged by the
+# page and demanded a Closing report the branch never wrote. Accepted at
+# commit, refused at push, and no amend could fix it. Both layers now choose
+# from the merge commit's own tree; the page path on P2 stays the fallback for
+# a two-parent merge whose own record completes nothing. With the page shape
+# and the record shape above this is DE15's third shape.
+f10_mixed() { # f10_mixed <dir> <spec|chore> : a pre-record branch, then the record adopted on the trunk
+  local d="$1" kind="$2"
+  f10_fixture "$d" page
+  if [[ "$kind" == "spec" ]]; then
+    git -C "$d" checkout -q -b spec/0001-thing main
+    printf '# Spec 0001: thing\n\nWork in progress.\n' > "$d/specs/0001-thing.md"
+    printf 'work\n' >> "$d/src/a.txt"
+    printf '| 0001 | Thing | BUILT | |\n' >> "$d/specs/STATUS.md"
+    git -C "$d" add -A >/dev/null 2>&1
+    SETLIST_SKIP_HOOKS=1 git -C "$d" commit -qm "spec 0001 work, before the record existed" >/dev/null 2>&1
+    git -C "$d" checkout -q main
+  else
+    f10_chore_branch "$d" chore/bump
+  fi
+  printf '{"setlist_status":1,"specs":{},"chores":{}}\n' > "$d/.claude/status.json"
+  git -C "$d" add -A >/dev/null 2>&1
+  SETLIST_SKIP_HOOKS=1 git -C "$d" commit -qm "adopt the status record" >/dev/null 2>&1
+}
+F10M="$WORK/f10-mixed-spec"; f10_mixed "$F10M" spec
+if git -C "$F10M" merge --no-ff spec/0001-thing -m "Merge spec/0001-thing" >"$WORK/f10m-merge.out" 2>&1; then
+  bad "0167 F6 a (mixed, close): the pre-record branch's merge is refused at merge time" "it merged clean, so the case below tests nothing"
+else
+  ok "0167 F6 a (mixed, close): the pre-record branch's merge is refused at merge time"
+fi
+jq '.specs["0001"] = {"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}' "$F10M/.claude/status.json" > "$F10M/t" \
+  && mv "$F10M/t" "$F10M/.claude/status.json"
+sed 's/| 0001 | Thing | BUILT | |/| 0001 | Thing | CLOSED | |/' "$F10M/specs/STATUS.md" > "$F10M/t" && mv "$F10M/t" "$F10M/specs/STATUS.md"
+git -C "$F10M" add -A >/dev/null 2>&1
+if git -C "$F10M" commit -q --no-edit >"$WORK/f10m-complete.out" 2>&1 \
+   && [[ "$(git -C "$F10M" rev-list --parents -n1 HEAD | wc -w | tr -d ' ')" == "3" ]]; then
+  ok "0167 F6 b (mixed, close): completed as the refusal says, the two-parent merge is ACCEPTED by pre-commit"
+else
+  bad "0167 F6 b (mixed, close): completed as the refusal says, the two-parent merge is ACCEPTED by pre-commit" \
+      "refused or not a merge: $(tr '\n' ' ' < "$WORK/f10m-complete.out" | cut -c1-200)"
+fi
+if f10_audits_clean "$F10M" "$WORK/f10m-audit.out"; then
+  ok "0167 F6 c (mixed, close): and the audit ACCEPTS the same commit at push, by the merge commit's own record"
+else
+  bad "0167 F6 c (mixed, close): and the audit ACCEPTS the same commit at push, by the merge commit's own record" \
+      "refused at push: $(tr '\n' ' ' < "$WORK/f10m-audit.out" | cut -c1-200)"
+fi
+F10MC="$WORK/f10-mixed-chore"; f10_mixed "$F10MC" chore
+if git -C "$F10MC" merge --no-ff chore/bump -m "chore: merge" >"$WORK/f10mc-merge.out" 2>&1; then
+  bad "0167 F6 d (mixed, chore): the pre-record chore merge with no completion is refused at merge time" "it merged clean"
+else
+  ok "0167 F6 d (mixed, chore): the pre-record chore merge with no completion is refused at merge time"
+fi
+# checkpoint writes the record AND the page (pre-commit refuses a record change
+# without STATUS.md staged, SLH-STATUS-MISSING), so the chore completion carries
+# its archive line too; 0157's page fallback on C already read that line, which
+# makes this pair a CONTROL, green before and after, beside the close case above.
+jq '.chores["CHORE-007"] = {"status":"done"}' "$F10MC/.claude/status.json" > "$F10MC/t" && mv "$F10MC/t" "$F10MC/.claude/status.json"
+printf -- '- CHORE-007: DONE 2026-09-23. dependency bump\n' >> "$F10MC/specs/STATUS.md"
+git -C "$F10MC" add -A >/dev/null 2>&1
+if git -C "$F10MC" commit -q --no-edit >"$WORK/f10mc-complete.out" 2>&1; then
+  ok "0167 F6 e (mixed, chore, control): completed with the record and the page on the trunk side, ACCEPTED by pre-commit"
+else
+  bad "0167 F6 e (mixed, chore, control): completed with the record and the page on the trunk side, ACCEPTED by pre-commit" \
+      "refused: $(tr '\n' ' ' < "$WORK/f10mc-complete.out" | cut -c1-200)"
+fi
+if f10_audits_clean "$F10MC" "$WORK/f10mc-audit.out"; then
+  ok "0167 F6 f (mixed, chore, control): and the audit ACCEPTS it at push"
+else
+  bad "0167 F6 f (mixed, chore, control): and the audit ACCEPTS it at push" "refused at push: $(tr '\n' ' ' < "$WORK/f10mc-audit.out" | cut -c1-200)"
+fi
+# THE CONTROLS on the mixed shape: completion on neither side still refused;
+# and the page fallback kept: a pre-record branch that recorded its chore on
+# its own page, merged with no record completion on the merge commit, reads
+# as it always did at push (the page path on P2).
+F10MN="$WORK/f10-mixed-neither"; f10_mixed "$F10MN" chore
+SETLIST_SKIP_HOOKS=1 git -C "$F10MN" merge -q --no-ff chore/bump -m "chore: merge with no completion anywhere" >/dev/null 2>&1
+if f10_audits_clean "$F10MN" "$WORK/f10mn-audit.out"; then
+  bad "0167 F6 g (mixed): a merge with the completion on NEITHER side is still refused" \
+      "passed: $(tr '\n' ' ' < "$WORK/f10mn-audit.out" | cut -c1-200)"
+elif grep -q 'no recorded completion' "$WORK/f10mn-audit.out"; then
+  ok "0167 F6 g (mixed): a merge with the completion on NEITHER side is still refused"
+else
+  bad "0167 F6 g (mixed): a merge with the completion on NEITHER side is still refused" \
+      "refused for another reason: $(tr '\n' ' ' < "$WORK/f10mn-audit.out" | cut -c1-200)"
+fi
+F10MP="$WORK/f10-mixed-pagechore"; f10_fixture "$F10MP" page
+git -C "$F10MP" checkout -q -b chore/bump main
+printf 'bump\n' >> "$F10MP/src/a.txt"
+printf -- '- CHORE-007: DONE 2026-09-23. bump, recorded on the branch page\n' >> "$F10MP/specs/STATUS.md"
+git -C "$F10MP" add -A >/dev/null 2>&1; SETLIST_SKIP_HOOKS=1 git -C "$F10MP" commit -qm "chore with its archive line" >/dev/null 2>&1
+git -C "$F10MP" checkout -q main
+printf '{"setlist_status":1,"specs":{},"chores":{}}\n' > "$F10MP/.claude/status.json"
+git -C "$F10MP" add -A >/dev/null 2>&1; SETLIST_SKIP_HOOKS=1 git -C "$F10MP" commit -qm "adopt the status record" >/dev/null 2>&1
+SETLIST_SKIP_HOOKS=1 git -C "$F10MP" merge -q --no-ff chore/bump -m "chore: merge" >/dev/null 2>&1
+if f10_audits_clean "$F10MP" "$WORK/f10mp-audit.out"; then
+  ok "0167 F6 h (mixed): the page fallback is kept, a pre-record branch's page-recorded chore still reads clean at push"
+else
+  bad "0167 F6 h (mixed): the page fallback is kept, a pre-record branch's page-recorded chore still reads clean at push" \
+      "newly refused: $(tr '\n' ' ' < "$WORK/f10mp-audit.out" | cut -c1-200)"
+fi
+# 0169's E-d (0167's E-e), homed in spec 0173, item 7: the page-chore shape F6 h reads at push, MADE
+# WITH THE HOOKS. pre-merge-commit read only the index's record, which the trunk side carries and which
+# completes nothing, and refused (SLH-CLOSES-NO-SPEC) the merge the audit accepts. It now keeps the
+# audit's page fallback on the one merged head that carries no record. F6 d (the mixed chore with no
+# completion anywhere, refused at merge) is the control and is unchanged.
+F10MH="$WORK/f10-mixed-pagechore-hooks"; f10_fixture "$F10MH" page
+git -C "$F10MH" checkout -q -b chore/bump main
+printf 'bump\n' >> "$F10MH/src/a.txt"
+printf -- '- CHORE-007: DONE 2026-09-23. bump, recorded on the branch page\n' >> "$F10MH/specs/STATUS.md"
+git -C "$F10MH" add -A >/dev/null 2>&1; SETLIST_SKIP_HOOKS=1 git -C "$F10MH" commit -qm "chore with its archive line" >/dev/null 2>&1
+git -C "$F10MH" checkout -q main
+printf '{"setlist_status":1,"specs":{},"chores":{}}\n' > "$F10MH/.claude/status.json"
+git -C "$F10MH" add -A >/dev/null 2>&1; SETLIST_SKIP_HOOKS=1 git -C "$F10MH" commit -qm "adopt the status record" >/dev/null 2>&1
+if git -C "$F10MH" merge --no-ff chore/bump -m "chore: merge" >"$WORK/f10mh-merge.out" 2>&1 \
+   && f10_audits_clean "$F10MH" "$WORK/f10mh-audit.out"; then
+  ok "0173 record a (mixed, page chore): pre-merge-commit accepts the merge the audit accepts at push, one reading at both layers"
+else
+  bad "0173 record a (mixed, page chore): pre-merge-commit accepts the merge the audit accepts at push, one reading at both layers" \
+      "merge: $(grep -o 'SLH-[A-Z-]*' "$WORK/f10mh-merge.out" | sort -u | tr '\n' ' '); audit: $(grep audited "$WORK/f10mh-audit.out" 2>/dev/null)"
+fi
 fi; shard_region_end
 # <<< SHARD-END merge-completion-f10
-# >>> SHARD-BEGIN jq-cat-hardening-0130 cost=5
+# >>> SHARD-BEGIN jq-cat-hardening-0130 smoke=bins cost=16
 if shard_region jq-cat-hardening-0130; then
 # =============================================================================
 # THE jq-AND-cat HARDENING AT KL6's JOIN (spec 0130, plugin 2.5.0), pinned RED
@@ -368,7 +630,7 @@ jc_bin() { # jc_bin <dir> <omit-tool-or-empty> ; links the toolchain, git includ
            mkdir rm cp mv ls chmod date mktemp shasum find xargs comm diff jq; do
     [[ "$t" == "$2" ]] && continue
     p="$(command -v "$t" 2>/dev/null || true)"
-    [[ -n "$p" ]] && ln -sf "$p" "$1/$t"
+    [[ -n "$p" ]] && setlist_wrap_bin "$p" "$1/$t"
   done
 }
 jc_bin "$JC_HEALTHY" ""
@@ -405,14 +667,32 @@ jc_hook "$JC_QUIETJQ" "$HOOKS/scope-hook.sh" "$JSC" "$(edit_payload "$JSC/src/ap
 expect_deny "0130 F6 c: the scope hook names SH-JQ-BROKEN under a quiet jq, not a config code" "SH-JQ-BROKEN"
 # The literal path (advise_literal, no jq to build JSON with) carries the same
 # channels as advise under design P (spec 0151): the reason in additionalContext,
-# no systemMessage. Read with the suite's working jq, not the stub.
-if printf '%s' "$HOOK_OUT" | jq -e '(.hookSpecificOutput.additionalContext // "" | contains("SH-JQ-BROKEN")) and (has("systemMessage") | not) and (.hookSpecificOutput.permissionDecisionReason // "" | contains("SH-JQ-BROKEN"))' >/dev/null 2>&1; then
-  ok "0151 P a: the scope hook's literal path carries the reason in additionalContext and permissionDecisionReason, no systemMessage"
+# no systemMessage; and since spec 0181 no decision field and no decision reason,
+# because a hook that answers the permission prompt pre-approves the write.
+# Read with the suite's working jq, not the stub.
+if printf '%s' "$HOOK_OUT" | jq -e '(.hookSpecificOutput.additionalContext // "" | contains("SH-JQ-BROKEN")) and (has("systemMessage") | not) and (.hookSpecificOutput | has("permissionDecision") or has("permissionDecisionReason") | not)' >/dev/null 2>&1; then
+  ok "0151 P a: the scope hook's literal path carries the reason in additionalContext, answers no permission prompt, no systemMessage"
 else
-  bad "0151 P a: the scope hook's literal path carries the reason in additionalContext and permissionDecisionReason, no systemMessage" "$(printf '%s' "$HOOK_OUT" | cut -c1-240)"
+  bad "0151 P a: the scope hook's literal path carries the reason in additionalContext, answers no permission prompt, no systemMessage" "$(printf '%s' "$HOOK_OUT" | cut -c1-240)"
 fi
 jc_hook "$JC_QUIETJQ" "$HOOKS/regrounding-hook.sh" "$JCC" '{"source":"startup"}'
 expect_context "0130 F6 d: the regrounding hook still emits valid JSON carrying the jq warning under a quiet jq" "jq is not usable"
+# SPEC 0159 (h), review item 12 of the 2.9.0 external review: the product is Setlist, and the
+# strings a hook puts in front of the model say so. Red first on the four "SDD re-grounding"
+# strings. Not renamed, by 0156 decision 8: the code SH-SDD-SHAPE, the variable $SDD and SDD_JSON,
+# the file name sdd.json, and the SDD-LIFECYCLE-STATES markers scripts/part.sh reads.
+expect_context "0159 h a: the jq-less re-grounding literal names Setlist" "Setlist re-grounding (the read budget"
+for jc_src in startup resume compact; do
+  jc_hook "$JC_HEALTHY" "$HOOKS/regrounding-hook.sh" "$JCC" "{\"source\":\"$jc_src\"}"
+  expect_context "0159 h b: the $jc_src re-grounding string names Setlist" "Setlist re-grounding ("
+done
+JC_SDD="$(grep -n 'SDD' "$HOOKS"/*.sh "$ROOT"/scripts/*.sh 2>/dev/null \
+  | grep -vE 'SH-SDD-SHAPE|\$SDD|SDD_JSON|SDD-LIFECYCLE|sdd\.json' || true)"
+if [[ -z "$JC_SDD" ]]; then
+  ok "0159 h c: no string or comment in the stamped hooks or scripts/ says SDD outside the kept names"
+else
+  bad "0159 h c: no string or comment in the stamped hooks or scripts/ says SDD outside the kept names" "$(printf '%s' "$JC_SDD" | cut -c1-200 | head -8)"
+fi
 
 # --- F12: the input is read by the shell, and an empty input is reported ----
 jc_hook "$JC_NOCAT" "$HOOKS/scope-hook.sh" "$JSC" "$(edit_payload "$JSC/src/app.js")"
@@ -447,22 +727,50 @@ jc_mk() { # jc_mk <name> -> an armed instance with a bare remote and a chore bra
   git -C "$d" checkout -q main
   printf '%s' "$d"
 }
+# GIT FOR WINDOWS STARTS A HOOK THROUGH A REAL INTERPRETER (spec 0179, 0168's E-f, the
+# ninth fixture bin). git.exe reads the hook's shebang and starts the sh or env it finds
+# on PATH as a Windows process, and a wrapper script is not one, so under a PATH of
+# wrappers alone every hook failed "cannot spawn". Under MSYS or Cygwin only, the
+# PATH git runs a hook under is a copy of the fixture bin without its sh, bash and
+# env wrappers, with the directory of the real sh BEHIND it: git finds a real
+# interpreter, and every tool the bin carries, the fixture jq included, still wins.
+# git-receive-pack's directory goes behind it too: a local push starts it through the
+# PATH there (it sits beside git.exe, /mingw64/bin on x64, /clangarm64/bin on ARM64).
+# The precondition is asserted. Everywhere else the bin is used as it stands.
+JC_GITSH=""
+case "${OSTYPE:-}" in msys*|cygwin*) JC_GITSH=":$(dirname "$(command -v sh)"):$(dirname "$(command -v git-receive-pack)")" ;; esac
+jc_gitpath() { # jc_gitpath <bin> -> the PATH git runs a hook under
+  [[ -n "$JC_GITSH" ]] || { printf '%s' "$1"; return 0; }
+  rm -rf "$1-git"; cp -R "$1" "$1-git"; rm -f "$1-git/sh" "$1-git/bash" "$1-git/env"
+  printf '%s%s' "$1-git" "$JC_GITSH"
+}
+if [[ -n "$JC_GITSH" ]]; then
+  JC_GP="$(jc_gitpath "$JC_LOUDJQ")"
+  if [[ "$(PATH="$JC_GP"; command -v jq)" == "$JC_LOUDJQ-git/jq" ]] \
+     && [[ "$(PATH="$JC_GP"; command -v sh)" != "$JC_LOUDJQ"* ]] \
+     && [[ -n "$(PATH="$JC_GP"; command -v git-receive-pack)" ]]; then
+    ok "0179 fixture: under MSYS the KL6 PATH finds the fixture jq first, and a real sh and git-receive-pack behind it"
+  else
+    bad "0179 fixture: under MSYS the KL6 PATH finds the fixture jq first, and a real sh and git-receive-pack behind it" "jq: $(PATH="$JC_GP"; command -v jq), sh: $(PATH="$JC_GP"; command -v sh)"
+  fi
+fi
 jc_refused_by() { # jc_refused_by <name> <outfile> <code> after a NONZERO git status
   if grep -q "\[$3\]" "$2"; then ok "$1"; else bad "$1" "refused, but not by $3: $(tr '\n' ' ' < "$2" | cut -c1-240)"; fi
 }
 jc_layer() { # jc_layer <label> <bin> ; pre-commit, pre-merge-commit, pre-push and the audit under that PATH
   local label="$1" bin="$2" d
+  local gp; gp="$(jc_gitpath "$bin")"
   d="$(jc_mk "$label")"
   printf 'n\n' > "$d/docs/n.txt"; git -C "$d" add -A >/dev/null 2>&1
-  if PATH="$bin" git -C "$d" commit -qm docs >"$WORK/jc-$label.commit" 2>&1; then
+  if PATH="$gp" git -C "$d" commit -qm docs >"$WORK/jc-$label.commit" 2>&1; then
     bad "0130 KL6 $label 1: pre-commit refuses under a $label jq" "it committed"
   else jc_refused_by "0130 KL6 $label 1: pre-commit refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.commit" SLH-JQ-BROKEN; fi
   git -C "$d" reset -q --hard HEAD >/dev/null 2>&1; git -C "$d" clean -qfd >/dev/null 2>&1
-  if PATH="$bin" git -C "$d" merge -q --no-ff -m "merge chore" chore/001-dep >"$WORK/jc-$label.merge" 2>&1; then
+  if PATH="$gp" git -C "$d" merge -q --no-ff -m "merge chore" chore/001-dep >"$WORK/jc-$label.merge" 2>&1; then
     bad "0130 KL6 $label 2: pre-merge-commit refuses under a $label jq" "it merged"
   else jc_refused_by "0130 KL6 $label 2: pre-merge-commit refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.merge" SLH-JQ-BROKEN; fi
   git -C "$d" merge --abort >/dev/null 2>&1; git -C "$d" reset -q --hard HEAD >/dev/null 2>&1
-  if PATH="$bin" git -C "$d" push -q origin main >"$WORK/jc-$label.push" 2>&1; then
+  if PATH="$gp" git -C "$d" push -q origin main >"$WORK/jc-$label.push" 2>&1; then
     bad "0130 KL6 $label 3: pre-push refuses under a $label jq" "it pushed"
   else jc_refused_by "0130 KL6 $label 3: pre-push refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.push" SLH-JQ-BROKEN; fi
   PATH="$bin" bash "$SCRIPTS/trunk-audit.sh" "$d" >"$WORK/jc-$label.audit" 2>&1
@@ -476,7 +784,8 @@ jc_layer quiet "$JC_QUIETJQ"
 # CONTROL: the same instance under a healthy PATH commits, and the audit passes.
 JCH="$(jc_mk healthy)"
 printf 'n\n' > "$JCH/docs/n.txt"; git -C "$JCH" add -A >/dev/null 2>&1
-if PATH="$JC_HEALTHY" git -C "$JCH" commit -qm docs >"$WORK/jc-healthy.commit" 2>&1 \
+JC_HEALTHY_GP="$(jc_gitpath "$JC_HEALTHY")"
+if PATH="$JC_HEALTHY_GP" git -C "$JCH" commit -qm docs >"$WORK/jc-healthy.commit" 2>&1 \
    && PATH="$JC_HEALTHY" bash "$SCRIPTS/trunk-audit.sh" "$JCH" >"$WORK/jc-healthy.audit" 2>&1; then
   ok "0130 KL6 control: under a healthy jq the same instance commits and audits clean"
 else
@@ -488,7 +797,7 @@ fi
 JCM="$(jc_mk malformed)"
 printf '{"trunk":"main",\n' > "$JCM/.claude/sdd.json"
 printf 'n\n' > "$JCM/docs/n.txt"; git -C "$JCM" add -A >/dev/null 2>&1
-if PATH="$JC_HEALTHY" git -C "$JCM" commit -qm docs >"$WORK/jc-malformed.commit" 2>&1; then
+if PATH="$JC_HEALTHY_GP" git -C "$JCM" commit -qm docs >"$WORK/jc-malformed.commit" 2>&1; then
   bad "0130 KL6 5: a malformed .claude/sdd.json under a healthy jq is refused" "it committed"
 elif grep -q '\[SLH-UNREADABLE-CONFIG\]' "$WORK/jc-malformed.commit" \
      && grep -q 'jq \. \.claude/sdd\.json' "$WORK/jc-malformed.commit" \
@@ -501,7 +810,7 @@ fi
 
 fi; shard_region_end
 # <<< SHARD-END jq-cat-hardening-0130
-# >>> SHARD-BEGIN refresh-silent-jq-0130 cost=1
+# >>> SHARD-BEGIN refresh-silent-jq-0130 smoke=bins cost=4
 if shard_region refresh-silent-jq-0130; then
 # =============================================================================
 # THE REFRESH SCRIPT UNDER A jq THAT EXITS 0 PRINTING NOTHING (the 2.5.0 leg,
@@ -514,7 +823,7 @@ if shard_region refresh-silent-jq-0130; then
 # =============================================================================
 RSJ_BIN="$WORK/rsj-bin"; rm -rf "$RSJ_BIN"; mkdir -p "$RSJ_BIN"
 for rsj_t in bash sh git grep sed awk cat head tail od tr wc cut sort uniq printf env dirname basename mkdir rm cp mv ls chmod date mktemp diff cmp; do
-  rsj_p="$(command -v "$rsj_t" 2>/dev/null || true)"; [[ -n "$rsj_p" ]] && ln -sf "$rsj_p" "$RSJ_BIN/$rsj_t"
+  rsj_p="$(command -v "$rsj_t" 2>/dev/null || true)"; [[ -n "$rsj_p" ]] && setlist_wrap_bin "$rsj_p" "$RSJ_BIN/$rsj_t"
 done
 printf '#!/bin/sh\nexit 0\n' > "$RSJ_BIN/jq"; chmod +x "$RSJ_BIN/jq"
 RSJ="$WORK/rsj-inst"; instance_fixture "$RSJ" 9.9.9 current

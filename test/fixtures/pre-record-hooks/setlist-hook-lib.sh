@@ -996,9 +996,9 @@ slh_chores_completed() { # slh_chores_completed <status-new> <status-old>
 # verification this layer emits, INCLUDING the ones that pass. A gate that says
 # what its green means is the only defence against a claim nobody can test.
 #
-# WHERE IT REFUSES, and why it is not anywhere else. The session layer emits
-# permissionDecision "allow" as a literal in every gate since 2026-08-04, so it
-# cannot refuse anything and the refusal cannot live there. Deciding at the
+# WHERE IT REFUSES, and why it is not anywhere else. The session layer reports and
+# does not refuse in any gate since 2026-08-04 (this frozen copy's sentence reworded
+# by spec 0181), so it cannot refuse anything and the refusal cannot live there. Deciding at the
 # moment of the WRITE would be a judgement about intent, which is the parser
 # treadmill in a new costume. So this refuses the unapproved build's OUTPUT:
 # it does not prevent an unapproved build from happening, it prevents one

@@ -7,6 +7,12 @@
 # Usage:
 #   refresh-instance.sh <instance-dir>            report what would change
 #   refresh-instance.sh --apply <instance-dir>    perform the refresh
+#   refresh-instance.sh --observe [--merges N] [--trunk <name>] --role <path>... <repo>
+#       what the trunk audit would have refused over a repository's last N merges,
+#       for a repository Setlist never touched (spec 0176); writes nothing there
+#   refresh-instance.sh --delta [--merges N] <instance-dir>
+#       the verdict delta: the stamped audit and this plugin's over the instance's
+#       last N merges, printed both ways before an upgrade lands (spec 0176)
 #
 # The default is a report because a stamped copy that differs may be a fork the
 # instance made deliberately, and Part 8c is explicit that a customized stamped
@@ -45,11 +51,34 @@ set -u
 die() { printf '%s\n' "refresh-instance.sh: $*" >&2; exit 1; }
 
 APPLY=no
-if [[ "${1:-}" == "--apply" ]]; then
+# THE TWO REPORT MODES OF SPEC 0176, parsed only when named first, so every
+# existing spelling of this command reads exactly as it did.
+REPORT_MODE=""
+OBS_MERGES=50
+OBS_TRUNK=""
+OBS_ROLES=()
+if [[ "${1:-}" == "--observe" || "${1:-}" == "--delta" ]]; then
+  REPORT_MODE="${1#--}"
+  shift
+  while [[ $# -gt 1 ]]; do
+    case "$1" in
+      --merges|--trunk|--role)
+        [[ $# -ge 3 ]] || die "$1 needs a value, followed by the directory"
+        case "$1" in
+          --merges) OBS_MERGES="$2" ;;
+          --trunk)  [[ "$REPORT_MODE" == "observe" ]] || die "--trunk is --observe's: --delta reads the trunk the instance records"; OBS_TRUNK="$2" ;;
+          --role)   [[ "$REPORT_MODE" == "observe" ]] || die "--role is --observe's: --delta reads the roles the instance records"; OBS_ROLES[${#OBS_ROLES[@]}]="$2" ;;
+        esac
+        shift 2 ;;
+      *) die "--$REPORT_MODE: unknown argument '$1' (usage: --observe [--merges N] [--trunk <name>] --role <path>... <repo>, or --delta [--merges N] <instance-dir>)" ;;
+    esac
+  done
+  [[ "$OBS_MERGES" =~ ^[1-9][0-9]*$ ]] || die "--merges takes a positive whole number of merges; got '$OBS_MERGES'"
+elif [[ "${1:-}" == "--apply" ]]; then
   APPLY=yes
   shift
 fi
-[[ $# -eq 1 ]] || die "usage: refresh-instance.sh [--apply] <instance-dir>"
+[[ $# -eq 1 ]] || die "usage: refresh-instance.sh [--apply] <instance-dir>, or --observe [--merges N] [--trunk <name>] --role <path>... <repo>, or --delta [--merges N] <instance-dir>"
 INSTANCE="$1"
 [[ -d "$INSTANCE" ]] || die "not a directory: $INSTANCE"
 
@@ -60,6 +89,139 @@ HOOKS="$ROOT/templates/hooks"
 
 PLUGIN_VERSION="$(bash "$SCRIPT_DIR/plugin-version.sh" "$ROOT")" \
   || die "refusing to refresh: this plugin's own version is undeterminable, so the direction of the move cannot be established"
+
+# --- OBSERVE AND THE VERDICT DELTA (spec 0176) ---------------------------------
+# Both modes ask the trunk audit what it WOULD refuse, over the last N merges on
+# the trunk's first-parent line, and both write NOTHING in the repository they
+# read: the audit runs in a private clone (git clone --shared: the clone borrows
+# the objects and the source is not touched), which is deleted on exit, and any
+# configuration the question needs is written into that clone only. The clone
+# is --no-checkout (spec 0180, fix round 2, the leg's F1 and F2): checked out at
+# the trunk it materialised the history's own tracked symlinks, and a link at
+# .claude or .claude/sdd.json carried the configuration write out of the clone,
+# into the observed repository, over a file outside it, and through an
+# instance's shared configuration, truncating it. With nothing checked out no
+# tracked path exists to follow, and the audit reads history, not the worktree
+# (its case probe beside a role directory falls back to the clone's root). The
+# audit reads history and runs no command from it, so a foreign history executes
+# nothing. It carries the close checks too (the Closing report, the QA verdict,
+# the close review, Owns:), so one run answers both; the forge check is not run,
+# because a history has no pull request to ask the forge about.
+OBS_DIR=""
+OBS_CLONE=""
+OBS_AUDIT_OUT=""
+OBS_AUDIT_RC=0
+obs_cleanup() { [[ -z "$OBS_DIR" ]] || rm -rf "$OBS_DIR"; }
+obs_text() { # obs_text <text> -> one line, no control bytes, cut at 160 characters
+  printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '\000-\037\177' | cut -c1-160
+}
+obs_clone() { # obs_clone <repo> <trunk> -> sets OBS_CLONE, the clone at the trunk with nothing checked out (never in a subshell: the trap is this shell's)
+  local c
+  if [[ -z "$OBS_DIR" ]]; then
+    OBS_DIR="$(mktemp -d "${TMPDIR:-/tmp}/setlist-observe.XXXXXX")" || die "no private workspace for the clone; check TMPDIR. Nothing was written."
+    trap obs_cleanup EXIT
+  fi
+  c="$OBS_DIR/clone"
+  git clone -q --shared --no-checkout -b "$2" -- "$1" "$c" >/dev/null 2>&1 \
+    || die "could not clone the repository privately to read it (git clone --shared --no-checkout -b $(obs_text "$2") failed). Nothing was written."
+  OBS_CLONE="$c"
+}
+obs_range() { # obs_range <repo> <tip> -> "since merges commits": the parent of the Nth-newest first-parent merge, or the root
+  local repo="$1" tip="$2" nth since nm nc
+  nth="$(git -C "$repo" rev-list --first-parent --merges "$tip" 2>/dev/null | sed -n "${OBS_MERGES}p")"
+  if [[ -n "$nth" ]]; then
+    since="$(git -C "$repo" rev-parse --verify --quiet "$nth^1" 2>/dev/null)"
+  else
+    since="$(git -C "$repo" rev-list --first-parent "$tip" 2>/dev/null | tail -n1)"
+  fi
+  nm="$(git -C "$repo" rev-list --first-parent --merges "$since..$tip" 2>/dev/null | wc -l | tr -d ' ')"
+  nc="$(git -C "$repo" rev-list --first-parent "$since..$tip" 2>/dev/null | wc -l | tr -d ' ')"
+  printf '%s %s %s' "$since" "$nm" "$nc"
+}
+obs_range_line() { # obs_range_line <repo> <trunk> <since> <merges> <commits>
+  local repo="$1" since="$3" root=""
+  [[ "$4" -lt "$OBS_MERGES" ]] && root=", fewer than $OBS_MERGES merges on this line, so the range reaches back to the root commit (the root itself is not audited)"
+  printf 'range: the last %s merge(s) on %s, %s commit(s) on its first-parent line, after %s (%s, exclusive) up to %s (%s)%s\n' \
+    "$4" "$(obs_text "$2")" "$5" "$(git -C "$repo" rev-parse --short "$since")" "$(obs_text "$(git -C "$repo" log -1 --format=%s "$since")")" \
+    "$(git -C "$repo" rev-parse --short "$2")" "$(obs_text "$(git -C "$repo" log -1 --format=%s "$2")")" "$root"
+}
+obs_refusals() { # obs_refusals <audit output> <range commits, short, one per line> -> "sha<TAB>key<TAB>shown" per refusal in range
+  local out="$1" inrange="$2" line sha rest code
+  while IFS= read -r line; do
+    case "$line" in VIOLATION\ *) ;; *) continue ;; esac
+    rest="${line#VIOLATION }"; sha="${rest%% *}"; rest="${rest#"$sha"}"; rest="${rest#"${rest%%[! ]*}"}"
+    grep -qx -- "$sha" <<< "$inrange" || continue
+    if [[ "$rest" =~ ^\[(SLH-[A-Z0-9-]+)\] ]]; then
+      code="${BASH_REMATCH[1]}"
+      printf '%s\t%s\t[%s]\n' "$sha" "$code" "$code"
+    else
+      # No code (E-2): the sentence stands in its place, and its first six words key it.
+      printf '%s\t%s\t%s\n' "$sha" "$(awk '{ for (i = 1; i <= 6 && i <= NF; i++) printf "%s%s", (i > 1 ? " " : ""), $i }' <<< "$rest")" "$(obs_text "$rest")"
+    fi
+  done <<< "$out"
+}
+obs_audit() { # obs_audit <audit-script> <clone> [args] -> sets OBS_AUDIT_OUT and OBS_AUDIT_RC (never in a subshell)
+  OBS_AUDIT_RC=0
+  OBS_AUDIT_OUT="$(env -u CLAUDE_PLUGIN_ROOT bash "$1" "$2" "${@:3}" 2>&1)" || OBS_AUDIT_RC=$?
+}
+OBS_HEADER='what the trunk audit WOULD refuse had this repository adopted Setlist at the start of the range (by commit; the code where the audit gives one, its own sentence where it does not):'
+
+# JQ'S LINE ENDING (spec 0179). A native jq on Windows ends every line in CRLF,
+# and Git Bash drops a CR only at the very end of a command substitution, so
+# every line of a jq list but the last kept one ("src\r") and each verdict read
+# from a list failed open. jq -b (jq 1.7 and later) writes LF there. The probe
+# reads a two-line list, so a jq that ends lines in CR is found on any platform;
+# one that also refuses -b fails this file's output probe and is refused by name.
+case "$(printf '["x","y"]' | command jq -r '.[]' 2>/dev/null)" in *$'\r'*) jq() { command jq -b "$@"; } ;; esac
+if [[ "$REPORT_MODE" == "observe" ]]; then
+  OBS_REPO="$INSTANCE"
+  git -C "$OBS_REPO" rev-parse --git-dir >/dev/null 2>&1 || die "--observe: $(obs_text "$OBS_REPO") is not a git repository, so there is no history to read. Nothing was written."
+  [[ "$(git -C "$OBS_REPO" rev-parse --is-shallow-repository 2>/dev/null)" != "true" ]] \
+    || die "--observe: this is a shallow clone, so the merges in the range may not be here to read; fetch the full history (git fetch --unshallow) and retry. Nothing was written."
+  command -v jq >/dev/null 2>&1 && [[ "$(printf '{"probe":"x"}' | jq -r '.probe' 2>/dev/null)" == "x" ]] \
+    || die "--observe: jq is missing or not working here, and the audit reads its configuration with it. Nothing was written."
+  if [[ -z "$OBS_TRUNK" ]]; then
+    OBS_TRUNK="$(git -C "$OBS_REPO" symbolic-ref --short HEAD 2>/dev/null || true)" # fail-open-ok: an empty trunk is refused on the next line
+  fi
+  [[ -n "$OBS_TRUNK" ]] && git -C "$OBS_REPO" rev-parse --verify --quiet "refs/heads/$OBS_TRUNK^{commit}" >/dev/null 2>&1 \
+    || die "--observe: the trunk $(obs_text "${OBS_TRUNK:-(none: HEAD is detached)}") is not a local branch here; name the branch this project merges onto with --trunk. Nothing was written."
+  [[ "${#OBS_ROLES[@]}" -gt 0 ]] \
+    || die "--observe: no --role given. The audit judges the commits that touch a role path (where the feature code lives: src, lib, app ...), so it needs at least one. Nothing was written."
+  for r in "${OBS_ROLES[@]}"; do
+    case "$r" in ''|/*|*..*|.) die "--observe: the role path $(obs_text "$r") is not a clean path relative to the repository root. Nothing was written." ;; esac
+  done
+  obs_clone "$OBS_REPO" "$OBS_TRUNK"; OBS_C="$OBS_CLONE"
+  mkdir -p "$OBS_C/.claude"
+  jq -n --arg trunk "$OBS_TRUNK" --arg version "$PLUGIN_VERSION" '{trunk: $trunk, roles: {src: $ARGS.positional}, plugin: {version: $version}}' --args "${OBS_ROLES[@]}" > "$OBS_C/.claude/sdd.json" \
+    || die "--observe: could not write the configuration into the private clone. Nothing was written in the repository."
+  read -r OBS_SINCE OBS_NM OBS_NC <<< "$(obs_range "$OBS_C" "$OBS_TRUNK")"
+  printf 'observe (plugin %s): %s, read in a private clone; nothing was installed or written in it.\n' "$PLUGIN_VERSION" "$(obs_text "$OBS_REPO")"
+  printf 'roles: %s\n' "$(obs_text "${OBS_ROLES[*]}")"
+  obs_range_line "$OBS_C" "$OBS_TRUNK" "$OBS_SINCE" "$OBS_NM" "$OBS_NC"
+  if [[ "$OBS_NC" -eq 0 ]]; then
+    printf 'nothing to read: %s carries no commit after its root.\n' "$(obs_text "$OBS_TRUNK")"
+    exit 0
+  fi
+  obs_audit "$SCRIPT_DIR/trunk-audit.sh" "$OBS_C" --since "$OBS_SINCE"; OBS_OUT="$OBS_AUDIT_OUT"
+  if [[ "$OBS_AUDIT_RC" -ge 2 ]]; then
+    printf 'the audit could not read this history (exit %s):\n' "$OBS_AUDIT_RC"
+    printf '%s\n' "$OBS_OUT" | tail -n3 | while IFS= read -r l; do printf '  %s\n' "$(obs_text "$l")"; done
+    exit 1
+  fi
+  OBS_INRANGE="$(git -C "$OBS_C" log --first-parent --format=%h "$OBS_SINCE..$OBS_TRUNK")"
+  OBS_LIST="$(obs_refusals "$OBS_OUT" "$OBS_INRANGE")"
+  printf '%s\n' "$OBS_HEADER"
+  if [[ -z "$OBS_LIST" ]]; then
+    printf '  none\n'
+  else
+    printf '%s\n' "$OBS_LIST" | while IFS="$(printf '\t')" read -r sha _ shown; do
+      printf '  %s %s  %s\n' "$sha" "$shown" "$(obs_text "$(git -C "$OBS_C" log -1 --format=%s "$sha")")"
+    done
+  fi
+  printf '%s\n' "$OBS_OUT" | grep -E '^audited ' | sed 's/^/the audit: /'
+  printf 'This is a report: nothing above was refused, and exit 0 says the read completed. /setlist:retrofit installs the hooks that would refuse these.\n'
+  exit 0
+fi
 
 SDD="$INSTANCE/.claude/sdd.json"
 [[ -f "$SDD" ]] || die "refusing to refresh: no .claude/sdd.json at $INSTANCE, so this is not a framework instance (or its config is missing)"
@@ -210,6 +372,45 @@ source "$SCRIPT_DIR/setlist-delivery-lib.sh"
 declare -f hooks_layer_is_ours >/dev/null \
   || die "setlist-delivery-lib.sh loaded but hooks_layer_is_ours is not defined; refusing to run with the displacement guard absent."
 FOREIGN_HOOKSPATH="$(foreign_hookspath "$INSTANCE")"
+# core.hooksPath is REPOSITORY TEXT (spec 0169's E-j, bounded in spec 0173): git stores
+# whatever `git config` was given, a newline included, and every message below printed it whole,
+# so a value could put a line of its own choosing on stderr. The value is printed through the
+# stamp's own bound (the path set, 80 characters, the edit said), computed once here and used by
+# every message; the LOGIC keeps reading FOREIGN_HOOKSPATH. The stamp and the refresh carry the same
+# expression, moved in one commit, and 0158 stamp g2 and g3 pin the pair.
+FOREIGN_HOOKSPATH_SHOWN="$(LC_ALL=C; v="$FOREIGN_HOOKSPATH"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e")"
+# WHICH OF THE TWO SHAPES THIS IS (spec 0157, SD2), decided once and used by the
+# report and by the refusal, so both tell the same story.
+#
+# hooks_layer_is_ours decides by BYTES, deliberately: every text-based reading
+# of "is this file ours" broke in both directions across three adversary rounds,
+# and to a byte test a CUSTOMISED Setlist hook and a foreign file under a
+# Setlist name are the same thing. Refusing is right for both. But the REASON
+# printed was the displacement one for both, so an operator who had edited
+# .githooks/pre-push was told another tool's layer was about to be switched off
+# and to move their gitleaks checks into the directory they were already in
+# (spec 0121's upgrade-seam fixtures measured it).
+#
+# The shape is named by what is observable: git already runs Setlist's own
+# directory, and every file the ownership test objects to carries one of the
+# three stamped hook names. What cannot be observed is whether a person edited
+# them, and the message says so rather than guessing.
+FOREIGN_HOOK_NAMES=""
+SD2_OURS_EDITED=0
+if [[ -n "$FOREIGN_HOOKSPATH" ]] && git -C "$INSTANCE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  FOREIGN_HOOK_NAMES="$(hooks_layer_foreign_entries "$(setlist_refusal_dir "$INSTANCE" "$FOREIGN_HOOKSPATH")" 2>/dev/null | tr '\n' ' ')" # fail-open-ok: an empty list leaves SD2_OURS_EDITED at 0 and the DISPLACEMENT reason, which is the reason this refusal has always given
+  if [[ "$FOREIGN_HOOKSPATH" == ".githooks" ]] \
+     && [[ "$(git -C "$INSTANCE" config --get core.hooksPath 2>/dev/null)" == ".githooks" ]] \
+     && [[ -n "${FOREIGN_HOOK_NAMES// /}" ]]; then
+    SD2_OURS_EDITED=1
+    for _fh in $FOREIGN_HOOK_NAMES; do
+      case "$_fh" in
+        pre-commit|pre-merge-commit|pre-push) ;;
+        *) SD2_OURS_EDITED=0 ;;
+      esac
+    done
+  fi
+fi
 # The boundary-skip decision is computed HERE, before the report, so report
 # mode and apply mode describe the same future (round 5, finding 2: the report
 # promised four files and two config writes that apply then skipped). Two
@@ -225,10 +426,215 @@ if git -C "$INSTANCE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   INSTANCE_REAL="$(cd "$INSTANCE" 2>/dev/null && pwd -P)"
   GIT_DIR_HERE="$(git -C "$INSTANCE" rev-parse --git-dir 2>/dev/null || true)"       # fail-open-ok: both empty compares equal and the linked test stays quiet; the worktree-top test above still governs
   GIT_COMMON_HERE="$(git -C "$INSTANCE" rev-parse --git-common-dir 2>/dev/null || true)" # fail-open-ok: same
-  if [[ -z "$INSTANCE_TOP" || "$INSTANCE_REAL" != "$INSTANCE_TOP" ]]; then
+  # The instance and git's top are compared as DIRECTORIES (-ef: the same device and
+  # inode), never as strings: bash's pwd -P keeps a path's typed case and git reports
+  # the stored one, so on a filesystem that folds case a correct instance read as
+  # sitting below its own top and was never armed (spec 0159, E-h).
+  if [[ -z "$INSTANCE_TOP" ]] || ! [[ "$INSTANCE_TOP" -ef "$INSTANCE" ]]; then
     GITHOOKS_SKIP_NOTE="this instance ($INSTANCE_REAL) sits BELOW the top of its git working tree ($INSTANCE_TOP); git resolves core.hooksPath at the top, so a boundary delivered here would be inert or would displace the parent repository's layer. The git-hook boundary was NOT touched. Make the instance its own repository, or run Setlist from the worktree top."
   elif [[ -n "$GIT_DIR_HERE" && -n "$GIT_COMMON_HERE" && "$GIT_DIR_HERE" != "$GIT_COMMON_HERE" ]]; then
     GITHOOKS_SKIP_NOTE="this instance is a LINKED worktree; core.hooksPath lives in the shared config, so arming from here would repoint the MAIN worktree's hooks (and the guard cannot see that worktree's layer from here). The git-hook boundary was NOT touched. Arm from the main worktree."
+  fi
+fi
+
+# CHAIN RATHER THAN REFUSE (spec 0173, item 2; the validator's E-c, option 1). A
+# foreign layer this run can SEE (a directory that exists and lists) is chained: the
+# boundary is armed, the layer's location is recorded as "hooks_chain" in
+# .claude/sdd.json, a fixed pass-through is written under each other hook name it
+# carries, and every Setlist git hook runs its hook of the same name after its own
+# verdict. What still refuses: Setlist's own directory with edited files (SD2, the
+# reason above), and a layer this run cannot see (unresolvable, absent, unlistable),
+# because a guard that cannot see a layer cannot promise to run it.
+# SETLIST_ADOPT_HOOKSPATH=1 keeps its meaning: displace, nothing chained.
+# AND THE ARMING TARGET IS ASKED FIRST (spec 0180, fix round 2, the 2.11.0 leg's
+# F10): chaining arms .githooks, so a foreign hook already vendored there, dormant
+# while the other layer ran, went live with nothing said, where the path without a
+# chain refused to arm. A .githooks holding a file that is not Setlist's is not
+# chained: the refusal below names it, as the round-7 guard names it unchained.
+CHAIN_MODE=0; CHAIN_VALUE=""; CHAIN_DIR=""; CHAIN_NAMES=""
+if [[ -n "$FOREIGN_HOOKSPATH" && -z "$GITHOOKS_SKIP_NOTE" && "$SD2_OURS_EDITED" -eq 0 && "${SETLIST_ADOPT_HOOKSPATH:-0}" != "1" ]]; then
+  CHAIN_DIR="$(setlist_refusal_dir "$INSTANCE" "$FOREIGN_HOOKSPATH")"
+  if [[ -n "$(setlist_arming_target_foreign "$INSTANCE")" ]]; then
+    FOREIGN_HOOKSPATH=".githooks"; FOREIGN_HOOKSPATH_SHOWN='".githooks"'
+    FOREIGN_HOOK_NAMES="$(hooks_layer_foreign_entries "$(setlist_refusal_dir "$INSTANCE" .githooks)" 2>/dev/null | tr '\n' ' ')" # fail-open-ok: an empty list prints "unresolvable" in the refusal, which still refuses
+  elif setlist_chainable "$INSTANCE" "$CHAIN_DIR"; then
+    CHAIN_MODE=1
+    CHAIN_VALUE="$(setlist_chain_value "$INSTANCE")"
+    CHAIN_NAMES="$(setlist_chain_passthrough_names "$CHAIN_DIR" | tr '\n' ' ')"
+  fi
+fi
+
+# THE TRUNK AUDIT'S BASELINE (spec 0157, the 2.10.0 intake section 1.2).
+#
+# The audit's default baseline is the commit that introduced .claude/sdd.json,
+# which is right for a project born with its hooks and WRONG in the worst
+# direction for one that was not: every merge between the stamp and the boundary
+# was made when no pre-merge-commit existed to record the completion the audit
+# asks for, so the audit refuses every push from then on and says those commits
+# were "made after this instance adopted the rules". Measured on a real
+# instance: 33 violations at the default, 0 at the commit that delivered
+# .githooks/.
+#
+# This script is the one moment that knows both dates, so this is where the
+# baseline is recorded. DECIDED HERE, before the report, so report mode and
+# --apply describe the same future (round 5, finding 2), and WRITTEN in the same
+# jq write that records the plugin version, so it lands in the migration commit
+# /setlist:upgrade makes.
+#
+# Never over a value that is already there: the key is a declaration in a
+# reviewed file, and a declaration is the declarer's. A present value that fails
+# the audit's own tests is REPORTED as a finding with what this refresh would
+# have written, because a report is what this script owes and rewriting someone's
+# declaration to fix it is not.
+AUDIT_BASELINE_WRITE=""
+AUDIT_BASELINE_NOTE=""
+# --- THE BASELINE FRAME (spec 0167) -------------------------------------------
+# LOCKSTEP: everything from this banner to the one that closes it is
+# BYTE-IDENTICAL in scripts/trunk-audit.sh and scripts/refresh-instance.sh, and
+# the suite asserts it (the audit ships alone into .claude/hooks/ and sources
+# nothing from the plugin, so one text in two files is how it is shared).
+#
+# ONE READER FOR THREE CALLERS: the trunk audit, the refresh's usability probe,
+# and /setlist:validate step 18, which reaches it through the refresh's report
+# mode. The 2.10.0 second leg's F1, F3, F4, F5 and F9 were these callers asking
+# three different questions of one key: the audit required the key on the
+# trunk's first-parent line, the refresh wrote the commit that ADDED
+# .githooks/pre-push, which sits on a side branch whenever the hooks arrived
+# through a merge (the upgrade's chore branch under merge.ff=false makes that
+# the ordinary shape), and the refresh's probe asked plain ancestry. Every push
+# after such an upgrade was refused by name while the refresh called the key
+# healthy. Measured on the owner's instance: refused at once.
+#
+# So the frame is COMPUTED, not required. Any ancestor of the tip is a valid
+# declaration, and the walk starts at the OLDEST commit on the tip's
+# first-parent line that contains it: the declared commit itself when it is on
+# that line, otherwise the merge that brought it in. Containment is monotone
+# along the line (a commit that contains it has descendants that do too), so
+# walking from the tip and stopping at the first commit that does NOT contain
+# it finds that frame. Never the tip for an older declaration: that would walk
+# nothing and attest every trunk clean (spec 0167, ruling E-a).
+#
+# One line out, compared by bytes across the callers by the suite's key corpus:
+#   absent                                  no key
+#   frame <frame-id> <declared-id>          walk from <frame-id>
+#   refuse SLH-BASELINE-<CODE> <reason>     the audit refuses it at exit 2
+# A git failure while computing the frame refuses: a later frame walks less, so
+# a guessed one is the fail-open direction. Every git call is tested with
+# if/else rather than `$?` so the function behaves the same under `set -e`.
+slh_baseline_frame() { # slh_baseline_frame <repo> <sdd.json> <tip>
+  local repo="$1" sdd="$2" tip="$3" v c prev="" rc fp
+  # The shape guard both scripts carried since 0157: a present "audit" that is
+  # not an object, or a present baseline that is not a string (JSON false and
+  # null included, spec 0164 F21), is MALFORMED, never read as "no key".
+  if ! v="$(jq -r 'if has("audit") and ((.audit | type) != "object") then error("audit-not-object")
+        elif ((.audit // {}) | has("baseline")) and ((.audit.baseline | type) != "string") then error("baseline-not-string")
+        else (.audit.baseline // empty) end' "$sdd" 2>/dev/null)"; then
+    printf 'refuse SLH-BASELINE-MALFORMED type\n'; return 0
+  fi
+  if [[ -z "$v" ]]; then printf 'absent\n'; return 0; fi
+  # LC_ALL=C: a shell bracket range collates by the LOCALE, so under a UTF-8
+  # locale `[!0-9a-f]` does not match `A` (spec 0157, the suite's case b3).
+  if ! LC_ALL=C grep -qE '^[0-9a-f]{40}$' <<< "$v"; then
+    printf 'refuse SLH-BASELINE-MALFORMED shape\n'; return 0
+  fi
+  if ! git -C "$repo" rev-parse --verify --quiet "${v}^{commit}" >/dev/null 2>&1; then
+    printf 'refuse SLH-BASELINE-UNRESOLVED commit\n'; return 0
+  fi
+  if git -C "$repo" merge-base --is-ancestor "$v" "$tip" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+  case "$rc" in
+    0) ;;
+    1) printf 'refuse SLH-BASELINE-NOT-ANCESTOR ancestry\n'; return 0 ;;
+    *) printf 'refuse SLH-BASELINE-UNRESOLVED git\n'; return 0 ;;
+  esac
+  if ! fp="$(git -C "$repo" rev-list --first-parent "$tip" 2>/dev/null)"; then
+    printf 'refuse SLH-BASELINE-UNRESOLVED git\n'; return 0
+  fi
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    if git -C "$repo" merge-base --is-ancestor "$v" "$c" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+    case "$rc" in
+      0) prev="$c" ;;
+      1) break ;;
+      *) printf 'refuse SLH-BASELINE-UNRESOLVED git\n'; return 0 ;;
+    esac
+  done <<SLH_FRAME_EOF
+$fp
+SLH_FRAME_EOF
+  if [[ -z "$prev" ]]; then printf 'refuse SLH-BASELINE-UNRESOLVED git\n'; return 0; fi
+  printf 'frame %s %s\n' "$prev" "$v"
+}
+# --- END THE BASELINE FRAME ---------------------------------------------------
+if git -C "$INSTANCE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  # The recorded trunk's tip, falling back to HEAD: the value written on a FIRST
+  # delivery has to be a commit the migration commit will descend from, and the
+  # branch a refresh happens to run on may not be the trunk.
+  AUDIT_TRUNK_NAME="$(jq -r '.trunk // "main"' "$SDD" 2>/dev/null || true)" # fail-open-ok: an unreadable trunk name leaves the tip resolution to HEAD below, which writes a commit this history carries either way
+  AUDIT_TRUNK_TIP="$(git -C "$INSTANCE" rev-parse --verify --quiet "refs/heads/${AUDIT_TRUNK_NAME}^{commit}" 2>/dev/null || true)" # fail-open-ok: an unresolvable trunk writes NO key, handled below
+  # NO HEAD FALLBACK (spec 0164, fix round 2, F20 of the 2.10.0 leg). It used to
+  # fall back to HEAD and call the result "this trunk's tip": run from a spec
+  # branch in a clone whose recorded trunk is not a local branch (a
+  # --single-branch clone, a renamed default branch, a typo in the key), it
+  # wrote that branch's HEAD, and every later push from the trunk was refused
+  # by name, SLH-BASELINE-NOT-ANCESTOR, or SLH-BASELINE-UNRESOLVED once the
+  # branch was gone. A key this instance cannot use is worse than no key.
+  AUDIT_TRUNK_TIP_MISSING=""
+  [[ -n "$AUDIT_TRUNK_TIP" ]] || AUDIT_TRUNK_TIP_MISSING="$AUDIT_TRUNK_NAME"
+  # THE ONE READER (spec 0167): the verdict comes from slh_baseline_frame, the
+  # function the audit itself runs, against the recorded trunk's tip. With no
+  # trunk tip here there is nothing to measure ancestry against, and a present
+  # key is reported as unchecked rather than guessed at.
+  AUDIT_BASELINE_VERDICT="$(slh_baseline_frame "$INSTANCE" "$SDD" "${AUDIT_TRUNK_TIP:-}")"
+  # DISPLAY ONLY: the value as written, quoted back in the note.
+  AUDIT_BASELINE_SHOWN="$(jq -r '(.audit.baseline? // empty) | tostring' "$SDD" 2>/dev/null || true)" # fail-open-ok: display only, the verdict above decides
+  # The commit that ADDED .githooks/pre-push: the arrival of the push-time audit
+  # is the arrival of the boundary, and --root is here for the same reason the
+  # audit carries it (RC2-2026): without it git renders a ROOT commit as adding
+  # nothing.
+  AUDIT_BASELINE_ADDED="$(git -C "$INSTANCE" log --root --diff-filter=A --format=%H -- .githooks/pre-push 2>/dev/null | tail -n1 || true)" # fail-open-ok: no adding commit means the boundary is arriving now, handled as a first delivery below
+  AUDIT_BASELINE_WOULD="$AUDIT_BASELINE_ADDED"
+  [[ -n "$AUDIT_BASELINE_WOULD" ]] || AUDIT_BASELINE_WOULD="$AUDIT_TRUNK_TIP"
+  if [[ -n "$GITHOOKS_SKIP_NOTE" ]]; then
+    : # no boundary is delivered here, so there is no boundary to record
+  elif [[ "$AUDIT_BASELINE_VERDICT" != "absent" ]]; then
+    # PRESENT: reported, never rewritten. A declaration is the declarer's.
+    case "$AUDIT_BASELINE_VERDICT" in
+      "frame "*)
+        read -r _ AUDIT_BASELINE_FRAME _ <<< "$AUDIT_BASELINE_VERDICT"
+        if [[ "$AUDIT_BASELINE_FRAME" == "$AUDIT_BASELINE_SHOWN" ]]; then
+          AUDIT_BASELINE_NOTE="already recorded ($AUDIT_BASELINE_SHOWN), left as declared; the audit walks from $AUDIT_BASELINE_FRAME, the declared commit itself"
+        else
+          AUDIT_BASELINE_NOTE="already recorded ($AUDIT_BASELINE_SHOWN), left as declared; the audit walks from $AUDIT_BASELINE_FRAME, the first commit on the trunk's own line that contains it"
+        fi
+        ;;
+      "refuse SLH-BASELINE-UNRESOLVED git")
+        if [[ -n "$AUDIT_TRUNK_TIP_MISSING" ]]; then
+          AUDIT_BASELINE_NOTE="recorded as '$AUDIT_BASELINE_SHOWN' and left as declared, but NOT checked: this instance records its trunk as \"$AUDIT_TRUNK_TIP_MISSING\", which is not a branch in this clone, so there is no history to measure it against here"
+        else
+          AUDIT_BASELINE_NOTE="recorded as '$AUDIT_BASELINE_SHOWN', which the trunk audit refuses [SLH-BASELINE-UNRESOLVED] (git could not compute its frame here); this refresh would have written $AUDIT_BASELINE_WOULD and leaves your declaration alone"
+        fi
+        ;;
+      "refuse "*)
+        read -r _ AUDIT_BASELINE_CODE AUDIT_BASELINE_WHY <<< "$AUDIT_BASELINE_VERDICT"
+        case "$AUDIT_BASELINE_WHY" in
+          type)     AUDIT_BASELINE_WHY="the \"audit\" value is not an object, or the baseline is not a string" ;;
+          shape)    AUDIT_BASELINE_WHY="it is not a full 40-character lowercase commit id" ;;
+          commit)   AUDIT_BASELINE_WHY="no such commit in this repository" ;;
+          ancestry) AUDIT_BASELINE_WHY="it is not an ancestor of this trunk" ;;
+        esac
+        AUDIT_BASELINE_NOTE="recorded as '$AUDIT_BASELINE_SHOWN', which the trunk audit refuses [$AUDIT_BASELINE_CODE] ($AUDIT_BASELINE_WHY), so every push is refused until it is corrected; this refresh would have written $AUDIT_BASELINE_WOULD and leaves your declaration alone"
+        ;;
+    esac
+  elif [[ -z "$AUDIT_BASELINE_ADDED" && -n "$AUDIT_TRUNK_TIP_MISSING" ]]; then
+    # A first delivery whose trunk ref does not resolve here: nothing is written,
+    # and the note names the branch it looked for (F20).
+    AUDIT_BASELINE_NOTE="NOT recorded: this instance records its trunk as \"$AUDIT_TRUNK_TIP_MISSING\", which is not a branch in this clone, so the commit the audit should start from cannot be named here and writing the current branch's tip would refuse every later push from the trunk. Run the refresh where that branch exists, or correct the \"trunk\" key first"
+  elif [[ -n "$AUDIT_BASELINE_WOULD" ]]; then
+    AUDIT_BASELINE_WRITE="$AUDIT_BASELINE_WOULD"
+    if [[ -n "$AUDIT_BASELINE_ADDED" ]]; then
+      AUDIT_BASELINE_NOTE="would be recorded as $AUDIT_BASELINE_WOULD, the commit that added .githooks/pre-push, so the audit stops judging history from before this instance had any hooks"
+    else
+      AUDIT_BASELINE_NOTE="would be recorded as $AUDIT_BASELINE_WOULD, this trunk's tip, which the commit delivering the boundary will descend from"
+    fi
   fi
 fi
 
@@ -343,38 +749,122 @@ else
 # and not when it merely looks like it might. A shape test cannot express "the
 # file I stamped"; a set of names can.
 #
-# ours_spellings <hook> -> JSON array of every command word that RUNS the file
-# this script stamps at $INSTANCE/.claude/hooks/<hook>.sh.
+# THE PREDICATE IS IDENTITY, NOT SPELLING (spec 0173, item 3; KL10 taken; the public bullet
+# "The wiring check recognises only the command spellings settings.json.tmpl ships" retired).
+# The enumerated set above was the honest answer to "a shape test cannot express the file I
+# stamped", and it had two residuals the 2.4.0 and 2.7.0 reviews measured, one in each direction:
+# `bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/bypass-deny.sh`, which RUNS the stamped file, was
+# reported NOT WIRED (the first word is `bash`), and `"$CLAUDE_PROJECT_DIR"/.claude/hooks/
+# bypass-deny.sh >/dev/null`, which runs it and throws its stdout (the JSON decision) away, was
+# certified wired (the first word matched). A set of names cannot express "the file I stamped"
+# either; the file system can. So an entry now counts when the file its command RUNS is, by
+# device and inode (`-ef`), the file this script stamps:
 #
-# $CLAUDE_PROJECT_DIR cannot be resolved from here (it is set by the client at
-# session start), so its spellings are enumerated rather than expanded. The
-# absolute forms are included because an instance may legitimately be wired with
-# a literal path, and both quoted and bare forms because both run.
-ours_spellings() {
-  local h="$1" abs
+#   - the command is read by wiring_cmd_file, a restricted word reader: bare, single-quoted and
+#     double-quoted words, and $CLAUDE_PROJECT_DIR or ${CLAUDE_PROJECT_DIR} replaced by this
+#     instance's absolute path. ANY other shell construct (another `$`, a backtick, a backslash,
+#     `;`, `|`, `&`, a redirect, a subshell, a glob, a comment) makes the entry not ours, because a
+#     reader that guessed at a construct it does not model would be the spelling test again;
+#   - the command is exactly one word naming the file, or `bash` or `sh` then exactly one word;
+#     anything after it (an argument, a redirect) is not the stamped hook speaking for itself;
+#   - the named path is absolute after expansion (a hook's working directory is the session's,
+#     not the instance's, so a relative path does not reliably name the stamped file), and it is
+#     the same file as <instance>/.claude/hooks/<hook>.sh; for a hook this release no longer
+#     stamps, whose file may be gone, the same resolved directory and name.
+#
+# ours_spellings <hook> keeps its name and its contract for every caller below (the wiring loop,
+# the scope matcher reader, the timeouts, the retired entries): a JSON array of the command
+# strings in this settings file that run the file, which OURS_TEST tests by whole-string
+# membership. A settings file jq cannot read yields an empty array, which reads as NOT WIRED:
+# fail closed, as before.
+wiring_cmd_file() { # wiring_cmd_file <command> -> the path the command runs; 1 when it is not one plain run of one file
+  local c="$1" i=0 n ch q="" w="" inword=0 abs
+  local -a words=()
   abs="$(cd "$INSTANCE" 2>/dev/null && pwd)" || abs="$INSTANCE" # fail-open-ok: an unreadable instance falls back to the given path, and the caller has already refused a missing one
-  printf '%s\n' \
-    "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/$h.sh" \
-    "\${CLAUDE_PROJECT_DIR}/.claude/hooks/$h.sh" \
-    "\"\${CLAUDE_PROJECT_DIR}\"/.claude/hooks/$h.sh" \
-    "\$CLAUDE_PROJECT_DIR/.claude/hooks/$h.sh" \
-    "$abs/.claude/hooks/$h.sh" \
-    "\"$abs\"/.claude/hooks/$h.sh" \
-    "\"$abs/.claude/hooks/$h.sh\"" \
-  | jq -R . | jq -s .
+  n=${#c}
+  while (( i < n )); do
+    ch="${c:i:1}"
+    if [[ "$q" == "'" ]]; then
+      if [[ "$ch" == "'" ]]; then q=""; else w="$w$ch"; fi
+      i=$((i + 1)); continue
+    fi
+    if [[ "$q" == '"' ]]; then
+      case "$ch" in
+        '"') q=""; i=$((i + 1)); continue ;;
+        '`'|'\') return 1 ;;
+        '$') ;;
+        *) w="$w$ch"; i=$((i + 1)); continue ;;
+      esac
+    else
+      case "$ch" in
+        ' '|$'\t')
+          if (( inword )); then words+=("$w"); w=""; inword=0; fi
+          i=$((i + 1)); continue ;;
+        "'"|'"') q="$ch"; inword=1; i=$((i + 1)); continue ;;
+        '$') ;;
+        [A-Za-z0-9/._+=:@%,-]) w="$w$ch"; inword=1; i=$((i + 1)); continue ;;
+        *) return 1 ;;
+      esac
+    fi
+    # A `$`, bare or inside double quotes: only the project variable is modelled.
+    if [[ "${c:i:21}" == '${CLAUDE_PROJECT_DIR}' ]]; then
+      w="$w$abs"; inword=1; i=$((i + 21)); continue
+    fi
+    if [[ "${c:i:19}" == '$CLAUDE_PROJECT_DIR' ]] && [[ ! "${c:i+19:1}" =~ [A-Za-z0-9_] ]]; then
+      w="$w$abs"; inword=1; i=$((i + 19)); continue
+    fi
+    return 1
+  done
+  [[ -z "$q" ]] || return 1
+  if (( inword )); then words+=("$w"); fi
+  case "${#words[@]}" in
+    1) w="${words[0]}" ;;
+    2) case "${words[0]}" in bash|sh) w="${words[1]}" ;; *) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+  # A drive spelling (C:/...) is absolute too, under MSYS or Cygwin only, where settings.json
+  # on Windows spells an absolute hook path that way and -ef compares it as a file (spec 0179);
+  # elsewhere C:/x is a relative path, and a relative path is not the stamped file.
+  case "$w" in
+    /*) printf '%s' "$w" ;;
+    [A-Za-z]:/*) case "${OSTYPE:-}" in msys*|cygwin*) printf '%s' "$w" ;; *) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+}
+wiring_runs_stamped() { # wiring_runs_stamped <command> <hook> -> 0 when the command runs <instance>/.claude/hooks/<hook>.sh
+  local f target fd td
+  f="$(wiring_cmd_file "$1")" || return 1
+  target="$INSTANCE/.claude/hooks/$2.sh"
+  if [[ -e "$f" && -e "$target" ]]; then
+    [[ "$f" -ef "$target" ]]; return
+  fi
+  # A retired hook's file may be gone: the same resolved directory and the same name.
+  [[ "${f##*/}" == "$2.sh" ]] || return 1
+  fd="$(cd "${f%/*}" 2>/dev/null && pwd -P)" || return 1
+  td="$(cd "$INSTANCE/.claude/hooks" 2>/dev/null && pwd -P)" || return 1
+  [[ "$fd" == "$td" ]]
+}
+ours_spellings() { # ours_spellings <hook> -> JSON array of the command strings in $SETTINGS that run the stamped <hook>
+  local h="$1" j c
+  local -a hit=()
+  while IFS= read -r j; do
+    [[ -n "$j" ]] || continue
+    c="$(printf '%s' "$j" | jq -r . 2>/dev/null)" || continue
+    wiring_runs_stamped "$c" "$h" && hit+=("$j")
+  done <<< "$(jq -c '[.hooks // {} | .. | objects | select(has("command")) | .command | strings] | unique | .[]' "$SETTINGS" 2>/dev/null)"
+  # The certified strings go back to jq as the JSON strings they already are, on stdin, never
+  # as --args (spec 0179): MSYS rewrites a path-shaped argument it hands a native program, and
+  # "$CLAUDE_PROJECT_DIR"/.claude/hooks/x.sh reached a Windows jq as "$CLAUDE_PROJECT_DIR"C:/Program
+  # Files/Git/.claude/hooks/x.sh, so the wiring check certified nothing there.
+  printf '%s\n' ${hit[@]+"${hit[@]}"} | jq -cs .
 }
 
-# ours_test <hook> -> a jq boolean expression over one hook entry.
-#
-# The command WORD is the string up to the first space, which is what the shell
-# would execute. Whole-string equality is tested too so an instance path
-# containing a space still matches when no arguments follow; the combination
-# fails CLOSED (reports UNWIRED) rather than open when it cannot tell.
+# ours_test <hook> -> a jq boolean expression over one hook entry: a command hook whose command
+# is one of the strings ours_spellings certified. Whole-string membership only since spec 0173;
+# the first-word clause is gone, because the first word is how `X >/dev/null` was certified.
 OURS_TEST='
   (.type // "command") == "command"
-  and ((.command // "") as $c
-       | ($allowed | index($c)) != null
-         or ($allowed | index($c | split(" ")[0])) != null)
+  and ((.command // "") as $c | ($allowed | index($c)) != null)
 '
   OURS_ALL="$(for h in $STAMPED_HOOKS; do ours_spellings "$h"; done | jq -s 'add')"
   OURS="[.hooks | to_entries[] | .value[]? | .hooks[]? | select($OURS_TEST)]"
@@ -452,7 +942,7 @@ OURS_TEST='
             | select((\$tool == \"\")
                      or ((.matcher // \"\") == \"\")
                      or (.matcher == \"*\")
-                     or (.matcher as \$m | \$tool | test(\"^(\" + \$m + \")\$\")))
+                     or ((.matcher | gsub(\",\"; \"|\")) as \$m | \$tool | test(\"^(\" + \$m + \")\$\")))
           ] | length > 0" "$SETTINGS" >/dev/null 2>&1; then
       UNWIRED="$UNWIRED $h.sh"
     fi
@@ -572,6 +1062,74 @@ OURS_TEST='
     || RETIRED_FORKS="<unreadable>"
 fi
 
+# THE VERDICT DELTA (spec 0176, I1). Computed here because everything the next
+# push will be judged under is known now and nothing has been printed or written:
+# the OLD side is the instance's stamped audit under its current configuration,
+# the NEW side is this plugin's audit under the configuration --apply would
+# write (the audit.baseline computed above, this plugin's version). Each walks
+# from its OWN frame, because an explicit --since switches the frame off and the
+# frame is exactly what an upgrade can move; the range of the last N merges
+# bounds which refusals are printed. Two lists, both ways, and it writes nothing.
+verdict_delta() { # verdict_delta -> prints the delta; exit status 0 when both sides were read
+  local trunk tip c old new since nm nc inrange ol nl oldl newl only_new only_old l
+  trunk="$(jq -r '.trunk // "main"' "$SDD" 2>/dev/null || printf 'main')" # fail-open-ok: an unreadable name falls back to main, and a trunk that is no branch refuses below
+  tip="$(git -C "$INSTANCE" rev-parse --verify --quiet "refs/heads/${trunk}^{commit}" 2>/dev/null)" \
+    || die "--delta: the recorded trunk $(obs_text "$trunk") is not a local branch here, so there is no history to compare. Nothing was written."
+  [[ "$(git -C "$INSTANCE" rev-parse --is-shallow-repository 2>/dev/null)" != "true" ]] \
+    || die "--delta: this is a shallow clone, so the merges in the range may not be here to read. Nothing was written."
+  obs_clone "$INSTANCE" "$trunk"; c="$OBS_CLONE"
+  mkdir -p "$c/.claude" && cp "$SDD" "$c/.claude/sdd.json"
+  read -r since nm nc <<< "$(obs_range "$c" "$trunk")"
+  printf 'verdict delta (plugin %s against the audit this instance has stamped), read in a private clone; nothing was written.\n' "$PLUGIN_VERSION"
+  obs_range_line "$c" "$trunk" "$since" "$nm" "$nc"
+  inrange="$(git -C "$c" log --first-parent --format=%h "$since..$trunk")"
+  oldl=""
+  if [[ -f "$INSTANCE/.claude/hooks/trunk-audit.sh" ]]; then
+    obs_audit "$INSTANCE/.claude/hooks/trunk-audit.sh" "$c"; old="$OBS_AUDIT_OUT"
+    printf 'the stamped audit:  %s\n' "$(obs_text "$(printf '%s\n' "$old" | grep -m1 -E '^  since: ' | sed 's/^  //')")"
+    if [[ "$OBS_AUDIT_RC" -ge 2 ]]; then
+      printf '  it could not read this history (exit %s): %s\n' "$OBS_AUDIT_RC" "$(obs_text "$(printf '%s\n' "$old" | tail -n1)")"
+    else
+      oldl="$(obs_refusals "$old" "$inrange" | sort -u)"
+    fi
+  else
+    printf 'the stamped audit:  none (.claude/hooks/trunk-audit.sh is not in this instance), so only the new side is printed.\n'
+  fi
+  jq --arg v "$PLUGIN_VERSION" --arg b "${AUDIT_BASELINE_WRITE:-}" \
+    '.plugin = ((.plugin // {}) + {version: $v}) | if $b != "" then .audit = ((.audit // {}) + {baseline: $b}) else . end' \
+    "$SDD" > "$c/.claude/sdd.json" 2>/dev/null \
+    || die "--delta: could not write the upgraded configuration into the private clone. Nothing was written in the instance."
+  obs_audit "$SCRIPT_DIR/trunk-audit.sh" "$c"; new="$OBS_AUDIT_OUT"
+  printf 'this plugin'"'"'s audit: %s%s\n' "$(obs_text "$(printf '%s\n' "$new" | grep -m1 -E '^  since: ' | sed 's/^  //')")" \
+    "$([[ -n "${AUDIT_BASELINE_WRITE:-}" ]] && printf ' (under the audit.baseline --apply would record, %s)' "$(git -C "$c" rev-parse --short "$AUDIT_BASELINE_WRITE" 2>/dev/null)")"
+  if [[ "$OBS_AUDIT_RC" -ge 2 ]]; then
+    printf '  it could not read this history (exit %s): %s\n' "$OBS_AUDIT_RC" "$(obs_text "$(printf '%s\n' "$new" | tail -n1)")"
+    return 1
+  fi
+  newl="$(obs_refusals "$new" "$inrange" | sort -u)"
+  ol="$(cut -f1,2 <<< "$oldl" | sort -u)"; nl="$(cut -f1,2 <<< "$newl" | sort -u)"
+  only_new="$(comm -13 <(printf '%s\n' "$ol") <(printf '%s\n' "$nl") | grep -v '^$' || true)" # fail-open-ok: an empty difference is the answer "none", printed below
+  only_old="$(comm -23 <(printf '%s\n' "$ol") <(printf '%s\n' "$nl") | grep -v '^$' || true)" # fail-open-ok: as above
+  printf 'the new edition would refuse, the old allowed:\n'
+  if [[ -z "$only_new" ]]; then printf '  none\n'; else
+    while IFS= read -r l; do
+      printf '  %s %s  %s\n' "${l%%	*}" "$(grep -F -m1 "$l	" <<< "$newl" | cut -f3)" "$(obs_text "$(git -C "$c" log -1 --format=%s "${l%%	*}")")"
+    done <<< "$only_new"
+  fi
+  printf 'the old refused, the new allows:\n'
+  if [[ -z "$only_old" ]]; then printf '  none\n'; else
+    while IFS= read -r l; do
+      printf '  %s %s  %s\n' "${l%%	*}" "$(grep -F -m1 "$l	" <<< "$oldl" | cut -f3)" "$(obs_text "$(git -C "$c" log -1 --format=%s "${l%%	*}")")"
+    done <<< "$only_old"
+  fi
+  printf 'A report: it refuses nothing. Read it before --apply, so the next push meets no surprise.\n'
+  return 0
+}
+if [[ "$REPORT_MODE" == "delta" ]]; then
+  verdict_delta || exit 1
+  exit 0
+fi
+
 printf 'refresh-instance.sh: plugin %s -> instance recorded %s (%s)\n' "$PLUGIN_VERSION" "$FROM" "$DIRECTION"
 printf '%s\n' "$SKEW_OUT"
 [[ -n "$NEW" ]]     && printf '  missing, would be stamped:%s\n' "$NEW"
@@ -620,6 +1178,40 @@ if [[ -f "$FCW_SRC" ]]; then
   fi
 fi
 [[ -n "$FCW_NOTE" ]] && printf '  .github/workflows/setlist-forge-check.yml: %s\n' "$FCW_NOTE"
+# THE QUESTION IS COVERAGE, NOT A SPELLING (spec 0157, SD12; the 2.9.0 leg's
+# F14). This tested one regex, `^[[:space:]]*/\.github/([[:space:]]|$)`, and so
+# it was wrong in both directions at once: a strictly BROADER rule
+# (`.github/**`, or a catch-all `*`) was reported as missing, and an OWNERLESS
+# `/.github/` line silenced it while leaving the path owned by nobody.
+#
+# What a reader of the report actually needs to know is whether a change under
+# .github/ requires an owner's review, and in CODEOWNERS that is decided by the
+# LAST matching line: a later ownerless line takes the path back out of an
+# earlier owner's hands. So this walks every line, keeps the last one whose
+# pattern covers the path, and answers with whether THAT line names an owner.
+#
+# The covering patterns are enumerated rather than glob-matched, because a
+# CODEOWNERS pattern language re-implemented here would be a second place to be
+# wrong: `*`, `.github`, `/.github`, and each of those directory spellings with
+# a trailing slash or a trailing `/**`. A narrower rule (`/.github/workflows/`)
+# or a single-level one (`/.github/*`) does NOT cover the path, and the note
+# fires, which is the safe direction: the team is told to add a line.
+codeowners_covers_github() { # codeowners_covers_github <file> -> 0 when .github/ is owned
+  awk '
+    { sub(/#.*/, "") }
+    { gsub(/^[[:space:]]+|[[:space:]]+$/, "") }
+    $0 == "" { next }
+    {
+      p = $1
+      sub(/\/\*\*$/, "", p)
+      sub(/\/$/, "", p)
+      sub(/^\//, "", p)
+      if (p == ".github" || $1 == "*") { owned = (NF >= 2) }
+    }
+    END { exit(owned ? 0 : 1) }
+  ' "$1" 2>/dev/null
+}
+
 # The ownership file rides the same rule as the workflow (T1, 2.6.0): wiring
 # the team edits (the @OWNER slot is theirs to fill), delivered when absent and
 # otherwise left as is.
@@ -634,8 +1226,8 @@ if [[ -f "$CO_SRC" ]]; then
     # path carries three. The leave stands (ruling 2); the report SAYS what
     # the file lacks, by path, so the team adds the line under its own owner
     # rather than diffing the template to find out.
-    grep -qE '^[[:space:]]*/\.github/([[:space:]]|$)' "$CO_DEST" 2>/dev/null \
-      || CO_NOTE="$CO_NOTE; it does not name the fourth protected path /.github/ (2.6.0 amendment 5: the check's workflow, the ownership file and the issue form), which the team adds under its own owner"
+    codeowners_covers_github "$CO_DEST" \
+      || CO_NOTE="$CO_NOTE; no line in it puts the fourth protected path /.github/ under an owner (2.6.0 amendment 5: the check's workflow, the ownership file and the issue form), which the team adds under its own owner"
   fi
 fi
 [[ -n "$CO_NOTE" ]] && printf '  .github/CODEOWNERS: %s\n' "$CO_NOTE"
@@ -644,7 +1236,16 @@ fi
 # boundary behind an unreadable directory reported "present and
 # byte-identical, config already set" while apply refused).
 if [[ -n "$FOREIGN_HOOKSPATH" && -z "$GITHOOKS_SKIP_NOTE" && "${SETLIST_ADOPT_HOOKSPATH:-0}" != "1" ]]; then
-  printf 'the git-hook boundary: --apply will REFUSE: a hook layer that is not Setlist'"'"'s (or cannot be verified) runs from, or would be switched on at, %s.\n' "$FOREIGN_HOOKSPATH"
+  if [[ "$SD2_OURS_EDITED" -eq 1 ]]; then
+    printf 'the git-hook boundary: --apply will REFUSE: git already runs Setlist'"'"'s own %s, and the file(s) in it do not match any Setlist release byte for byte:%s (a customised stamped hook, or a foreign file under a Setlist name; this check cannot tell them apart).\n' "$FOREIGN_HOOKSPATH_SHOWN" " ${FOREIGN_HOOK_NAMES% }"
+  elif [[ "$CHAIN_MODE" -eq 1 ]]; then
+    printf 'the git-hook boundary: --apply will CHAIN the hook layer that runs from %s: git runs one hooks directory, so Setlist arms .githooks and each Setlist git hook then runs that layer'"'"'s hook of the same name after its own verdict, both refusals surfacing (recorded as "hooks_chain" in .claude/sdd.json).\n' "$FOREIGN_HOOKSPATH_SHOWN"
+  else
+    printf 'the git-hook boundary: --apply will REFUSE: a hook layer that is not Setlist'"'"'s (or cannot be verified) runs from, or would be switched on at, %s.\n' "$FOREIGN_HOOKSPATH_SHOWN"
+  fi
+fi
+if [[ -n "$AUDIT_BASELINE_NOTE" ]]; then
+  printf '  .claude/sdd.json audit.baseline (the trunk audit'"'"'s frame): %s\n' "$AUDIT_BASELINE_NOTE"
 fi
 if [[ -n "$GITHOOKS_SKIP_NOTE" ]]; then
   printf 'the git-hook boundary: NOT ARMED here and will not be: %s\n' "$GITHOOKS_SKIP_NOTE"
@@ -653,15 +1254,28 @@ elif [[ -n "$GH_NEW" || -n "$GH_CHANGED" || -n "$GH_CFG_NEEDED" ]]; then
   [[ -n "$GH_NEW" ]]     && printf '  missing, would be delivered:%s\n' "$GH_NEW"
   [[ -n "$GH_CHANGED" ]] && printf '  bytes differ, would be replaced (the previous file is kept as .setlist-backup):%s\n' "$GH_CHANGED"
   [[ -n "$GH_CFG_NEEDED" ]] && printf '  git config still to set:%s   (without BOTH of these the hooks are inert)\n' "$GH_CFG_NEEDED"
-  if [[ -n "$FOREIGN_HOOKSPATH" ]]; then
-    printf '  WOULD DISPLACE ANOTHER HOOK LAYER: hooks that are not Setlist%ss already run from %s\n' "'" "$FOREIGN_HOOKSPATH"
+  if [[ -n "$FOREIGN_HOOKSPATH" && "$SD2_OURS_EDITED" -eq 1 ]]; then
+    printf '  WOULD REPLACE FILES THAT ARE NOT THIS RELEASE%ss:%s in %s\n' "'" " ${FOREIGN_HOOK_NAMES% }" "$FOREIGN_HOOKSPATH_SHOWN"
+    printf '    git already runs that directory, so nothing is switched off; what changes is\n'
+    printf '    the bytes of the hook(s) above. --apply REFUSES rather than overwrite an edit\n'
+    printf '    it cannot distinguish from a foreign file. Re-run with SETLIST_ADOPT_HOOKSPATH=1\n'
+    printf '    to take this plugin%ss versions (the previous file is kept as .setlist-backup).\n' "'"
+  elif [[ "$CHAIN_MODE" -eq 1 ]]; then
+    printf '  WOULD CHAIN ANOTHER HOOK LAYER: hooks that are not Setlist%ss run from %s (foreign: %s)\n' "'" "$FOREIGN_HOOKSPATH_SHOWN" "${FOREIGN_HOOK_NAMES% }"
+    printf '    git runs one hooks directory, so --apply arms .githooks and records that\n'
+    printf '    layer as "hooks_chain" in .claude/sdd.json; each Setlist git hook runs the\n'
+    printf '    layer%ss hook of the same name after its own verdict, and both refusals print.\n' "'"
+    [[ -z "${CHAIN_NAMES// /}" ]] || printf '    Pass-throughs would be written for the names Setlist does not stamp:%s\n' " ${CHAIN_NAMES% }"
+    printf '    SETLIST_ADOPT_HOOKSPATH=1 displaces the layer instead, chaining nothing.\n'
+  elif [[ -n "$FOREIGN_HOOKSPATH" ]]; then
+    printf '  WOULD DISPLACE ANOTHER HOOK LAYER: hooks that are not Setlist%ss already run from %s\n' "'" "$FOREIGN_HOOKSPATH_SHOWN"
     printf '    git runs one hook layer, so arming Setlist here SWITCHES THAT OFF. This is\n'
     printf '    true whether core.hooksPath points there or it is the default .git/hooks\n'
     printf '    (where pre-commit and lefthook install themselves with hooksPath unset).\n'
-    printf '    Whatever runs from %s stops running: often gitleaks, detect-secrets\n' "$FOREIGN_HOOKSPATH"
+    printf '    Whatever runs from %s stops running: often gitleaks, detect-secrets\n' "$FOREIGN_HOOKSPATH_SHOWN"
     printf '    or commit-msg validation. --apply REFUSES rather than do this silently.\n'
     printf '    Decide deliberately: move those checks into %s/, or re-run with\n' ".githooks"
-    printf '    SETLIST_ADOPT_HOOKSPATH=1 to displace %s on purpose.\n' "$FOREIGN_HOOKSPATH"
+    printf '    SETLIST_ADOPT_HOOKSPATH=1 to displace %s on purpose.\n' "$FOREIGN_HOOKSPATH_SHOWN"
   fi
 else
   printf 'the git-hook boundary: present and byte-identical, config already set.\n'
@@ -696,8 +1310,8 @@ fi
 # `opus` in the escalation set and make the exact drift this arm was built to
 # catch invisible to it. Backticked aliases only.
 #
-# WHAT IT READS: the instance's CLAUDE.md, RUNBOOK.md, specs/TEMPLATE.md and
-# every markdown file under .claude/skills/. History is excluded by RULE, not by
+# WHAT IT READS: the instance's CLAUDE.md, AGENTS.md (spec 0176), RUNBOOK.md,
+# specs/TEMPLATE.md and every markdown file under .claude/skills/. History is excluded by RULE, not by
 # judgement: ADRs, journal/ and closed specs are not in the set at all, and
 # inside the set a fenced code block or a blockquote is not compared, with the
 # number of lines skipped for that reason PRINTED rather than dropped.
@@ -732,7 +1346,9 @@ if [[ -f "$EDITION_SRC" ]]; then
   ' "$EDITION_SRC")"
 fi
 DRIFT_SET=()
-for f in CLAUDE.md RUNBOOK.md specs/TEMPLATE.md; do
+# AGENTS.md since spec 0176 (C-58): an agent that reads only AGENTS.md is primed
+# by it, so a stale edition there is the same drift as one in CLAUDE.md.
+for f in CLAUDE.md AGENTS.md RUNBOOK.md specs/TEMPLATE.md; do
   [[ -f "$INSTANCE/$f" ]] && DRIFT_SET[${#DRIFT_SET[@]}]="$INSTANCE/$f"
 done
 if [[ -d "$INSTANCE/.claude/skills" ]]; then
@@ -890,6 +1506,56 @@ END { flushpara(); fencegap(); printf "S\t%d\n", skipped }
         "${file#$INSTANCE/}" "$line"
     done
   fi
+  # THE OTHER HALF OF THE QUESTION, NAMED (spec 0178, C-67). Claude Code 2.1.283's
+  # /doctor prompt-audit reads the same kinds of file for prompts written for older
+  # models and for stale paths; this report reads them for what the edition binds.
+  # One line, printed whenever the report ran, so a reader knows which tool asks which.
+  printf 'model-era wording is not what this report reads: Claude Code'"'"'s /doctor prompt-audit (2.1.283 and later) reads the same files for prompts written for older models and for stale paths, and this report reads them for what the edition binds.\n'
+fi
+# WHAT LOADS FROM OUTSIDE THE INSTANCE, NAMED (spec 0176, C-55; ruling O-12,
+# report-only). Claude Code loads the user's own skills and plugins, and the
+# ones the account syncs onto this machine, into every session here, beside the
+# instance's. No Setlist reader compares them: the drift report above reads the
+# instance's files only. So a stale edition claim or model binding living there
+# is not in any report, and this block at least NAMES what loaded, by directory
+# or install key only, reading no content. Printed in report mode and under
+# --apply alike; it changes no exit status. The paths are the ones measured on
+# Claude Code 2.1.284: skills/<name>/ and skills/synced/<bucket>/<name>/;
+# plugins/installed_plugins.json's plugin keys and plugins/synced/<bucket>/<name>/.
+outside_names() { # outside_names <dir> [depth-2] -> the directory names under it, one per line, dot-files and files excluded
+  local d="$1" e
+  [[ -d "$d" ]] || return 0
+  for e in "$d"/*/; do
+    [[ -d "$e" ]] || continue
+    e="${e%/}"; e="${e##*/}"
+    [[ "$e" == "synced" ]] && continue
+    if [[ -n "${2:-}" ]]; then outside_names "$d/$e"; else printf '%s\n' "$e"; fi
+  done
+}
+outside_line() { # outside_line <label> <names> -> one report line, at most 20 names and the rest counted
+  local n=0 out="" l
+  while IFS= read -r l; do
+    [[ -n "$l" ]] || continue
+    n=$((n + 1))
+    [[ "$n" -le 20 ]] && out="${out:+$out, }$(printf '%s' "$l" | tr -d '\000-\037\177' | cut -c1-80)"
+  done <<< "$2"
+  [[ "$n" -gt 0 ]] || return 0
+  [[ "$n" -gt 20 ]] && out="$out and $((n - 20)) more"
+  printf '  %s: %s\n' "$1" "$out"
+}
+OUTSIDE_BASE="${CLAUDE_CONFIG_DIR:-${HOME:-}/.claude}"
+OUTSIDE_PLUGINS=""
+if [[ -f "$OUTSIDE_BASE/plugins/installed_plugins.json" ]]; then
+  OUTSIDE_PLUGINS="$(jq -r '(.plugins // {}) | keys[]' "$OUTSIDE_BASE/plugins/installed_plugins.json" 2>/dev/null || printf '(installed_plugins.json could not be read)\n')" # fail-open-ok: an unreadable file is named as unreadable, never as empty
+fi
+OUTSIDE_TEXT="$(outside_line 'your skills' "$(outside_names "$OUTSIDE_BASE/skills")")
+$(outside_line 'skills synced from your account' "$(outside_names "$OUTSIDE_BASE/skills/synced" 2)")
+$(outside_line 'your plugins' "$OUTSIDE_PLUGINS")
+$(outside_line 'plugins synced from your account' "$(outside_names "$OUTSIDE_BASE/plugins/synced" 2)")"
+OUTSIDE_TEXT="$(grep -v '^$' <<< "$OUTSIDE_TEXT" || true)" # fail-open-ok: no names at all is the empty answer, and nothing is printed for it
+if [[ -n "$OUTSIDE_TEXT" ]]; then
+  printf 'outside this instance, and read by no Setlist check (they load into every Claude Code session on this machine; a stale edition or model binding in them is not in any report above):\n'
+  printf '%s\n' "$OUTSIDE_TEXT"
 fi
 # THE RETIRED-HOOKS REPORT (spec 0144; spec 0142 section 10, ruling R-D). Printed in
 # report mode and under --apply alike, and it changes no exit status: a stale
@@ -948,6 +1614,32 @@ case "$GATES_STATE" in
     printf '.claude/sdd.json: the gates block could not be read; --apply leaves it as it is.\n' ;;
 esac
 
+# A ROLE PATH THAT HOLDS NOTHING IS NAMED (spec 0179, the owner's finding of
+# 2026-09-29). Every layer judges code by the role paths, so a role that names a
+# directory the repository does not have, or one that holds no tracked file,
+# governs nothing while the instance reads armed: the shape a retrofit stamped
+# with the default src and tests left on a project laid out otherwise. Reported
+# in both modes, with the tracked files by top-level directory beside it (the
+# retrofit skill's inventory scan, the same ranking, held equal by the suite);
+# nothing is rewritten, because which directory holds the code is the operator's.
+ROLE_SCAN_AWK='{ top = (NF > 1) ? $1 : "."; k = split($NF, part, "."); ext = (k > 1) ? tolower(part[k]) : "" } ext ~ /^(c|cc|cpp|cs|go|java|js|jsx|kt|m|mjs|php|py|rb|rs|scala|sh|swift|ts|tsx|vue|dart|ex|exs|clj|lua|r|sql|hs|ml|fs|elm|erl|zig)$/ { n[top]++ } END { for (d in n) printf "%d %s%s\n", n[d], d, (tolower(d) ~ /^(test|tests|spec|__tests__|e2e|testing)$/ ? " (tests)" : "") }'
+ROLE_EMPTY=""
+while IFS= read -r ROLE_R; do
+  ROLE_R="${ROLE_R%/}"
+  [[ -n "$ROLE_R" && "$ROLE_R" != "." ]] || continue
+  if [[ ! -e "$INSTANCE/$ROLE_R" ]]; then
+    ROLE_EMPTY="$ROLE_EMPTY \"$(obs_text "$ROLE_R")\" (does not exist)"
+  elif git -C "$INSTANCE" rev-parse --git-dir >/dev/null 2>&1 \
+       && [[ -z "$(git -C "$INSTANCE" ls-files -- "$ROLE_R" 2>/dev/null | head -n 1)" ]]; then
+    ROLE_EMPTY="$ROLE_EMPTY \"$(obs_text "$ROLE_R")\" (holds no tracked file)"
+  fi
+done <<< "$(jq -r 'if ((.roles // {}) | length) == 0 then ["src","tests"] else [(.roles // {}) | .[]] end | flatten | .[] | select(type == "string")' "$SDD" 2>/dev/null)"
+if [[ -n "$ROLE_EMPTY" ]]; then
+  ROLE_TOP="$(git -C "$INSTANCE" ls-files 2>/dev/null | awk -F/ "$ROLE_SCAN_AWK" | sort -rn | head -n 5 | awk '{ $1 = $1 " source files in"; print }' | tr '\n' ';' | sed 's/;$/./; s/;/; /g')"
+  printf '.claude/sdd.json: the role path%s, so no layer judges any code by it. The tracked source files by top-level directory (the retrofit inventory scan): %s Record the directories the code lives in as "roles" (each a string or a list of strings); nothing is rewritten here.\n' \
+    "$ROLE_EMPTY" "$(obs_text "${ROLE_TOP:-none found.}")"
+fi
+
 if [[ "$APPLY" != "yes" ]]; then
   if [[ -n "$CHANGED" ]]; then
     printf 'Report only. Diff each differing file against the plugin template before applying: a deliberate instance edit is a fork to surface in the umbrella ADR, not a file to overwrite in silence.\n'
@@ -981,10 +1673,14 @@ fi
 # advisory half proceeds; the run exits 3 because part of what this version
 # promises is not in force here.
 
-if [[ -n "$FOREIGN_HOOKSPATH" && -z "$GITHOOKS_SKIP_NOTE" && "${SETLIST_ADOPT_HOOKSPATH:-0}" != "1" ]] \
+if [[ -n "$FOREIGN_HOOKSPATH" && -z "$GITHOOKS_SKIP_NOTE" && "$CHAIN_MODE" -eq 0 && "${SETLIST_ADOPT_HOOKSPATH:-0}" != "1" ]] \
    && git -C "$INSTANCE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  FOREIGN_HOOK_NAMES="$(hooks_layer_foreign_entries "$(setlist_refusal_dir "$INSTANCE" "$FOREIGN_HOOKSPATH")" 2>/dev/null | tr '\n' ' ')"
-    die "refusing to arm: a hook layer that is not Setlist's already runs from, or would be switched on at, $FOREIGN_HOOKSPATH (foreign: ${FOREIGN_HOOK_NAMES:-unresolvable}), and git runs one layer: arming Setlist (core.hooksPath=.githooks) would switch it off, silently taking whatever runs from $FOREIGN_HOOKSPATH with it (gitleaks, detect-secrets and commit-msg validation are commonly wired this way, and pre-commit and lefthook wire into .git/hooks with hooksPath unset). Nothing has been changed. Move those checks into .githooks/, or re-run with SETLIST_ADOPT_HOOKSPATH=1 to displace $FOREIGN_HOOKSPATH on purpose."
+  # The reason that fits the shape decided at the top of this run (spec 0157,
+  # SD2): the refusal itself is unchanged in both directions.
+  if [[ "$SD2_OURS_EDITED" -eq 1 ]]; then
+    die "refusing to arm: the hook layer git already runs from, $FOREIGN_HOOKSPATH_SHOWN, is Setlist's own directory, and these file(s) in it do not match any Setlist release byte for byte: ${FOREIGN_HOOK_NAMES% }. That is what a customised stamped hook looks like (the edition's Part 8c calls it a fork to surface), and it is also what a foreign file under a Setlist name looks like: this check decides by BYTES, deliberately, and cannot tell the two apart. Refreshing would replace them either way. Nothing has been changed. If you edited them, re-run with SETLIST_ADOPT_HOOKSPATH=1 to take this plugin's versions (the previous file is kept as .setlist-backup), or move your changes into a hook of your own; if they are another tool's, move those checks out of .githooks/ first."
+  fi
+    die "refusing to arm: a hook layer that is not Setlist's already runs from, or would be switched on at, $FOREIGN_HOOKSPATH_SHOWN (foreign: ${FOREIGN_HOOK_NAMES:-unresolvable}), and git runs one layer: arming Setlist (core.hooksPath=.githooks) would switch it off, silently taking whatever runs from $FOREIGN_HOOKSPATH_SHOWN with it (gitleaks, detect-secrets and commit-msg validation are commonly wired this way, and pre-commit and lefthook wire into .git/hooks with hooksPath unset). Nothing has been changed. Move those checks into .githooks/, or re-run with SETLIST_ADOPT_HOOKSPATH=1 to displace $FOREIGN_HOOKSPATH_SHOWN on purpose."
 fi
 
 # The boundary directory must be a real directory in the repository, not a
@@ -1171,6 +1867,21 @@ elif [[ -d "$GITHOOKS_SRC" ]]; then
   for h in $GIT_HOOK_FILES; do
     [[ -x "$INSTANCE/.githooks/$h" ]] || die "refreshed .githooks/$h but it is not executable; git would skip it in silence. Fix the mode, then re-run."
   done
+  # The chain's pass-throughs (spec 0173, item 2): one fixed file under each other hook
+  # name the displaced layer carries, so its commit-msg (say) keeps running. A file
+  # already at that name in .githooks is left alone and named: it is someone's.
+  if [[ "$CHAIN_MODE" -eq 1 ]]; then
+    for h in $CHAIN_NAMES; do
+      if [[ -e "$INSTANCE/.githooks/$h" || -L "$INSTANCE/.githooks/$h" ]]; then
+        cmp -s "$GITHOOKS_SRC/setlist-chain-passthrough" "$INSTANCE/.githooks/$h" \
+          || printf 'refresh-instance.sh: .githooks/%s already exists and is not the chain pass-through; it was left as is, so the chained layer%ss %s hook runs only if that file runs it.\n' "$h" "'" "$h"
+        continue
+      fi
+      deliver "installing the chain pass-through .githooks/$h" cp "$GITHOOKS_SRC/setlist-chain-passthrough" "$INSTANCE/.githooks/$h"
+      chmod +x "$INSTANCE/.githooks/$h" 2>/dev/null || true # fail-open-ok: the test on the next line dies unless the file is executable
+      [[ -x "$INSTANCE/.githooks/$h" ]] || die "wrote the chain pass-through .githooks/$h but it is not executable; git would skip it in silence. Fix the mode, then re-run."
+    done
+  fi
   # THE HOOK'S OWN TOOL SHIPS WITH THE HOOK (v1.7 gate session 4, leg F2).
   #
   # pre-push resolves trunk-audit.sh from $CLAUDE_PLUGIN_ROOT/scripts/ or from
@@ -1205,7 +1916,15 @@ TMP="$SDD.refresh.$$"
 # above before the report), appended after every existing key on STAMP-TREE's
 # rule, its close and push tiers the single gate_command read from the file
 # itself here rather than from the report's echo.
-if ! jq --arg v "$PLUGIN_VERSION" --argjson g "$GATES_WRITE" '.plugin = ((.plugin // {}) + {version: $v}) | if ($g == 1 and .gates == null) then .gates = {commit: "", close: (.gate_command // ""), push: (.gate_command // "")} else . end' "$SDD" > "$TMP"; then
+# The audit's baseline rides this write too (spec 0157), for the reason the
+# gates block does: one write, one read-back, and the value lands in the same
+# migration commit as the version it belongs to. Empty means nothing to record
+# (a present declaration, or no boundary here), and then this expression is the
+# identity it always was.
+# The chain's record (spec 0173, item 2) rides the same write, only when this run chained.
+CHAIN_WRITE=""
+[[ "$CHAIN_MODE" -eq 1 ]] && CHAIN_WRITE="$CHAIN_VALUE"
+if ! jq --arg v "$PLUGIN_VERSION" --argjson g "$GATES_WRITE" --arg ab "$AUDIT_BASELINE_WRITE" --arg hc "$CHAIN_WRITE" '.plugin = ((.plugin // {}) + {version: $v}) | if ($g == 1 and .gates == null) then .gates = {commit: "", close: (.gate_command // ""), push: (.gate_command // "")} else . end | if ($ab != "") then .audit = ((.audit // {}) + {baseline: $ab}) else . end | if ($hc != "") then .hooks_chain = $hc else . end' "$SDD" > "$TMP"; then
   rm -f "$TMP"
   die "the hooks were refreshed but recording the plugin version in $SDD failed; record .plugin.version = \"$PLUGIN_VERSION\" by hand before closing"
 fi
@@ -1216,7 +1935,7 @@ fi
 # config. The write must be one JSON object carrying the version it claims to
 # record, or the old file stays and the refusal names the state.
 if ! [[ -s "$TMP" ]] \
-   || ! jq -e -s --arg v "$PLUGIN_VERSION" --argjson g "$GATES_WRITE" 'length == 1 and (.[0] | type == "object") and (.[0].plugin.version == $v) and ($g == 0 or ((.[0].gates | type) == "object" and ([.[0].gates.commit, .[0].gates.close, .[0].gates.push] | map(type == "string") | all)))' "$TMP" >/dev/null 2>&1; then
+   || ! jq -e -s --arg v "$PLUGIN_VERSION" --argjson g "$GATES_WRITE" --arg ab "$AUDIT_BASELINE_WRITE" --arg hc "$CHAIN_WRITE" 'length == 1 and (.[0] | type == "object") and (.[0].plugin.version == $v) and ($g == 0 or ((.[0].gates | type) == "object" and ([.[0].gates.commit, .[0].gates.close, .[0].gates.push] | map(type == "string") | all))) and ($ab == "" or (.[0].audit.baseline == $ab)) and ($hc == "" or (.[0].hooks_chain == $hc))' "$TMP" >/dev/null 2>&1; then
   rm -f "$TMP"
   die "the hooks were refreshed but the rewritten $SDD did not read back as one JSON object recording plugin $PLUGIN_VERSION, so the old file is left in place untouched (jq exited 0 and wrote nothing, or wrote something else). Check 'jq --version', then record .plugin.version = \"$PLUGIN_VERSION\" by hand before closing"
 fi
@@ -1227,10 +1946,12 @@ mv "$TMP" "$SDD" \
   || { rm -f "$TMP"; die "the hooks and the git-hook boundary were delivered, but writing the recorded plugin version to $SDD failed. Set .plugin.version = \"$PLUGIN_VERSION\" by hand, or re-run this script."; }
 
 [[ "$GATES_WRITE" -eq 1 ]] && printf 'refresh-instance.sh: wrote the gates block to %s (commit empty; close and push the single gate_command), the shape the hooks already read for an absent block.\n' "$SDD"
+[[ -n "$AUDIT_BASELINE_WRITE" ]] && printf 'refresh-instance.sh: recorded audit.baseline %s in %s, so the trunk audit judges this history from the commit this instance was first governed at rather than from the stamp.\n' "$AUDIT_BASELINE_WRITE" "$SDD"
 if [[ -n "$GITHOOKS_SKIP_NOTE" ]]; then
   printf 'refresh-instance.sh: refreshed the four stamped hooks and recorded plugin %s in %s; the git-hook boundary was NOT touched (see above).\n' "$PLUGIN_VERSION" "$SDD"
 else
   printf 'refresh-instance.sh: refreshed the four stamped hooks, delivered the git-hook boundary (.githooks/ plus core.hooksPath and merge.ff), and recorded plugin %s in %s\n' "$PLUGIN_VERSION" "$SDD"
+  if [[ "$CHAIN_MODE" -eq 1 ]]; then printf 'refresh-instance.sh: CHAINED the hook layer that ran from %s (foreign: %s): it is recorded as "hooks_chain" in .claude/sdd.json, and each Setlist git hook runs its hook of the same name after its own verdict%s. Commit .claude/sdd.json%s with the migration.\n' "$FOREIGN_HOOKSPATH_SHOWN" "${FOREIGN_HOOK_NAMES% }" "${CHAIN_NAMES:+ (pass-throughs written for: ${CHAIN_NAMES% })}" "${CHAIN_NAMES:+ and those .githooks files}"; fi
 fi
 printf 'Hooks load at session start, so the refreshed gates bind from the NEXT session onward.\n'
 

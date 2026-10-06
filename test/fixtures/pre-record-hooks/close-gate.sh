@@ -10,8 +10,8 @@
 # though the current branch is not yet the trunk); and the Closing report
 # exists on the branch being merged, so every content check reads the merged
 # ref via `git show <ref>:<path>`, never the working tree.
-# Deny mechanic verified live 2026-07-04 on Claude Code 2.1.200: JSON
-# permissionDecision output, exit 0; the reason reaches the agent verbatim.
+# Output: one JSON object on stdout, exit 0; this frozen copy answers no
+# permission prompt (its emission moved by spec 0181).
 # Hook TIMEOUT verified live 2026-07-25 on Claude Code 2.1.x, both directions,
 # because this gate re-runs the project's whole suite and is the entry most
 # likely to run long. The unit is SECONDS, and the key is honoured: a hook
@@ -28,9 +28,9 @@ set -u
 
 # THE close ADVISES, IT DOES NOT VETO (the advisory-gate decision, RATIFIED 2026-08-04).
 #
-# This function used to emit permissionDecision "deny" and hold a hard veto over
-# the session. It now emits "allow" and reports what it WOULD have decided in a
-# machine-readable field. The guarantee did not move with it: it stayed where
+# This function used to deny and hold a hard veto over the session. It now
+# reports what it WOULD have decided in a machine-readable field and, in this
+# frozen copy since spec 0181, answers no permission prompt. The guarantee did not move with it: it stayed where
 # edition v1.7 put it, in git's own hooks, which run from git's internal state
 # after argument parsing and ref resolution and have nothing left to spell
 # around.
@@ -45,12 +45,11 @@ set -u
 # half that moved.
 #
 # THE CONTRACT, frozen with the parsers:
-#   permissionDecision   ALWAYS "allow"
+#   hookSpecificOutput   {hookEventName} only: no decision field and no decision
+#                        reason (this frozen copy's emission, moved by spec 0181,
+#                        because the permission prompt is the user's)
 #   setlistAdvisory      {gate, verdict: deny|allow, code, reason}
-#   systemMessage        the reason, again, because permissionDecisionReason is
-#                        documented as reaching the USER rather than the model
-#                        when the decision is allow, and the point of a warning
-#                        is that the session sees it.
+#   systemMessage        the reason, so the session sees the warning.
 #
 # `setlistAdvisory.verdict` is evidence about THIS layer only. Every
 # guarantee-layer check binds to observed repository state instead, because a
@@ -58,8 +57,7 @@ set -u
 # laundering defect this cycle is a record of, one layer up.
 advise() {
   ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":%s},"systemMessage":%s,"setlistAdvisory":{"gate":"close","verdict":"deny","code":%s,"reason":%s}}\n' \
-    "$(printf '%s' "$1" | jq -Rs .)" \
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse"},"systemMessage":%s,"setlistAdvisory":{"gate":"close","verdict":"deny","code":%s,"reason":%s}}\n' \
     "$(printf 'setlist %s' "$1" | jq -Rs .)" \
     "$(printf '%s' "$ADV_CODE" | jq -Rs .)" \
     "$(printf '%s' "$1" | jq -Rs .)"
@@ -86,7 +84,7 @@ advise_literal() {
   # The extraction is sed, deliberately the SAME expression the escaping path
   # uses, and it cannot use jq: this whole path exists because jq is absent.
   ADV_CODE="$(printf '%s' "$1" | sed -n 's/.*\[\([A-Z][A-Z0-9-]*\)\].*/\1/p')"
-  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","permissionDecisionReason":"%s"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"close","verdict":"deny","code":"%s","reason":"%s"}}\n' "$1" "$1" "$ADV_CODE" "$1"
+  printf '{"hookSpecificOutput":{"hookEventName":"PreToolUse"},"systemMessage":"setlist %s","setlistAdvisory":{"gate":"close","verdict":"deny","code":"%s","reason":"%s"}}\n' "$1" "$ADV_CODE" "$1"
   # fail-open-ok: advisory by design; see advise() above.
   exit 0
 }

@@ -9,6 +9,9 @@
 # pathless write-tool event denies instead of slipping through.
 # =============================================================================
 
+# >>> SHARD-BEGIN trunk-rules-audits-03 cost=1
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region trunk-rules-audits-03; then
 NB="$WORK/scope-notebook"
 git_init "$NB"
 sdd_json "$NB"
@@ -289,4 +292,6 @@ else
   bad "reference integrity: plugin-root paths in skills/templates resolve" \
       "stale references:$REF_MISS"
 fi
+fi; shard_region_end
+# <<< SHARD-END trunk-rules-audits-03
 

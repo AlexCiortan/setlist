@@ -1,168 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+#
+# The public repository's CI, and the run behind the README's tests badge. The
+# framework's source repository keeps a longer private workflow of its own; this
+# file is what the export publishes in its place as .github/workflows/test.yml, so
+# the badge is backed by a run of the tree a reader can see.
+#
+# It runs the same sharded hook suite on GitHub-hosted runners only: Linux under
+# the distribution's awk and again under GNU awk, and macOS under bash 3.2 and the
+# BWK awk, which is where portability breaks show up first; and the platform smoke
+# on Windows under Git Bash. Nothing here installs
+# by piping a download into a shell, and no step reports success for work it did
+# not do: a step that does not apply to a platform is left out by its `if`, and a
+# tool that cannot be installed fails the job.
 name: tests
 
 on:
   push:
   pull_request:
-  # The failsafe, and it is DELIBERATE rather than automatic. If buildmac is down,
-  # re-run from the Actions tab with runners: hosted. A probe job that detects the
-  # outage automatically was considered and rejected for this repo: the probe has to
-  # run somewhere other than the runner it is checking, which means GitHub-hosted,
-  # which would reintroduce a billing dependency on the HAPPY path (every push,
-  # forever) in a repo that currently has none. The sibling songbook repo took the
-  # probe route and its own journal 0157 names that cost. Here the workflow is also
-  # EXPORTED, so a probe would ship to the public repo where its token does not exist.
   workflow_dispatch:
-    inputs:
-      runners:
-        description: 'Which runners to use'
-        type: choice
-        default: buildmac
-        options: [buildmac, hosted]
 
-# Supersede a run only where the superseded run is not EVIDENCE (backlog item 36).
-# There is exactly one runner per label, so without this a second push queues a
-# full Linux leg behind the first, and on a working branch with many pushes that
-# is an hour of queue for work nobody will read.
-#
-# cancel-in-progress is deliberately NOT unconditional, and on the default
-# branch and on tags it evaluates false so that a RUNNING job is never
-# discarded. A release tag's run is the evidence a publish cites, and a
-# commit's run is the closest thing that commit has to a record of itself.
-#
-# WHAT THIS DOES NOT BUY, STATED PLAINLY BECAUSE THE COMMENT USED TO CLAIM IT
-# (backlog CO2, corrected 2026-09-02 in spec 0127). This expression does NOT
-# guarantee that every commit on `main` gets a run of its own, and it never
-# did. A concurrency group keeps only the NEWEST PENDING run: when a run is
-# already in progress and two more pushes arrive, the first of those two is
-# cancelled while still queued, whatever cancel-in-progress says, because that
-# setting governs the RUNNING run and not the queue behind it. With one runner
-# per label, queueing is the normal state here rather than the exception, so
-# this is the ordinary path and not a corner.
-#
-# MEASURED ON `main`, 2026-09-02, over every run the API still holds: TEN runs
-# were cancelled without being the 30-minute timeout, and in the clean chains
-# each cancellation lands within seconds of the next run's creation, which is
-# the supersession happening (2026-08-21 d2e4338 and 6f660b6; 2026-08-24
-# 48e7ca5 and 8be2264; 2026-08-25 1a916f0, 212effc, e8cc5de and a697f89;
-# 2026-08-26 1acdd1f and 6831148). So ten commits on `main` carry no CI
-# evidence of their own. The eleventh cancelled run, b8efb06 on 2026-08-30, is
-# the timeout rather than the queue and is counted apart.
-#
-# The consequence for a reader deciding what a green run means: a green run
-# proves its own head sha, and the ABSENCE of a run on a commit proves nothing
-# about that commit either way. Spacing pushes on `main` is the only thing that
-# makes every commit get its own run under this expression, and grouping by
-# `github.sha` on the default branch is the mechanical alternative; neither is
-# taken here, and CO2 carries both so the choice stays the owner's.
-#
-# The condition is written so that every way it can go wrong leaves the run
-# ALIVE. Both the literal `main` test and the payload-derived default-branch test
-# must agree the ref is not the default before anything is cancelled, so an empty
-# `github.event.repository` (which `format` renders as `refs/heads/`) falls back
-# to the literal, and a renamed default branch is caught by the payload even
-# though the literal has gone stale. Failing toward "do not cancel" costs runner
-# time; failing the other way costs a commit its evidence.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/')
-                          && github.ref != 'refs/heads/main'
-                          && github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
+permissions:
+  contents: read
 
 jobs:
   hooks:
     name: hook suite (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    # THE CAP EXISTS TO FAIL A HANG LOUDLY, NOT TO RACE THE HONEST WALL CLOCK.
-    # That sentence has governed every move of this number and governs this one.
-    #
-    # History, so the number is a record rather than a preference. It was 30
-    # minutes until 2026-08-30, when the RP1 cycle grew the suite past 1060
-    # cases and the Linux leg was CANCELLED at the cap mid mutation-check with
-    # every completed step green; it moved to 50 because the honest wall clock
-    # had outgrown it. Sharding was the actual fix the cap was standing in for
-    # (backlog CI1), and it landed 2026-09-02 in spec 0127, so the cap now comes
-    # back down to what the shards MEASURED.
-    #
-    # MEASURED at 7990353, run 33579202297, both legs green, sharded:
-    #   fw-linux  24m33s total  (was 25m43s), of which the mutation check is
-    #             16m02s (was 20m18s) and the suite 2m18s (was 2m33s); it also
-    #             carries the NEW 2m32s alternate-awk leg, so like for like it
-    #             is nearer 22m.
-    #   fw-macos  12m34s total  (was 13m58s), of which the suite is 7m10s
-    #             (was 11m00s), the leg where sharding pays most directly.
-    #
-    # 40, not 25. The worst honest observation is 24m33s and the cap is set at
-    # roughly 1.6x of it, deliberately: the two runners share one host, so a
-    # slow macOS leg lengthens the Linux one by contention, and the point of
-    # this number is to catch the ninety-minute silent hang rather than to be
-    # the tightest value that happened to pass once. A cap that fails an honest
-    # run is a green nobody can trust, twice over.
-    #
-    # 75, 2026-09-15 (spec 0143, the owner's ruling on its escalation 7). The
-    # mutation check doubled from eight suite runs to sixteen when it was
-    # re-pointed at the subjects that survive 2.8.0's deletion, and run
-    # 34918086786 was CANCELLED at 40 on the Linux leg mid mutation-check with
-    # every completed step green, the 2026-08-30 shape exactly. MEASURED on that
-    # run: 13m27s before the mutation step, a control of about 2m48s and about
-    # 2m27s per mutation, so sixteen need about 42m and the leg about 60m. 75 is
-    # about 1.25x of that projection, below the 1.6x this history argues for; the
-    # owner set the figure, and 0144 removes the eight old-gate mutations, which
-    # brings the leg back near 40m and the ratio back near 1.9x.
-    #
-    # 45, 2026-09-15 (spec 0147, the owner's ruling on spec 0144's cap). 0144
-    # removed the eight old-gate mutations and MEASURED the Linux leg at 14m51s
-    # (run 34962106467, the mutation step 8m40s, 8 of 8 caught). 45 is about 3x
-    # of that: well above the 1.6x this history argues for, so a slow shared host
-    # does not cancel an honest run, and well below 75, which let a hung runner
-    # cost an hour before anyone saw it. 40 is the value sixteen mutations blew
-    # through, which is why the figure is not 40.
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        # One matrix, three bindings, because publish-setlist.sh copies .github
-        # wholesale and this file has to stay correct in BOTH repos.
-        #
-        # Public Setlist: standard runners are unmetered there, so both legs run
-        # GitHub-hosted. The macOS leg is not redundant: it runs bash 3.2 and the BSD
-        # userland, which is where portability breaks show up first.
-        #
-        # This private source repo: BOTH legs run on buildmac self-hosted runners
-        # (2026-08-01). The macOS leg used to be left to public because the Free
-        # allowance is spent and macOS bills at roughly 10x. That arrangement is what
-        # let plugin 1.0.8 ship fail-open on every Mac: the only macOS runner was on
-        # the public repo, so a macOS-only fault could not be seen until AFTER
-        # publishing. buildmac runs bash 3.2.57 arm64-apple-darwin25 and the BWK awk,
-        # the exact interpreters that hid that defect, so the fault is now catchable
-        # before a release exists rather than after.
-        #
-        # SINGLE UNIQUE LABELS (fw-macos, fw-linux), not [self-hosted, macOS, ...]
-        # arrays. matrix.os is a string that also renders the job name, and bare
-        # `self-hosted` is no longer unambiguous now that this machine hosts several
-        # runners: it would match wsl-framework too, and a Linux job could land on the
-        # macOS runner.
-        #
-        # The expression lives here, in the matrix, and NOT in a job-level `if`: the
-        # matrix context is unavailable to `if`, so a condition on matrix.os there reads
-        # as empty and silently skips every leg, reporting green having run nothing.
-        # Do not hardcode self-hosted either. The public repo has no such runner, so the
-        # job would queue forever and hang the README badge.
-        os: ${{ github.repository == 'AlexCiortan/setlist'
-              && fromJSON('["ubuntu-latest","macos-latest"]')
-              || (inputs.runners == 'hosted'
-                  && fromJSON('["ubuntu-latest","macos-latest"]')
-                  || fromJSON('["fw-linux","fw-macos"]')) }}
+        os: [ubuntu-latest, macos-latest]
     steps:
-      # fetch-depth: 0 exists for the private-leg scoping step below, which needs a
-      # parent to diff against. The default depth of 1 has none. This repo is 328
-      # commits and under 8 MiB, so a full fetch is cheaper than the alternatives:
-      # dorny/paths-filter solves it cleanly but adds a third-party supply-chain
-      # dependency to a workflow that is EXPORTED wholesale to the public repo, and
-      # a shallow fetch of a guessed depth is a silent wrong answer whenever the
-      # guess is short.
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Ensure jq is present
         run: |
@@ -178,739 +48,93 @@ jobs:
       - name: Report the bash and awk versions under test
         run: |
           bash --version | head -n 1
-          # The awk is reported for the same reason the bash version is: the
-          # tested-platform list is a LIST, and a list a reader cannot check from
-          # a run is a claim. BWK awk reports a bare date ("awk version 20200816"),
-          # gawk says "GNU Awk", mawk says "mawk", so the three are distinguishable
-          # from this one line.
           printf 'awk: %s\n' "$(awk --version 2>&1 | head -n 1 || awk -W version 2>&1 | head -n 1)"
 
-      # RUNNER HYGIENE (backlog WD1, the half that is tooling rather than the
-      # owner's manual act). WD1 was the fw-linux job failing at the suite step
-      # with exit 2, ZERO output, in about a second, and its diagnosis named a
-      # full or unwritable TMPDIR without ever confirming it. The discharge rests
-      # on the symptom not recurring rather than on a fixed mechanism, so the
-      # next recurrence should arrive WITH the measurement that was missing.
-      #
-      # These runners are persistent, so prior suite and leg runs leave fixture
-      # trees behind; hosted runners are ephemeral and this costs them a second.
-      # It never fails the job: a hygiene step that can red a build is a new way
-      # to lose a run, and the log line is the whole value here.
-      - name: Runner hygiene (TMPDIR space, and last run's debris)
-        continue-on-error: true
-        run: |
-          T="${TMPDIR:-/tmp}"
-          printf 'TMPDIR=%s\n' "$T"
-          df -h "$T" 2>&1 | head -n 2 || true
-          df -i "$T" 2>&1 | head -n 2 || true
-          # -mmin +240: only debris from runs that are certainly over, never a
-          # sibling job's live fixture tree. Both runners are on one host.
-          n="$(find "$T" -maxdepth 1 -name 'setlist-*' -mmin +240 2>/dev/null | wc -l | tr -d ' ')"
-          printf 'stale setlist-* entries older than 4h: %s\n' "$n"
-          find "$T" -maxdepth 1 -name 'setlist-*' -mmin +240 -exec rm -rf {} + 2>/dev/null || true
-          printf 'writable check: '
-          if : > "$T/setlist-ci-writable.$$" 2>/dev/null; then
-            rm -f "$T/setlist-ci-writable.$$"; printf 'TMPDIR is writable\n'
-          else
-            printf '::warning::TMPDIR is NOT writable, which is the condition WD1 named. The suite step below will fail.\n'
-          fi
-
-      # THE LEG SELF-TEST'S ONE PREREQUISITE, PINNED (spec 0108, 2026-08-21).
-      #
-      # Its section 2 asserts `command -v claude` and calls an absent CLI a
-      # FAILURE rather than skipping the three manifest-validation cases, which is
-      # the shellcheck step's doctrine below: a gate that quietly does not run
-      # reports a green it did not earn. So the prerequisite is PROVISIONED here
-      # rather than assumed, exactly as jq is above.
-      #
-      # THE CHECK IS VERSION EQUALS PIN, NOT MERE PRESENCE, and that is the whole
-      # point of this step. A presence check preserves whatever a runner already
-      # happens to have, and the two platforms then drift apart silently. They
-      # already had: on 2026-08-21 fw-macos carried 2.1.221 and a freshly
-      # provisioned fw-linux took 2.1.238, and the self-test's `validate b` went
-      # red on Linux alone. That is not a portability bug, it is UPSTREAM
-      # BEHAVIOUR CHANGE: `claude plugin validate --strict` stopped refusing an
-      # unparseable skill frontmatter somewhere between those versions. Measured
-      # both ways, same fixture: 2.1.221 reports "YAML frontmatter failed to
-      # parse", 2.1.238 reports "both validate targets pass".
-      #
-      # 2.1.221 is therefore the MEASURED-GOOD pin rather than a convenient one:
-      # it is the version on which the fixture refusal is known to hold. The
-      # consequence is filed, not hidden, in backlog-post-2.0.0.md: the staging
-      # gate's frontmatter check depends on this pinned behaviour, so the refusal
-      # is re-verified on every deliberate bump, and on machines running newer
-      # CLIs that gate over-claims until upstream restores the refusal.
-      #
-      # IT INSTALLS INTO A CI-PRIVATE PREFIX AND NEVER CLOBBERS THE HOST'S OWN
-      # CLI. These runners are persistent and fw-macos runs as a real user whose
-      # HOME is a person's home directory; a bare install on a version mismatch
-      # would silently downgrade that person's own claude the next time they
-      # upgraded it. So a host CLI that already matches the pin is used as-is, and
-      # a mismatch installs the pin under a CI-owned prefix that is prepended to
-      # PATH for later steps only.
-      #
-      # GATED ON dogfood/, so the public repo installs nothing: the self-test does
-      # not exist there, and this file is exported wholesale. CONDITIONAL, so the
-      # download happens once per runner per pin and every later run touches the
-      # network not at all. AND IT FAILS LOUDLY if the pin cannot be obtained,
-      # rather than handing the self-test a prerequisite it has been told is
-      # missing and dying 300 assertions later behind a worse message.
-      - name: Ensure the pinned claude CLI is present (the leg self-test asserts it)
-        run: |
-          CLAUDE_PIN=2.1.221
-          if [ ! -f dogfood/hostile-leg-selftest.sh ]; then
-            echo "SKIPPED: dogfood/ is absent, which is expected in the public repo. Nothing here needs the CLI."
-            exit 0
-          fi
-          claude_ver() { command -v claude >/dev/null 2>&1 && claude --version 2>/dev/null | awk '{print $1}'; }
-          have="$(claude_ver || true)"
-          if [ "$have" != "$CLAUDE_PIN" ]; then
-            echo "claude on PATH is ${have:-absent}; the pin is $CLAUDE_PIN. Installing the pin into a CI-owned prefix."
-            PIN_HOME="$HOME/.setlist-ci/claude-$CLAUDE_PIN"
-            mkdir -p "$PIN_HOME"
-            if [ ! -x "$PIN_HOME/.local/bin/claude" ]; then
-              curl -fsSL https://claude.ai/install.sh | HOME="$PIN_HOME" bash -s "$CLAUDE_PIN" || true
-            fi
-            if [ -x "$PIN_HOME/.local/bin/claude" ]; then
-              echo "$PIN_HOME/.local/bin" >> "$GITHUB_PATH"
-              PATH="$PIN_HOME/.local/bin:$PATH"
-              export PATH
-            fi
-            have="$(claude_ver || true)"
-          fi
-          if [ "$have" != "$CLAUDE_PIN" ]; then
-            echo "::error::the pinned claude CLI $CLAUDE_PIN could not be obtained (PATH has: ${have:-none})."
-            echo "Failing here rather than letting the self-test fail later on its own prerequisite"
-            echo "assertion: a gate that silently does not run reports a green it did not earn, and a"
-            echo "gate running an UNPINNED CLI reports a green about a different program than the one"
-            echo "this pin was measured against."
-            exit 1
-          fi
-          echo "claude:  $(claude --version 2>&1 | head -n 1)  [pinned at $CLAUDE_PIN]"
-          if command -v node >/dev/null 2>&1; then
-            echo "node:    $(node --version 2>&1 | head -n 1)"
-          else
-            echo "node:    not installed (the native installer ships its own runtime; no node on PATH)"
-          fi
-
-      # The shellcheck baseline (backlog item 33b, cut worklist 4.5). The four
-      # stamped hooks are the most safety-critical bash this project ships, they are
-      # the files two consecutive releases found defects in, and until 2026-08-01 the
-      # one static analyser that would read them never had. It was an INSTANCE that
-      # found SC2140 here, because terminal-setup runs shellcheck in its CI and the
-      # framework did not.
-      #
-      # -S warning, not -S error. The cut note first said "a severity the current
-      # tree passes", which resolves to -S error and reports zero findings on this
-      # tree: adopting a linter at a level where it cannot fail is precisely the
-      # defect items 19, 27 and 31 promote doctrine against. At -S warning the tree
-      # reported 8 findings, all SC2140, all of them item 33a, all now fixed. So the
-      # gate is both meaningful and passing, which is the only combination worth
-      # having.
-      #
-      # Absence is a FAILURE, not a skip. Every other conditional in this file skips
-      # something that cannot usefully run here; this one would be skipping a gate,
-      # and a gate that quietly does not run is the thing that let 1.0.8 ship.
       - name: Shellcheck the stamped hooks and scripts
+        if: runner.os == 'Linux'
         run: |
-          if [ "$(uname -s)" = "Darwin" ]; then
-            echo "SKIPPED on the macOS leg by design: shellcheck's analysis does not vary by host platform, and the Linux leg runs it."
-            exit 0
-          fi
           if ! command -v shellcheck >/dev/null 2>&1; then
-            if command -v apt-get >/dev/null 2>&1; then
-              sudo apt-get update && sudo apt-get install -y shellcheck
-            elif command -v brew >/dev/null 2>&1; then
-              brew install shellcheck
-            fi
+            sudo apt-get update && sudo apt-get install -y shellcheck
           fi
-          if ! command -v shellcheck >/dev/null 2>&1; then
-            echo "::error::shellcheck could not be installed, so the lint gate cannot run."
-            echo "Failing rather than skipping: a gate that silently does not run reports a"
-            echo "green it did not earn, which is the failure this whole cycle is about."
-            exit 1
-          fi
-          shellcheck --version | sed -n '2p'
-          # templates/git-hooks/ joined the glob in v1.7: those three files became
-          # the enforcement boundary, so they are now the most safety-critical bash
-          # this project ships. Two of them carry no .sh suffix because git requires
-          # the exact names pre-commit and pre-merge-commit, hence the explicit list.
+          command -v shellcheck >/dev/null 2>&1 || { echo "::error::shellcheck could not be installed"; exit 1; }
           shellcheck -S warning templates/hooks/*.sh scripts/*.sh \
             templates/git-hooks/setlist-hook-lib.sh \
             templates/git-hooks/pre-commit templates/git-hooks/pre-merge-commit \
             templates/git-hooks/pre-push
-          echo "shellcheck -S warning: clean over templates/hooks/, scripts/, and templates/git-hooks/"
 
-      # THE SUITE, UNDER THE WATCHDOG (wired 2026-08-13, Phase B1 of the refactor).
-      #
-      # This step used to be a bare `bash test/run-tests.sh`, and on 2026-08-07 that
-      # suite hung for NINETY MINUTES producing no output, no error and no exit: six
-      # hand-invocations of pre-push had left stdin open and the hook blocks until
-      # EOF. A hung step is indistinguishable from a step still working, and the
-      # indistinguishable case is the one that gets reported as progress; left to
-      # itself it burns the whole job timeout and reports nothing useful when it
-      # finally dies.
-      #
-      # The wrapper is CONDITIONAL ON THE FILE EXISTING, and the fallback is the
-      # bare invocation. dogfood/ is not exported, so in the public repo the watchdog
-      # is absent and the suite must still run exactly as it does today: this step is
-      # the platform canary and the one check that is never scoped away, so it may
-      # not become a step that silently does nothing off this repo.
-      #
-      # --idle 900, and the number is MEASURED rather than picked. This comment was
-      # first drafted saying 300s against a longest silence "far below a minute",
-      # which was an assumption; measuring it gave a longest silent interval of
-      # 157 SECONDS, inside the 504-spelling corpus block, on a fast machine with
-      # the suite taking 441s in total. A 300s budget would have left under 2x of
-      # margin and would eventually have false-fired on a slower runner, turning a
-      # gate meant to catch hangs into a source of flaky reds. 900s keeps roughly
-      # six times the measured worst silence, which is margin enough for the slower
-      # interpreters this project targets, and still turns the 2026-08-07 hang
-      # (ninety minutes of nothing) into a loud failure at fifteen.
-      #
-      # There is deliberately no --max: a wall-clock cap cannot tell a slow step
-      # from a stopped one, so it would have to be set so high it never fires, or
-      # low enough to fail honest work.
-      # SHARDED SINCE 2026-09-02 (backlog CI1, spec 0127), and the fallback is the
-      # unsharded suite for the same reason the watchdog's fallback is the bare
-      # invocation: this step is the platform canary and may never become a step
-      # that silently does nothing. test/ IS exported, so run-shards.sh exists in
-      # both repos and the file test is a belt rather than a branch anyone
-      # expects to take.
-      #
-      # The wrapper refuses on a missing shard, a region claimed by nobody, a
-      # region claimed twice, and a region that ran and asserted nothing, so a
-      # parallel run that quietly covered less than a serial one cannot report
-      # green here. That property, not the wall clock, is why it is a wrapper
-      # rather than a for-loop.
-      - name: Run the hook suite (sharded, watchdogged; a hang fails loudly)
-        run: |
-          if [ -f test/run-shards.sh ]; then
-            SUITE_CMD="bash test/run-shards.sh"
-          else
-            echo "shard wrapper absent: running the suite unsharded."
-            SUITE_CMD="bash test/run-tests.sh"
-          fi
-          if [ -f dogfood/watchdog.sh ]; then
-            # shellcheck disable=SC2086
-            bash dogfood/watchdog.sh --idle 900 --label "hook suite" -- $SUITE_CMD
-          else
-            echo "watchdog absent (expected in the public repo, dogfood/ is not exported): running the suite bare."
-            # shellcheck disable=SC2086
-            $SUITE_CMD
-          fi
+      - name: Run the hook suite (sharded)
+        run: bash test/run-shards.sh
 
-      # KL8, THE FIRST PLATFORM EXTENSION (ratified decision 5: alternate-awk on
-      # Linux before any Windows work, Windows filed on a field-report trigger).
-      #
-      # WHY gawk AND NOT SOMETHING ELSE. The tested-platform list is a LIST, and
-      # extending it is the only thing that changes it, so the extension is
-      # chosen by what is actually untested rather than by what is easiest. Three
-      # awks matter here: the macOS leg runs the BWK awk; dogfood/macos-equiv.sh
-      # builds the BWK awk on Linux; and this Linux runner's own default is the
-      # Debian family's mawk. gawk has never run this suite, and it is the
-      # default awk on the Fedora, RHEL and Arch families, which is most
-      # GNU/Linux outside Debian. It is also a real axis rather than a
-      # theoretical one: this repository's own history records a measurement
-      # written with GNU awk's systime() dying on the BWK awk, which is this
-      # class in the other direction.
-      #
-      # EXPORTED-SAFE ON PURPOSE. It depends on nothing in dogfood/, so the
-      # public repo's Linux leg runs it too. That is what lets the public
-      # README's platform sentence be backed by the public repo's own CI rather
-      # than by a claim about a private one.
-      #
-      # A SHIM RATHER THAN AN ALIAS, the same shape macos-equiv.sh uses: the
-      # suite and the hooks call `awk`, so the only honest way to test them
-      # under a different awk is to make `awk` BE it on PATH.
-      #
-      # Absence is a FAILURE, not a skip, like the shellcheck gate: a platform
-      # leg that quietly does not run is a platform claim nobody earned.
-      - name: Alternate awk (KL8; the suite under GNU awk on Linux)
+      - name: Run the hook suite under GNU awk
+        if: runner.os == 'Linux'
         run: |
-          if [ "$(uname -s)" = "Darwin" ]; then
-            echo "SKIPPED on the macOS leg by design: this leg extends the LINUX awk coverage, and the macOS leg is already the BWK awk."
-            exit 0
-          fi
           if ! command -v gawk >/dev/null 2>&1; then
-            if command -v apt-get >/dev/null 2>&1; then
-              sudo apt-get update && sudo apt-get install -y gawk
-            elif command -v brew >/dev/null 2>&1; then
-              brew install gawk
-            fi
+            sudo apt-get update && sudo apt-get install -y gawk
           fi
-          if ! command -v gawk >/dev/null 2>&1; then
-            echo "::error::gawk could not be installed, so the alternate-awk leg cannot run."
-            echo "Failing rather than skipping: the tested-platform list is a list, and a leg that"
-            echo "silently does not run would add a platform to that list without running on it."
-            exit 1
-          fi
+          command -v gawk >/dev/null 2>&1 || { echo "::error::gawk could not be installed"; exit 1; }
           SHIM="$(mktemp -d)"
           ln -sf "$(command -v gawk)" "$SHIM/awk"
           export PATH="$SHIM:$PATH"
-          printf 'awk under test: %s\n' "$(awk --version 2>&1 | head -n 1)"
           case "$(awk --version 2>&1 | head -n 1)" in
             *"GNU Awk"*) ;;
-            *) echo "::error::the shim did not take: awk on PATH is not gawk, so this leg would re-run the default awk and report a platform it did not test."; exit 1 ;;
+            *) echo "::error::the shim did not take: awk on PATH is not GNU awk"; exit 1 ;;
           esac
-          if [ -f test/run-shards.sh ]; then
-            bash test/run-shards.sh
-          else
-            bash test/run-tests.sh
-          fi
+          bash test/run-shards.sh
 
-      # Decide whether the three expensive private legs below have anything new to
-      # prove (backlog item 36, the MEDIUM half). Measured on 2026-08-01: three
-      # consecutive pushes touching none of the tested code still spent about 28 of
-      # 42 minutes of runner time re-proving the same unchanged hooks nine times
-      # each. The suite above is NOT gated: it is fast, and it is the platform
-      # canary that would have caught the 1.0.8 fail-open.
-      #
-      # `paths-ignore: ['**.md']` is the obvious form and is refused, per the item:
-      # it means some commits carry no CI evidence at all, and a commit reporting
-      # green having run nothing is the failure this whole cycle is about.
-      #
-      # THE DIRECTION OF FAILURE IS THE WHOLE DESIGN. This step only ever SETS a
-      # skip flag, and only when it has positively computed a diff and found it
-      # empty. Every other path (no base sha, a base that is not in the object
-      # store after a force-push, an unrecognised event, this step erroring out
-      # entirely) leaves the flag unset, and unset means RUN. A path filter that
-      # can silently decide "nothing changed" is precisely a check that cannot
-      # fail, and skipping the mutation check on the one commit that broke a gate
-      # is a worse outcome than any amount of wasted runner time.
-      #
-      # The base is the event's own `before` sha, not `HEAD^1`. Item 36 names the
-      # merge-commit case as a trap (`HEAD~1` is the wrong parent for a merge), and
-      # this sidesteps it rather than solving it: `before` is the tip the push
-      # started from, so the range is exactly what the push added, merge or not.
-      # Verified against the B6 merge, whose `before` is its first parent.
-      #
-      # The path set is wider than the item's three directories, deliberately.
-      # `dogfood/*.sh` is in it because skipping the oracle on a commit that edits
-      # the oracle would be absurd; `.github/workflows/` because a change to how a
-      # leg is invoked is a change to the leg. Only the glob, not all of `dogfood/`:
-      # that directory is mostly hostile-leg reports, which are prose.
-      #
-      # `publish/*.sh` joined 2026-09-02 (backlog CO3, spec 0127), on the same
-      # reasoning and with the same narrowing: the contents-table gate's own
-      # `--prove` runs below, and skipping it on the commit that edits the gate
-      # would be the absurdity `dogfood/*.sh` is in this list to avoid. Only the
-      # glob, because `publish/` is otherwise release records and prose.
-      #
-      # NOTHING ELSE HAD TO CHANGE FOR THE WIDENING, and that is worth stating.
-      # dogfood/ci-scope-check.sh EXTRACTS this list out of the block below
-      # rather than carrying a copy of it, so the scenarios re-derive what a
-      # tested path is from the bytes that decide it. A copy would have been a
-      # second edit here and a silent disagreement later.
-      #
-      # The body between the SCOPE-LOGIC markers is extracted verbatim and exercised
-      # by dogfood/ci-scope-check.sh, which drives it through seven scenarios
-      # including all four fail-toward-RUNNING paths. Keep the markers.
-      - name: Scope the private legs to what actually changed
-        continue-on-error: true
+  # WINDOWS 11 UNDER GIT BASH (spec 0179): the platform smoke, the regions whose
+  # marker carries a smoke= trait (path spelling, CRLF, symlinks, awk and sed
+  # differences, mktemp, the fixture bins, POSIX permissions), on a hosted Windows
+  # runner. The full suite runs there too slowly to be a per-push check, so the
+  # smoke is what this badge's run covers on Windows. The steps are the source
+  # repository's own smoke job's, byte for byte: Git for Windows' bash first on the
+  # job's PATH (a Windows runner's `bash` can otherwise resolve to WSL's launcher),
+  # line endings kept LF before the checkout, and the native Windows jq.
+  windows-smoke:
+    name: platform smoke (windows-latest, Git Bash)
+    runs-on: windows-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    env:
+      MSYS: winsymlinks:nativestrict
+    steps:
+      # BASH THROUGH THE JOB'S PATH. The runner resolves `shell: bash` by PATH plus
+      # this job's GITHUB_PATH prepend, and a path under "Program Files" cannot be
+      # spelled in `shell:`, so this step finds the Git installation from wherever git
+      # resolves and prepends its bin directory to this job alone. It also points
+      # GIT_CONFIG_GLOBAL at a file in the job's temp directory, so the one global
+      # setting below (autocrlf, before the checkout) stays inside the job.
+      - name: Put Git for Windows' bash on this job's PATH
+        shell: powershell
         run: |
-          # >>> SCOPE-LOGIC-BEGIN
-          # -f (no pathname expansion) is load-bearing, not tidiness. PATHS is passed
-          # to git unquoted so it word-splits into separate pathspecs, and with
-          # globbing ON the shell expanded 'dogfood/*.sh' against the WORKING TREE
-          # before git ever saw it. That had two consequences, both of which made the
-          # filter decide "nothing changed" when something had:
-          #   1. the expansion is top-level only, so a script in a SUBDIRECTORY of a
-          #      globbed path could change without the legs running. A real commit
-          #      did exactly that, and the self-test caught it by going red.
-          #   2. the list was built from files that EXIST NOW rather than from the
-          #      diff, so a DELETED dogfood script is absent from the expansion and
-          #      its deletion is invisible.
-          # With -f, git receives the pathspec itself and does the matching, where a
-          # plain pathspec's * crosses / because it is matched without FNM_PATHNAME.
-          # Both failures above moved to the RUN side, which is the direction item
-          # 36's first constraint requires. Nothing else in this block globs.
-          set -uf
-          PATHS='templates/ scripts/ test/ .github/workflows/ dogfood/*.sh publish/*.sh'
-          base=''
-          case "${{ github.event_name }}" in
-            push)         base='${{ github.event.before }}' ;;
-            pull_request) base='${{ github.event.pull_request.base.sha }}' ;;
-          esac
+          $git = (Get-Command git).Source
+          $bin = Join-Path (Split-Path (Split-Path $git -Parent) -Parent) 'bin'
+          if (-not (Test-Path (Join-Path $bin 'bash.exe'))) { throw "no bash.exe beside git at $bin" }
+          Add-Content -Path $env:GITHUB_PATH -Value $bin
+          Add-Content -Path $env:GITHUB_ENV -Value "GIT_CONFIG_GLOBAL=$env:RUNNER_TEMP\setlist-gitconfig"
+          Write-Output "bash: $bin\bash.exe; GIT_CONFIG_GLOBAL: $env:RUNNER_TEMP\setlist-gitconfig"
 
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            echo "PRIVATE LEGS: RUNNING. No usable base sha for a ${{ github.event_name }} event, so the diff cannot be narrowed."
-            exit 0
-          fi
-          if ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
-            echo "PRIVATE LEGS: RUNNING. Base ${base} is not in the object store (a force-push or a rewritten history), so the diff cannot be computed."
-            exit 0
-          fi
+      - name: Check out with LF line endings (no autocrlf)
+        run: git config --global core.autocrlf false
 
-          # shellcheck disable=SC2086
-          changed="$(git diff --name-only "$base" "${{ github.sha }}" -- $PATHS 2>/dev/null)" || {
-            echo "PRIVATE LEGS: RUNNING. git diff failed, so the diff cannot be trusted."
-            exit 0
-          }
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-          if [ -n "$changed" ]; then
-            echo "PRIVATE LEGS: RUNNING. These tested paths changed in ${base}..${{ github.sha }}:"
-            echo "$changed" | sed 's/^/  /'
-          else
-            echo "SDD_SKIP_PRIVATE_LEGS=yes" >> "$GITHUB_ENV"
-            echo "PRIVATE LEGS: SKIPPING. Nothing under ${PATHS} changed in ${base}..${{ github.sha }}."
-            echo "  The hook suite above still ran, on this interpreter, which is the evidence that matters per commit."
-            echo "  To force them, re-run this workflow from the Actions tab: workflow_dispatch has no base sha and therefore never skips."
-          fi
-          # <<< SCOPE-LOGIC-END
-
-      # Guards the guard, and therefore is NOT itself gated on the guard's decision:
-      # asking the scoping step whether to test the scoping step is circular, and it
-      # costs about a second. It DOES run on both legs, unlike the three below,
-      # because unlike them it tests shell behaviour rather than a gate decision, so
-      # the interpreter is exactly what is under test.
-      - name: CI scope check (private; does the skip decision fail toward running?)
+      - name: Ensure jq is present
         run: |
-          if [ -f dogfood/ci-scope-check.sh ]; then
-            bash dogfood/ci-scope-check.sh
-          else
-            echo "SKIPPED: dogfood/ci-scope-check.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
+          if ! command -v jq >/dev/null 2>&1; then
+            choco install jq -y --no-progress
+            export PATH="/c/ProgramData/chocolatey/bin:$PATH"
+            echo "/c/ProgramData/chocolatey/bin" >> "$GITHUB_PATH"
           fi
+          jq --version
 
-      # THE CONTENTS-TABLE GATE, PER PUSH (backlog CO3, spec 0127). It ran at
-      # export (gate 2d) and standalone between batches, never per push, so a
-      # push could land contents-table drift and nothing went red until the next
-      # export, which is the gap RP8 filed the gate to close reopened one layer
-      # up.
-      #
-      # NOT GATED ON THE PRIVATE-LEGS FLAG, and this is deliberately stronger
-      # than CO3's own remedy. The entry warns that wiring the gate needs the
-      # scoping path list widened too, or the step reports green having run
-      # nothing. That is true, and the list IS widened above. But the deeper
-      # point is that contents-table drift is most often caused by ADDING A
-      # MARKDOWN FILE, which is exactly the push whose diff touches no scoped
-      # path: a gate consulted through that flag would skip on the commits it
-      # most needs to read. It is cheap, like the suite and the scope check
-      # beside it, so it joins them as a step that always runs.
-      #
-      # File-existence guarded like every other private step, since publish/ is
-      # not exported.
-      - name: Contents-table gate (private; does the README's status surface match the tree?)
+      - name: Run the platform smoke, sharded one per core and timed
+        env:
+          SETLIST_SUITE_TIMES: "1"
         run: |
-          if [ -f publish/contents-table-check.sh ]; then
-            bash publish/contents-table-check.sh
-          else
-            echo "SKIPPED: publish/contents-table-check.sh is absent, which is expected in the public repo (publish/ is not exported)."
-          fi
-
-      # CLAIMS VERSUS BYTES, PER PUSH (backlog CL4 and CL5, spec 0129, the A1b
-      # ruling of 2026-09-02). The structure half reads the public README's
-      # Known-limitations section as ONE object (group headings and their
-      # counts, bullets, Status paragraphs) against the suite's LEDGER, the
-      # backlog's mapping and the changelog's counts line; the claims half reads
-      # every "landed", "shipped" or "fixed" sentence of the newest changelog
-      # entry against the diff since the previous release's close commit. Per
-      # push because the defects it catches (an orphaned Status paragraph, a
-      # heading that miscounts, a claim with no diff behind it) arrive in
-      # documentation commits, which is exactly the push whose diff touches no
-      # scoped path, so this step is NOT gated on the private-legs flag, like
-      # the contents-table gate beside it. It costs about a second. Exit 2 is
-      # an INVALID run (an input set came out empty) and fails the step like
-      # exit 1: a check that read nothing has not passed. File-existence guarded
-      # like every other private step, since publish/ is not exported.
-      - name: Claims versus bytes (private; does the public list agree with itself, and do the changelog's claims have diffs?)
-        run: |
-          if [ -f publish/claims-vs-bytes.sh ]; then
-            bash publish/claims-vs-bytes.sh --structure
-            bash publish/claims-vs-bytes.sh --claims --since-previous-publish
-          else
-            echo "SKIPPED: publish/claims-vs-bytes.sh is absent, which is expected in the public repo (publish/ is not exported)."
-          fi
-
-      # --prove IS scoped, unlike the gate above, and the asymmetry is the same
-      # one the fixture matrix carries: --prove copies the tree once per seed and
-      # belongs to the push that CHANGES the gate. `publish/*.sh` is in the
-      # scoped path list precisely so that push is the one that pays for it.
-      - name: Contents-table gate --prove (private; can each seeded drift still be caught?)
-        run: |
-          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
-            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
-          elif [ -f publish/contents-table-check.sh ]; then
-            bash publish/contents-table-check.sh --prove
-          else
-            echo "SKIPPED: publish/contents-table-check.sh is absent, which is expected in the public repo (publish/ is not exported)."
-          fi
-
-      # The happy path, and it runs on BOTH legs like the scope check above rather
-      # than on Linux only like the three below. The distinction those three rest on
-      # is that they test gate DECISIONS, which do not vary by platform. This one
-      # does not test a decision: it stamps a real instance and drives the ordinary
-      # day through the shipped hooks, so what it exercises IS the interpreter, and
-      # the two defects it was written for were a stamp that installed nothing and a
-      # refusal in an ordinary terminal. Platform-scoped evidence is how 1.0.8
-      # shipped a fail-open to every Mac, so this one is not scoped. It costs about
-      # three seconds.
-      #
-      # The CONTROL runs first and its failure is fatal to the step. A happy-path
-      # leg is all "must succeed", which is exactly the shape that keeps passing
-      # after it has stopped testing anything; the control removes the boundary and
-      # requires the leg to notice. Running the leg without it would be running a
-      # check that cannot fail.
-      - name: Happy path (private; can a new user get through a day?)
-        run: |
-          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
-            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
-          elif [ -f dogfood/happy-path.sh ]; then
-            bash dogfood/happy-path.sh --control
-            bash dogfood/happy-path.sh
-          else
-            echo "SKIPPED: dogfood/happy-path.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
-          fi
-
-      # THE TWO B1 STANDING GATES (wired 2026-08-13). Both run on BOTH platform
-      # legs, like the happy path above and unlike the four Linux-only legs below,
-      # and the reason is the same one: the Linux-only guard exists for legs that
-      # test gate DECISIONS, which do not vary by platform. Neither of these does.
-      #
-      # The fixture matrix stamps real instances and drives the shipped delivery
-      # scripts end to end, so what it exercises IS the interpreter, which is the
-      # layer that shipped a fail-open to every Mac in 1.0.8. The claims sweep is
-      # text analysis whose SUBJECT does not vary by platform, but whose own awk,
-      # sed and grep usage does: the measurement that set the watchdog's budget
-      # above was first written with GNU awk's systime() and died on the BWK awk
-      # this project targets, which is the same class in the same week. Running it
-      # on both is what would catch that in the gate rather than in a session.
-      #
-      # Cost measured 2026-08-12: 14 seconds and under 1 second respectively.
-      #
-      # --prove is NOT run here. It is the anti-vacuous check, it copies the tree
-      # once per seed and reruns cells against each copy, and it belongs to the
-      # session that CHANGES a fixture. CI runs the plain check, which is the one
-      # that answers whether the shipped tree still holds.
-      - name: Delivery-path fixture matrix (private; is the guarantee armed on every start state?)
-        run: |
-          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
-            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
-          elif [ -f dogfood/delivery-matrix.sh ]; then
-            bash dogfood/delivery-matrix.sh
-          else
-            echo "SKIPPED: dogfood/delivery-matrix.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
-          fi
-
-      - name: Claims-completeness sweep (private; did a narrowed claim keep a sibling copy?)
-        run: |
-          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
-            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
-          elif [ -f dogfood/claims-sweep.sh ]; then
-            bash dogfood/claims-sweep.sh
-          else
-            echo "SKIPPED: dogfood/claims-sweep.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
-          fi
-
-      # The watchdog wraps the suite step above, so a defect in the watchdog itself
-      # would be felt as a suite that cannot run rather than as a missing check.
-      # Its selftest proves the three directions that matter, and the middle one is
-      # the load-bearing one: a silent step is killed, a SLOW but printing step
-      # SURVIVES, and a completed step's exit status is passed through unchanged.
-      # Without the middle case this would be a wall-clock cap wearing a progress
-      # detector's name, and every long leg here would become flaky.
-      - name: Watchdog selftest (private; can the thing wrapping the suite actually fire?)
-        run: |
-          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
-            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
-          elif [ -f dogfood/watchdog.sh ]; then
-            bash dogfood/watchdog.sh --selftest
-          else
-            echo "SKIPPED: dogfood/watchdog.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
-          fi
-
-      # THE LEG SELF-TEST (spec 0108, plan B2). 3,600-odd lines, every assertion in
-      # both directions, and until this wiring landed they gated QUOTA and nothing
-      # else: the hostile leg's preflight refuses to spend money over a red
-      # self-test, so a regression in the leg tooling was caught by the next PAID
-      # run, or by whoever remembered to invoke the file. A push could break the
-      # instrument that decides whether a release is fit to publish, and stay
-      # green.
-      #
-      # BOTH PLATFORM LEGS, like the four private steps above and unlike the four
-      # Linux-only steps below, and this file is the strongest case in the workflow
-      # for it. Its own header records 23 of 186 assertions red on macOS from a
-      # single GNU-only `sed -i`, which passed on Linux and would have gone on
-      # passing there forever: the mutation silently did not apply, the fixture
-      # stayed valid, the checker correctly accepted it, and the case failed. That
-      # is an INTERPRETER defect, the exact class the Linux-only guard below exists
-      # to keep ON the macOS runner rather than off it.
-      #
-      # NOT wrapped in the watchdog, unlike the suite. The watchdog earns its place
-      # around a step that once went ninety minutes silent; this one prints a line
-      # per assertion, so a hang here is already visible as a stalled log, and the
-      # wrapper would add a failure mode rather than remove one.
-      #
-      # THE COUNT CAN LEGITIMATELY DIFFER BY HOST, and the file says so on its
-      # totals line rather than letting the difference read as a regression. On
-      # fw-macos /usr/bin/nohup cannot execute anything at all ("can't detach from
-      # console"), which is host-structural and not provisionable from here, so
-      # three oracle cases announce a PROVEN skip and the summary states it asserts
-      # 349 of 352. A skip that is not proven in the same run never happens; see
-      # the probe in the self-test.
-      #
-      # Cost measured 2026-08-21 on run 32499457813, the same runners: 49s on
-      # fw-linux, 1m42s on fw-macos. It does not become the critical path and needs
-      # no concurrency treatment of its own: the Linux leg is 18 minutes of
-      # mutation check and oracle, the macOS leg is dominated by the suite, and the
-      # workflow-level concurrency group at the top of this file plus the scoping
-      # step above already cover it, since `dogfood/*.sh` is in the scoped path set
-      # and a push touching no tested path does not pay for this at all.
-      - name: Leg self-test (private; do the hostile leg's mechanical parts still hold?)
-        run: |
-          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
-            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
-          elif [ -f dogfood/hostile-leg-selftest.sh ]; then
-            bash dogfood/hostile-leg-selftest.sh
-          else
-            echo "SKIPPED: dogfood/hostile-leg-selftest.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
-          fi
-
-      # The three private legs. dogfood/ is NOT exported, so these files exist
-      # only in the source repo, and this workflow is copied wholesale into the
-      # public one. The guard is FILE EXISTENCE rather than a repository-name
-      # expression, deliberately: the matrix comment above records that a
-      # condition evaluated in the wrong context reads as empty and silently
-      # skips every leg while reporting green. A file test cannot do that.
-      #
-      # And when they are absent the step SAYS SO. A skip nobody can see is the
-      # same defect as a check that cannot fail, which is what left
-      # macos-equiv.sh unable to fail for two days: no step obliged anyone to
-      # run it and nothing announced that it had not run.
-      #
-      # SECOND GUARD, added 2026-08-01 with the private macOS leg: these three run
-      # on the LINUX leg only. They test gate DECISIONS, which are the same on both
-      # platforms; the macOS leg's job is the INTERPRETER, and the 451-assertion
-      # suite above is what exercises it (that suite, on that interpreter, is what
-      # would have caught the 1.0.8 fail-open). Running them twice would put nine
-      # more suite executions on the macOS runner for no new signal and blow any
-      # sane timeout, since mutation-check alone runs the suite once per mutation
-      # plus a control. The guard is `uname -s`, a shell test rather than a matrix
-      # expression, for the same reason the file test above is: an expression
-      # evaluated in the wrong context reads as empty and skips silently. And it
-      # announces the skip, like every other skip here.
-      #
-      # THIRD GUARD, added 2026-08-01 (backlog item 36): the scoping step above.
-      # Note the asymmetry with the other two. The file test and the `uname` test
-      # both name a condition under which the leg CANNOT usefully run, so reading
-      # them as empty would be a bug and they are written to make that impossible.
-      # The scoping guard names a condition under which the leg would merely be
-      # REDUNDANT, so it is written the other way round: it is consulted through a
-      # variable that has to be positively set to "yes" to suppress anything, and
-      # an unset variable runs the leg. All three announce.
-      - name: Hook smoke (private; the harness dispatch path)
-        run: |
-          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
-            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
-          elif [ "$(uname -s)" = "Darwin" ]; then
-            echo "SKIPPED on the macOS leg by design: hook-smoke.sh tests gate decisions, not the interpreter, and runs on the Linux leg."
-          elif [ -f dogfood/hook-smoke.sh ]; then
-            bash dogfood/hook-smoke.sh
-          else
-            echo "SKIPPED: dogfood/hook-smoke.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
-          fi
-
-      - name: Outcome oracle (private; gate decision vs observed reality)
-        run: |
-          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
-            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
-          elif [ "$(uname -s)" = "Darwin" ]; then
-            echo "SKIPPED on the macOS leg by design: oracle-diff.sh tests gate decisions, not the interpreter, and runs on the Linux leg."
-          elif [ -f dogfood/oracle-diff.sh ]; then
-            # Bounded rather than --all: `--gate both` generates 284,022 cases
-            # (close 283,500, commit 515, scope 7) and running all of them takes
-            # hours. This bounded run is a smoke over PART of the space and only
-            # --all crosses all of it, which is unchanged and is stated first
-            # because it is the claim that matters.
-            #
-            # WHAT CHANGED (spec 0106, backlog OS). The sample used to be every
-            # Nth line of the generated cross product, and a fixed stride ALIASES
-            # against the generator's inner loops: at this exact --cases value the
-            # commit corpus sampled both ';'-family separators zero times, and the
-            # close corpus sampled two of the four SUFFIXES zero times, those two
-            # being the trailing comment and the abbreviated option value, which
-            # are the leg-5 findings that axis was added to hold. The sample is
-            # now reserved-then-spread: one case for every axis value first, then
-            # a coprime walk fills the rest, so no axis value can be dark. The
-            # step below ASSERTS that rather than claiming it, and it is ordered
-            # first because a clean sheet over an aliased sample is worth nothing.
-            #
-            # This comment has been wrong twice before, in an EXPORTED file, and
-            # two hostile legs quoted it without checking: it once claimed the
-            # stride "still crosses the whole space" and once said "about eleven
-            # minutes". Recorded rather than quietly corrected, because the
-            # failure both times was taking a claim on report.
-            bash dogfood/oracle-diff.sh --axis-coverage --gate both --cases 300
-            bash dogfood/oracle-diff.sh --gate both --cases 300
-          else
-            echo "SKIPPED: dogfood/oracle-diff.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
-          fi
-
-      - name: Mutation check (private; does the suite notice a broken gate?)
-        run: |
-          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
-            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
-          elif [ "$(uname -s)" = "Darwin" ]; then
-            echo "SKIPPED on the macOS leg by design: mutation-check.sh tests gate decisions, not the interpreter, and runs on the Linux leg."
-          elif [ -f dogfood/mutation-check.sh ]; then
-            bash dogfood/mutation-check.sh
-          else
-            echo "SKIPPED: dogfood/mutation-check.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
-          fi
-
-      # THE TWO LEGS THAT WERE WIRED INTO NOTHING (v1.7 gate completeness audit,
-      # 2026-08-03). DOGFOOD-GATE.md cites macos-equiv.sh as the example of a leg
-      # nobody is obliged to run, and upgrade-check.sh sat in exactly that
-      # condition beside it: both are real instruments, both were invoked only
-      # when somebody remembered. An instrument nobody is obliged to run reports
-      # on the release it was last run against, which is not the release shipping.
-      #
-      # Wired here rather than into the gate document alone, because the gate
-      # document is prose and this is a step that either runs or says why not.
-      # Every branch announces itself: a silent skip is the defect being fixed.
-      - name: Upgrade seam (private; does a real previous release upgrade cleanly?)
-        continue-on-error: true
-        run: |
-          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
-            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
-          elif [ "$(uname -s)" = "Darwin" ]; then
-            echo "SKIPPED on the macOS leg by design: the seam is about version-to-version delivery, not the interpreter, and runs on the Linux leg."
-          elif [ ! -f dogfood/upgrade-check.sh ]; then
-            echo "SKIPPED: dogfood/upgrade-check.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
-          else
-            # NETWORK-REQUIRED, and it REFUSES to fall back to the local plugin
-            # cache rather than reviewing a tree that is not the previous release.
-            # So a network failure here is an honest INCONCLUSIVE, not a pass:
-            # continue-on-error keeps a flaky clone from failing the build while
-            # the output still records what happened. A real seam defect prints
-            # its failures and the log carries them.
-            bash dogfood/upgrade-check.sh || {
-              echo "UPGRADE SEAM: did not complete. Read the output above before treating this commit as covered:"
-              echo "  a refusal to resolve the previous public tag is INCONCLUSIVE (network or an unpublished tag),"
-              echo "  a failed assertion is a real finding and blocks the gate."
-              exit 1
-            }
-          fi
-
-      - name: macOS-equivalent toolchain (private; bash 3.2 and the BWK awk, on Linux)
-        continue-on-error: true
-        run: |
-          if [ "${SDD_SKIP_PRIVATE_LEGS:-}" = "yes" ]; then
-            echo "SKIPPED: no tested path changed in this push. See the scoping step above for the range it diffed."
-          elif [ "$(uname -s)" = "Darwin" ]; then
-            echo "SKIPPED on the macOS leg by design: this leg EMULATES macOS on Linux, and the real thing is already running here."
-          elif [ ! -f dogfood/macos-equiv.sh ]; then
-            echo "SKIPPED: dogfood/macos-equiv.sh is absent, which is expected in the public repo (dogfood/ is not exported)."
-          else
-            # Its whole purpose is to be the third option when the macOS leg
-            # cannot run, so it is wired to run BESIDE that leg rather than
-            # instead of it: the day the macOS runner is unavailable, this is
-            # already green or already red, and nobody has to decide under
-            # pressure whether a hand audit will do.
-            bash dogfood/macos-equiv.sh || {
-              echo "macOS-EQUIVALENT: did not complete. If the toolchain could not be BUILT this is inconclusive;"
-              echo "  if the SUITE failed under bash 3.2 or the BWK awk, that is a real finding and the macOS leg"
-              echo "  above is the arbiter."
-              exit 1
-            }
-          fi
+          set -o pipefail
+          printf 'runner cores: %s\n' "$(nproc 2>/dev/null || echo unknown)"
+          bash test/run-tests.sh --list-regions --smoke | sed 's/^/smoke member: /'
+          n="$(nproc 2>/dev/null || echo 2)"; [ "$n" -ge 1 ] 2>/dev/null || n=2
+          bash test/run-shards.sh --smoke --shards "$n" 2>&1 | tee smoke-windows.log

@@ -21,6 +21,10 @@ edition wins. Never fork the protocol.
 - Greenfield guard: if the current directory is not empty and not a git
   repository, stop and ask before touching anything. An existing codebase
   belongs to /setlist:retrofit instead.
+- Observe mode (`/setlist:retrofit --observe`, the verdict delta of
+  `/setlist:upgrade`) does not apply here: a new project has no history to
+  read, and this interview's proposal of every decision before a file is
+  written is its equivalent.
 - Load the protocol you are bound to. Run:
   `bash "${CLAUDE_PLUGIN_ROOT}/scripts/part.sh" 8`
   and follow that text (the Bootstrap Protocol) for everything below.
@@ -50,11 +54,13 @@ Ask for, in plain conversation:
   the response). Only if the probe cannot run or fails: leave the model line
   out of settings.json and park verification in STATUS.md with a named owner.
   Never park without attempting the probe.
-- Verify `jq` in the same environment check (`command -v jq`). The three
-  stamped GIT hooks fail closed without it (the session hooks report, or stay silent, and permit), so an instance stamped on a machine
-  that lacks it will deny its own first writes; a clean container is the
-  common case, since jq is not in most default installs. Report the install
-  command and let the user run it; install nothing yourself.
+- Verify `jq` in the same environment check (`command -v jq`). The stamp
+  refuses before it writes anything when `jq` is missing or not working (it
+  builds `.claude/sdd.json` with `jq`, and the three stamped GIT hooks fail
+  closed without it; the session hooks report, or stay silent, and do not block), so
+  check first rather than meet the refusal; a clean container is the common
+  case, since jq is not in most default installs. Report the install command
+  and let the user run it; install nothing yourself.
 - Ask the `diagram_command` question in the same round, DEFAULT NONE. "Is there
   a command that prints this project's structure as one Mermaid block (an import
   graph, a schema dump)?" A yes records it in `.claude/sdd.json` beside
@@ -94,7 +100,9 @@ check`) and `.github/CODEOWNERS` (the four protected paths under an `@OWNER`
 slot that phase 2 fills with the team that owns the enforcement layer; a
 standing slot is a validate finding), the `gates` block in `sdd.json` (three
 empty tiers `/scaffold` records beside `gate_command`), `specs/TEMPLATE.md`
-extracted from the edition, and the committed edition copy. Do not regenerate
+extracted from the edition, the committed edition copy, and `AGENTS.md` beside
+`CLAUDE.md` (a pointer to it and to the edition for agents that read
+`AGENTS.md`, never a second copy of the golden rules). Do not regenerate
 any stamped file by hand. Requiring the check on the trunk is the user's act at
 their forge; name it in the hand-off rather than assuming it.
 
@@ -144,5 +152,6 @@ next, before anything else.
   legend, use exactly those words.
 - Non-interactive bootstraps (`claude -p`) under default permissions cannot
   read the plugin root (`part.sh` lives outside the project directory), and
-  the run stalls on an approval that never comes. Part 7c names the
-  non-interactive stance; expect the operator to relaunch with it.
+  the run stalls on an approval that never comes. The permission stance is
+  the operator's, set outside the plugin (Part 7c): say what stalled and
+  stop, never choose or suggest a mode that turns prompts off.

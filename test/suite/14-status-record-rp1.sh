@@ -82,6 +82,9 @@ rp1_fixture() {
   git -C "$d" config core.hooksPath .githooks
 }
 
+# >>> SHARD-BEGIN record-rp1-early-14 cost=11
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region record-rp1-early-14; then
 # --- the grammar corpus: malformed REFUSES on CLEAN content ------------------
 # The staged content beside the record is an ordinary docs edit, so the refusal
 # is attributable to the record and to nothing else. The corpus enumerates the
@@ -318,7 +321,7 @@ if printf '%s' "$RP1E_OUT" | grep -q ' 0 violations'; then
   ok "record audit d: the honest structured --no-ff close audits clean"
 else
   bad "record audit d: the honest structured --no-ff close audits clean" \
-      "audit said: $(printf '%s' "$RP1E_OUT" | tail -2 | tr '\n' ' ')"
+      "audit said (whole, spec 0180 E-j): $RP1E_OUT"
 fi
 
 RP1F="$WORK/rp1-audit-squash"
@@ -377,9 +380,11 @@ else
   bad "record chore: a chore newly done in the record authorises its merge (the record half of Part 5b)" \
       "$(tr '\n' ' ' < "$WORK/rp1-chore.out")"
 fi
+fi; shard_region_end
+# <<< SHARD-END record-rp1-early-14
 
 # --- THE ABSENCE DIFFERENTIAL: blob-pinned, both directions -------------------
-# >>> SHARD-BEGIN rp1-absence-differential cost=7
+# >>> SHARD-BEGIN rp1-absence-differential cost=6
 if shard_region rp1-absence-differential; then
 # A8: the case count is asserted before the agreement is believed, and a
 # DISCRIMINATION control proves the harness can see a difference at all, so a
@@ -416,17 +421,17 @@ else
         clean)
           printf 'ordinary work\n' > "$d/docs.txt"
           git -C "$d" add -A >/dev/null 2>&1
-          git -C "$d" commit -qm "clean" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          lf_jq git -C "$d" commit -qm "clean" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
           printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
         lifecycle)
           printf '# Spec 0001\n\nStatus: BUILT\n\n## Goal\n\nthing\n' > "$d/specs/0001-thing.md"
           git -C "$d" add -A >/dev/null 2>&1
-          git -C "$d" commit -qm "flip without page" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          lf_jq git -C "$d" commit -qm "flip without page" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
           printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
         emdash)
           printf 'a %s b\n' "$EMDASH" > "$d/src/app.js"
           git -C "$d" add -A >/dev/null 2>&1
-          git -C "$d" commit -qm "emdash" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          lf_jq git -C "$d" commit -qm "emdash" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
           printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out" ;;
         close-merge)
           git -C "$d" checkout -qb spec/0001-thing 2>/dev/null
@@ -436,7 +441,7 @@ else
           git -C "$d" add -A >/dev/null 2>&1
           git -C "$d" -c core.hooksPath=/dev/null commit -qm "close" >/dev/null 2>&1
           git -C "$d" checkout -q main 2>/dev/null
-          git -C "$d" merge --no-ff --no-edit spec/0001-thing >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          lf_jq git -C "$d" merge --no-ff --no-edit spec/0001-thing >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
           printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out"
           # The merge subject line embeds nothing generation-specific; strip
           # the object names git prints, which differ per repo by hash.
@@ -450,7 +455,7 @@ else
           git -C "$d" -c core.hooksPath=/dev/null commit -qm "close" >/dev/null 2>&1
           git -C "$d" checkout -q main 2>/dev/null
           git -C "$d" -c core.hooksPath=/dev/null merge -q --no-ff --no-edit spec/0001-thing >/dev/null 2>&1
-          bash "$RP1_TA" "$d" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
+          lf_jq bash "$RP1_TA" "$d" >>"$RP1DD/$RP1_CASE-$RP1_GEN.out" 2>&1
           printf 'exit=%s\n' "$?" >> "$RP1DD/$RP1_CASE-$RP1_GEN.out"
           # The audit echoes the instance path and commit hashes, which differ
           # per generation BY CONSTRUCTION (two fixture dirs); normalise both,
@@ -460,6 +465,8 @@ else
     done
     RP1_DIFF_N=$((RP1_DIFF_N + 1))
     norm_escape_coaching "$RP1DD/$RP1_CASE-pre.out"; norm_escape_coaching "$RP1DD/$RP1_CASE-now.out"
+    norm_baseline_frame "$RP1DD/$RP1_CASE-pre.out"; norm_baseline_frame "$RP1DD/$RP1_CASE-now.out"
+    norm_frozen_sigpipe "$RP1DD/$RP1_CASE-pre.out"   # the frozen generation only (spec 0180, E-l)
     if ! cmp -s "$RP1DD/$RP1_CASE-pre.out" "$RP1DD/$RP1_CASE-now.out"; then
       RP1_DIFF_BAD="$RP1_DIFF_BAD $RP1_CASE"
     fi
@@ -523,7 +530,7 @@ else
 fi
 
 # --- OWNERSHIP (design section 8): the declared set and the per-file arm ----
-# >>> SHARD-BEGIN rp1-ownership cost=9
+# >>> SHARD-BEGIN rp1-ownership cost=10
 if shard_region rp1-ownership; then
 # The lockstep for the Owns reader: TWO homes (the library asks the question
 # at the squash landing, the audit at the pushed history), byte-identical.
@@ -565,7 +572,7 @@ sed -e 's/| ACTIVE |/| CLOSED |/' "$RP1O2/specs/STATUS.md" > "$RP1O2/specs/STATU
 git -C "$RP1O2" add -A >/dev/null 2>&1
 git -C "$RP1O2" -c core.hooksPath=/dev/null commit -qm "undeclared extra" >/dev/null 2>&1
 RP1O2_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1O2" 2>&1)" || true
-if printf '%s' "$RP1O2_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] src/extra.txt' \
+if printf '%s' "$RP1O2_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] "src/extra.txt"' \
    && printf '%s' "$RP1O2_OUT" | grep -q 'checkpoint' \
    && printf '%s' "$RP1O2_OUT" | grep -q -- '--no-ff'; then
   ok "owns b: an undeclared role file in a declaring close refuses naming BOTH honest exits (declare through checkpoint, or the --no-ff route)"
@@ -651,7 +658,7 @@ printf -- '- CHORE-002: DONE 2026-08-30. Tidied.\n' >> "$RP1O6/specs/STATUS.md"
 git -C "$RP1O6" add -A >/dev/null 2>&1
 git -C "$RP1O6" -c core.hooksPath=/dev/null commit -qm "chore flip with a rider" >/dev/null 2>&1
 RP1O6_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1O6" 2>&1)" || true
-if printf '%s' "$RP1O6_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] src/extra.js'; then
+if printf '%s' "$RP1O6_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] "src/extra.js"'; then
   ok "owns f (F5-2026 non-widening): a chore flip exempts nothing but its declared files; the rider refuses by name"
 else
   bad "owns f (F5-2026 non-widening): a chore flip exempts nothing but its declared files; the rider refuses by name" \
@@ -745,7 +752,7 @@ printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0
 git -C "$RP1O9" add -A >/dev/null 2>&1
 git -C "$RP1O9" -c core.hooksPath=/dev/null commit -qm "close of 0002 with a rider" >/dev/null 2>&1
 RP1O9_OUT="$(bash "$SCRIPTS/trunk-audit.sh" "$RP1O9" 2>&1)" || true
-if printf '%s' "$RP1O9_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] src/sneak.txt' \
+if printf '%s' "$RP1O9_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] "src/sneak.txt"' \
    && ! printf '%s' "$RP1O9_OUT" | grep -q '\[SLH-OWNS-UNDECLARED\] src/old.txt'; then
   ok "owns j (2.4.0 leg F7 guard): the deletion filter does not mask an undeclared addition riding the same close"
 else

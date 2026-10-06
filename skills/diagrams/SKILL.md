@@ -50,13 +50,13 @@ of its own, never a side effect of an upgrade.
   `components/` directory beneath it, so the only way down to twelve is to cut a
   node, and cutting is the work. Cut the node whose absence costs the reader
   least, and say in the prose that it is not drawn.
-- **Edge labels use the pipe form, and only the pipe form: `-->|"text"|`, never
-  `a -- text --> b`.** In the inline form the text sits where a declaration's
-  label sits, so a path written inside it (`a -- reads(src/gone.json) --> b`) is
-  read as a node and can refuse your close for a node you never drew. No reader
-  here can tell the two apart; the pipe form has no such hazard, and every type
-  reference teaches it. It is the one mitigation for that refusal, which is why
-  it is stated here and not only in a reference.
+- **Edge labels use the pipe form: `-->|"text"|`.** Every type reference
+  teaches it and every diagram here uses it. Since edition v1.18 the node reader
+  also reads the inline form (`a -- text --> b`, and its dotted and thick
+  spellings) as an edge label, as the pinned Mermaid parser does, so a path
+  written inside it no longer refuses a close; through v1.17 it was read as a
+  node nobody drew. Keep to the pipe form anyway: it is the one spelling with no
+  reader's judgement in it.
 - **Legible, not only true: four ceilings beside the twelve nodes.** At most
   **twelve edges**. No arrow label over **45 characters**, counting the text
   between the quotes. At most **400 characters** of arrow-label text across the
@@ -139,8 +139,9 @@ A name counts as a path when it contains a slash and no whitespace: anything els
 is not resolved, and every unresolved name is PRINTED rather than silently
 skipped (`SLH-DIAGRAM-NODE-SKIPPED`, up to ten listed with a count beyond that),
 so a label you meant as a path and spelled as prose comes back to you. A node a
-spec introduces carries `%% spec NNNN` on its line, which is what decides whose
-node a stale one is. Files under `docs/diagrams/generated/` are not scanned for
+spec introduces carries `%% spec NNNN` on a line of its own directly above it
+(Mermaid reads a `%%` comment only on a line of its own), which is what decides
+whose node a stale one is. Files under `docs/diagrams/generated/` are not scanned for
 nodes: they are the command's output, not a drawing anyone signed.
 
 Three spellings are NOT read, and they are stated here so you do not discover
@@ -150,8 +151,8 @@ them by being believed when you should not have been: the rhombus and hexagon
 against the id.
 
 **The pipe form is the rule for edge labels** (the opening list above): the
-inline `a -- text --> b` spelling is the one place a drawn name can be read out
-of an edge label, and the pipe form is the whole mitigation.
+inline `a -- text --> b` spelling is read as an edge label since edition v1.18,
+and the pipe form stays the one the references teach.
 
 ## At creation
 

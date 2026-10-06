@@ -35,8 +35,17 @@ Read the four rules off that block:
   is a claim you can grep for. An unlabeled arrow is allowed only when both
   endpoints already say the protocol, the action, the direction, whether the call
   is synchronous, and any boundary crossed.
-- **A node a spec introduces carries its spec** on the node's own line:
-  `worker["src/worker"] %% spec 0142`. That is how a stale node is attributed
+- **A node a spec introduces carries its spec** on a line of its own directly
+  above the node, because Mermaid reads a `%%` comment only on a line of its own
+  (a marker after a node on the same line does not parse):
+
+  ```
+  %% spec 0142
+  worker["src/worker"]
+  ```
+
+  The marker attributes the next line that is not blank, every declaration on
+  it, and nothing after it. That is how a stale node is attributed
   later, and it is what makes the difference between a refusal (your own spec's
   node is wrong now) and a report (an older spec's node has rotted).
 

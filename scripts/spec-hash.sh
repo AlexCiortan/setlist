@@ -33,6 +33,12 @@
 
 set -u
 
+# BYTES, NOT CHARACTERS (spec 0169). This is the WRITE side of the hash the
+# git-hook library verifies, and that verifier reads bytes since 0169: under a
+# UTF-8 locale macOS awk aborted on a byte that is not valid UTF-8 and this
+# hashed a truncated text, which the verifier would then call stale.
+LC_ALL=C; export LC_ALL
+
 SPEC="${1:-}"
 if [[ -z "$SPEC" || ! -f "$SPEC" ]]; then
   printf 'spec-hash.sh: no such spec file: %s\n' "${SPEC:-<none>}" >&2

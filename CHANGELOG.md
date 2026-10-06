@@ -9,6 +9,165 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.11.0
+
+**Edition v1.19 (the boundary edition).** What a close must carry, what the audit computes, and
+where the whole thing stops. A second model reads every close before git merges it; the trunk
+audit's frame is computed from the history rather than taken on trust; a reader can watch what
+Setlist would have refused on their own repository before installing anything; and the
+Known-limitations list becomes a threat model, each boundary a fact about git, the forge or the
+harness. 2.10.0 was never published: its whole content ships here, and this entry carries it.
+**The Known-limitations list as it stands in this release: 24 design boundaries, 0 open limitations, 1 upstream condition.**
+It goes from 2.9.0's 41 to 25, and nothing is hidden: five bullets retired because a fix made
+them false (two scope-hook misses, both open limitations, the wiring check's spelling restriction)
+and one because it described the mechanism working; thirteen merged into the bullets that now
+carry them, each survivor keeping the old titles in its history (the rebase, reset and pathspec
+routes into the sideways routes, the index scan into the best-effort scan, squash into
+fast-forward, the escape variable into `--no-verify`, the render and path-shaped bullets into the
+diagram bullet, two forge bullets into one, the signing key into the declarations bullet, and the
+sideways routes and the merge edit into the deliberate-evasion bullet); one rewritten as the
+audit's declared frame; two added from an external review of 2.9.0; and one added as the boundary
+of a new capability, [the close review](LIMITATIONS.md#close-review) (a reviewer on your own
+account shares the builder's blind spots on taste, not on bytes).
+
+- **The close review.** At every close `/setlist:checkpoint` has the stamped `close-reviewer`
+  agent, on the Opus tier in a fresh context, read the branch's diff against the spec's criteria
+  and report each finding with a file and a line; you fix what it finds and it reads again, two
+  rounds at most, and the call past them is yours, recorded as `ACCEPTED-BY-HUMAN`. The close gate
+  and the trunk audit refuse a close whose `close-review` block does not end in a passed round,
+  by code. It stops at a verdict per criterion, never a grade, and a documentation-only close is
+  skipped by its role paths. Its boundary is [the close review](LIMITATIONS.md#close-review).
+- **Observe mode, before you adopt.** `/setlist:retrofit --observe` runs the trunk audit and the
+  close checks over a repository's last 50 merges in a private clone and prints every one that
+  would have been refused, by commit and code, writing nothing. It stops at reporting.
+- **The verdict delta, before you upgrade.** `/setlist:upgrade` prints the same reading as a
+  delta between the audit an instance has and the one it is moving to, both ways, before anything
+  is replaced.
+- **Other harnesses find an `AGENTS.md` pointer.** New and retrofitted instances get an `AGENTS.md` that
+  points other harnesses at `CLAUDE.md` and the edition, the upgrade adds it where missing, the
+  drift report reads it, and a retrofit onto a repository that already has one names the file it
+  would shadow. It is a pointer, never a second copy of the rules.
+- **Another hook manager, chained.** Where husky, lefthook or pre-commit already runs, the stamp
+  and the refresh arm `.githooks/` and run that manager's hook of the same name after Setlist's
+  own verdict, so both refusals surface; git still allows one `core.hooksPath`, and a manager that
+  re-points it on install switches Setlist off again, which the next session start reports.
+- **The merge-edit report.** On git 2.38 and later the trunk audit compares each two-parent merge
+  with the clean merge of its parents and names every file that differs outside the files that
+  conflicted (`SLH-MERGE-EDIT-OUTSIDE-CONFLICT`). It reports and never refuses, and an edit inside
+  a conflicted file reads as conflict resolution.
+- **Parallel specs, refused only when they overlap.** Two specs on two branches close in turn when
+  their `Owns:` sets are disjoint; when they overlap, the audit refuses the second close by name
+  (`SLH-OWNS-OVERLAP`) until its branch carries the first close's change. It reads the trunk's own
+  line, so a close landed by squash or pulled onto a stale trunk is not compared.
+- **An octopus onto the trunk is refused by name** (`SLH-OCTOPUS-MERGE`), at merge and at push: a
+  close merges one spec branch. The chained route through a spec branch stays open and listed.
+- **`pre-push` reads the pushed commit's own configuration.** A push from a checkout that keeps
+  its hooks but lacks `.claude/sdd.json` is governed by the pushed commit's own; a branch without
+  `.githooks/` still runs no hook at all.
+- **The trunk audit's baseline, declared and computed.** `audit.baseline` in `.claude/sdd.json`
+  is where the audit's walk begins, and the upgrade records it when it delivers the git hooks, so
+  an instance whose history predates its hooks is no longer refused at every push for merges no
+  hook could have seen. A key that is not a full commit id, does not resolve, or is not an
+  ancestor of the tip is refused by name before anything is walked; a key a merge brought in is
+  framed at that merge. It stops at declaration: a key moved forward walks less, and it is
+  reviewed like the rest of `.claude/`, not verified. The forge check passes its own base and
+  never reads the key.
+- **Refused merges complete the way the message says.** When `pre-merge-commit` refuses a merge
+  for a missing record and you add the record while completing the merge, the push-time audit
+  reads the merge commit's own record, as `pre-commit` already did. It stops at two-parent merges.
+- **The armed check at session start.** A persistent `core.hooksPath` or `merge.ff` change, or a
+  fresh clone whose `.git/config` was never armed, is reported on one line
+  (`[SR-HOOKS-NOT-ARMED]`) naming the setting and `/setlist:upgrade`. It stops at reporting.
+- **Code-owner review, read by the forge check.** The check reads "Require review from Code
+  Owners", refuses without it under `forge` custody (`FC-NO-CODE-OWNER-REVIEW`) and reports it
+  otherwise, and names a pull request's edits to `.githooks/`, `.claude/hooks/` or
+  `.github/workflows/`. A protection field it could not read is refused by name wherever a verdict
+  depends on it, never read as off. It stops where the check does: it runs the pull request's own
+  copy of itself.
+- **The bypass deny reads commands as a person writes them.** A heredoc behind a prefix or with
+  no space before the operator is no longer refused, one piped into `bash`, `sh` or `zsh` is judged
+  as commands, a walked wrapper's options are read by that wrapper's own grammar, and a reader that
+  can run a shell (`awk`, `sed`, `less`, `more`) is no longer counted as data. It stops at a named
+  list of spellings; the git hooks refuse what they would commit.
+- **The scope hook's path matching, fixed.** A relative path resolves against the session's
+  directory, a symlinked leaf resolves as its directory does, and a role directory spelled in
+  another case matches where the filesystem folds case. It stays advisory.
+- **The scope hook no longer answers the permission prompt, so an instance's edit prompts are the
+  user's again.** It prints no permission decision; its warning still reaches the agent, and
+  Claude Code asks you about each write as your permission mode decides.
+- **The Stop hook's reasons lead with the fix.** Each refusal starts with the command that clears
+  it, names each file once and fits in 480 characters, and a corrupt `.git` beneath an enclosing
+  repository is refused by name. It is still a nudge, never a lock.
+- **Inline edge labels are read as labels.** A Mermaid edge written inline, `a -- text --> b`,
+  no longer refuses a close for a node nobody drew.
+- **The stamp refuses a bad answer by name.** A role that is not a clean relative path, carries a
+  `..` segment or a glob, is refused before anything is written, and `.claude/sdd.json` is built
+  with `jq`, which the stamp now requires.
+- **Secret files named, not a pattern.** The stamped deny list names the conventional
+  secret-bearing `.env` files, so the `.env.example` the stamp writes is readable by the session
+  told to keep it current. It stays a spelling list.
+- **The model ladder, re-verified on the harness of the day.** When these names age, the fix is
+  one row in the edition's bindings table and a settings edit, not a protocol change, and this is
+  that row: on the Anthropic API `opus` now resolves to Opus 5.5 and `sonnet` to Sonnet 5.5 (other
+  providers can sit a version or a generation behind, and the table says which); `fable` resolves
+  to Fable 5 rather than 5.1 in Claude apps gateway sessions; `opusplan[1m]` changes nothing on
+  the Anthropic API, where both phases already run a 1M window. Effort is recalibrated per model,
+  so a setting carried over is re-read rather than kept, and the plan phase's reasoning does not
+  reach the execution phase, only the written plan does.
+- **The `opusplan` probe, re-run by `/setlist:validate`.** Validate runs both phases again as two
+  short headless sessions, prints the model each served, and names a phase served by a model
+  outside its tier, which a managed model allowlist changed after the stamp can cause. A probe
+  that cannot run is reported, never passed.
+- **Three golden rules for the execution tier.** A new instance's `CLAUDE.md`, the standing
+  prompt of the model that types, tells it to carry a spec through to its acceptance and build
+  nothing the spec did not ask for, to report a change done only after a real check ran on it, and
+  to answer a request for options with options. They follow Anthropic's guide "Prompting Claude
+  Sonnet 5.5", in the edition's own words.
+- **Windows 11 under Git Bash.** The hooks, the scripts and the suite run under Git for Windows'
+  bash, the one Claude Code uses there, with jq 1.7 or later on PATH: a native jq's CRLF output
+  and the arguments MSYS rewrites, and a path spelled `C:\...`, `C:/...` or `/c/...`, are read as
+  on every other platform, and the platform smoke runs on Windows at every push. Before this
+  release every role verdict of the scope hook and the trunk audit failed open there.
+
+Nothing in this release is disclosed rather than fixed: the four lines the 2.9.0 release page
+disclosed are fixed here, and the Open group reads zero. Fixed along the way, each of them
+something a user could meet: every reader of a record, a path or an added line reads bytes, so a
+byte that is not valid UTF-8 no longer refuses a commit on macOS; the
+content scan reads a text file a `.gitattributes` `-diff` or `binary` entry marks, except in a merge
+commit's own change at push; the trunk audit asks about the role directory's own filesystem, refuses
+by name where it cannot read (a shallow clone, a probe it cannot write), and reads a merge of
+unrelated histories; a push refused for a reason other than its content no longer says the content
+is the reason; an ordinary `git commit -m` continued across two lines with a backslash, and a
+heredoc piped to `tee`, are no longer refused; the wiring check certifies a hook entry by the file
+its command runs rather than by its spelling; a role path carrying `..` or a glob is refused where
+it is written; the Stop hook's refusals name a path git accepts and carry their own code; and a
+repository's own text in a report, a session-start line or the forge check's log is bounded so it
+cannot read as the framework speaking. The upgrade's drift report names Claude Code's
+`/doctor prompt-audit` for prompts written for older models, which it does not read. The code is
+licensed Apache-2.0, with an SPDX line at the top of every stamped hook and script, and the
+framework document stays CC BY 4.0. A `SECURITY.md`, a `CONTRIBUTING.md` and a short document for a
+lead deciding on a team, `HOW-SETLIST-THINKS.md`, join the repository; its test workflow runs the
+suite on hosted runners only; and the plugin has an icon. A retrofit's role paths are read from the
+tree and never defaulted: the stamp refuses a role path the repository does not have, and the
+refresh names one that holds no tracked file. The gate check a new instance's `/scaffold` gives
+says jq is missing rather than passing.
+
+**What an upgraded instance receives.** A key written: where the instance's history predates
+its git hooks, the refresh records `audit.baseline` in the migration commit, and a key already
+there is reported and never overwritten. The stamped hooks, the trunk audit and the forge check
+replaced through the refresh's existing report of changed bytes, each with a licence line at the
+top; the `close-reviewer` agent and `AGENTS.md` added where missing. `plugin.version` 2.11.0
+recorded, which is what dates the close review, the overlap refusal and the merge-edit report:
+a close made before the upgrade is never asked for them. Nothing is removed from an instance.
+**Three things the refresh leaves to you**, because each is the team's own: under `forge`
+custody, turn on "Require review from Code Owners" in the trunk's ruleset before upgrading, or
+the check refuses your next closing pull request; `.claude/settings.json` keeps `Read(.env.*)`
+until you replace it with the names the stamped template lists, which costs you only that
+`.env.example` stays unreadable to the session; and the three golden rules reach your
+`CLAUDE.md` only if you take the edit the upgrade proposes. The stamped workflow and CODEOWNERS
+are never replaced once they exist, so an unedited 2.9.0 workflow is reported as differing from
+the template, which gained a header sentence and a checkout pinned by commit.
+
 ## 2.9.0
 
 **Edition v1.17 (the delivery edition).** What the session layer DELIVERS. A warning that
@@ -38,7 +197,7 @@ by checking the scope hook's path matching case by case before its warning becam
   `.git` beneath an enclosing repository is read through that repository, as it always was. This is a FIX: the
   refusal was reproduced on unchanged bytes two releases running.
 - **The drift report, in `/setlist:upgrade`.** The refresh reads your `CLAUDE.md`,
-  `RUNBOOK.md`, `specs/TEMPLATE.md` and your own skills against the edition it is moving you
+  `RUNBOOK.md`, `specs/TEMPLATE.md` and your instance's skills under `.claude/skills/` against the edition it is moving you
   to, and names every line claiming an older edition, or naming a model-ladder tier beside a
   model the edition binds elsewhere, with the file, the line, the string found and the value
   the edition holds. It reports and never rewrites, and the migration chore does not close

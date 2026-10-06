@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Setlist Stop hook: refuses to END A TURN that leaves a spec or specs/STATUS.md
 # changed and unstaged in the working tree (2.6.0, spec 0132 cluster H; the
 # owner's ruling 5 on the 2.6.0 strategy; external review minor 2). Stamped
@@ -48,18 +49,6 @@ set -u
 
 # THE CODE IS EXTRACTED BY THE SHELL (KL11's rule, from birth): the last
 # well-formed bracketed token of the reason.
-adv_code_of() { # adv_code_of <reason> -> sets ADV_CODE
-  local rest="$1" cand
-  ADV_CODE=""
-  while [[ "$rest" == *"["* ]]; do
-    rest="${rest#*\[}"
-    [[ "$rest" == *"]"* ]] || break
-    cand="${rest%%\]*}"
-    case "$cand" in
-      [A-Z]*) case "$cand" in *[!A-Z0-9-]*) ;; *) ADV_CODE="$cand" ;; esac ;;
-    esac
-  done
-}
 
 # json_str <text> -> a JSON string literal, by the shell (no jq on this path).
 json_str() {
@@ -68,11 +57,19 @@ json_str() {
   printf '"%s"' "$s"
 }
 
-refuse() { # refuse <reason>  -> the block, on stdout, exit 0
+refuse() { # refuse <code> <reason>  -> the block, on stdout, exit 0
   # The toolchain report rides AHEAD of the refusal so the refusal's own code
-  # is the last bracket, which is the one the reader extracts.
-  local reason="${JQ_NOTE}$1"
-  adv_code_of "$reason"
+  # is the last bracket a reader sees; the MACHINE-READABLE code is passed in
+  # by the caller (spec 0164, fix round 2, F19 of the 2.10.0 leg), because
+  # scanning it back out of the rendered text read a bracketed token in a spec
+  # FILENAME as the code: a spec whose name carried a bracketed token published
+  # that token as the advisory code beside the refusal, for a benign name as
+  # readily as a crafted one. The refusal itself was always right; only its
+  # label was the filename. (No example is spelled here with its brackets: the
+  # suite reads this file for the code family, and an example would read as a
+  # fifth code.)
+  local code="$1" reason="${JQ_NOTE}$2"
+  ADV_CODE="$code"
   printf '{"decision":"block","reason":%s,"setlistAdvisory":{"gate":"stop","verdict":"block","code":%s,"reason":%s}}\n' \
     "$(json_str "setlist stop hook: $reason")" "$(json_str "$ADV_CODE")" "$(json_str "$reason")"
   # fail-open-ok: this exit 0 delivers a BLOCK, not an allow: the harness reads
@@ -95,6 +92,13 @@ case "$INPUT" in
   *'"stop_hook_active":true'*|*'"stop_hook_active": true'*) exit 0 ;;
 esac
 
+# JQ'S LINE ENDING (spec 0179). A native jq on Windows ends every line in CRLF,
+# and Git Bash drops a CR only at the very end of a command substitution, so
+# every line of a jq list but the last kept one ("src\r") and each verdict read
+# from a list failed open. jq -b (jq 1.7 and later) writes LF there. The probe
+# reads a two-line list, so a jq that ends lines in CR is found on any platform;
+# one that also refuses -b fails this file's output probe and is refused by name.
+case "$(printf '["x","y"]' | command jq -r '.[]' 2>/dev/null)" in *$'\r'*) jq() { command jq -b "$@"; } ;; esac
 PROJ="${CLAUDE_PROJECT_DIR:-}"
 if [[ -z "$PROJ" ]]; then
   # The payload's cwd, read by jq when jq works and by a substring when it does
@@ -123,18 +127,72 @@ fi
 
 JQ_NOTE=""
 if [[ "$(printf '{"probe":"x"}' | jq -r '.probe' 2>/dev/null)" != "x" ]]; then
-  JQ_NOTE="[SP-JQ-BROKEN]: jq is missing or does not work on this machine, so the scope hook is reporting its verdicts while permitting, the bypass deny is silent, and the git hooks refuse; run jq --version to see which, then install or repair it. Reported here because this hook decides without jq and can still speak. "
+  JQ_NOTE="[SP-JQ-BROKEN]: jq is broken here; run jq --version. "
 fi
+
+# EVERY NAME AND PATH IS BOUNDED, SO THE 480-CHARACTER BOUND HOLDS MECHANICALLY
+# (spec 0164, fix round 2, F18 and F24 of the 2.10.0 leg; spec 0171, L2 F21 and
+# sweep I16 of 0169). The bound is a claim the changelog makes about EVERY
+# rendered refusal, the note on a machine without a working jq included. A file
+# name and a root path are the repository's and the machine's text, and this
+# reason is read by the model, so each is printed through the path set every
+# Setlist message uses (A-Z a-z 0-9 . _ / space : + = @ -, every other byte a ?,
+# the edit said once per reason), quoted, its middle elided past 36 characters,
+# and a list is one name plus a count, never re-split (L2 F18: a name carrying a
+# comma-space read as two files). 36 is the budget's own arithmetic: the worst
+# reason (STATUS.md, a spec and an untracked spec, jq broken) is 249 fixed
+# characters of text plus the 19 of the prefix, the 52 of the jq note and the 48
+# of the edit note, and two names of at most 38 quoted characters each with a
+# count of at most 14 ("and 999+ more"), 472 in all, which the suite renders.
+bound_paths() { # bound_paths <count> <name> -> the name bounded, quoted, plus how many more
+  local n="$1" v="$2" s LC_ALL=C
+  s="${v//[^A-Za-z0-9._\/ :+=@-]/?}"
+  if [[ "${#s}" -gt 36 ]]; then s="${s:0:16}...${s: -17}"; fi
+  printf '"%s"' "$s"
+  if [[ "$n" -gt 1000 ]]; then printf ' and 999+ more'
+  elif [[ "$n" -gt 1 ]]; then printf ' and %d more' "$((n - 1))"; fi
+}
+# The one clause that says a value was edited, appended once per reason when
+# any bounded value carries a ? (inline at each reason: no second function).
+EDITED=' (characters outside a path set replaced with ?)'
 
 # THE READ. git is asked directly for the working tree's state under specs/;
 # a git that cannot answer is a refusal by name, never a pass on silence.
 if ! git -C "$PROJ" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  refuse "[SP-NO-GIT]: git could not read $PROJ as a work tree, so whether this turn leaves the spec record unstaged cannot be checked, and a check that could not run has not passed. Run git status there to see the failure (git missing from PATH, a corrupt .git, or a directory that is not the instance root all look like this), repair it, then end the turn."
+  # THE REMEDY NAMES NO PATH (spec 0171, L2 F21): the path is bounded, and an
+  # elided path in a remedy is a command that cannot run, so the fix leads whole
+  # and the path follows it.
+  PROJ_R="$(bound_paths 1 "$PROJ")"; E=""; case "$PROJ_R" in *'?'*) E="$EDITED" ;; esac
+  refuse SP-NO-GIT "[SP-NO-GIT]: run git status in the project root to see the failure, repair it, then end the turn. git could not read $PROJ_R as a work tree (git missing from PATH, a corrupt .git, or not the instance root), so the spec record cannot be checked.$E"
 fi
-if ! STATUS="$(git -C "$PROJ" status --porcelain=v1 --untracked-files=all -- specs/ 2>/dev/null)"; then
-  refuse "[SP-NO-GIT]: git status failed under $PROJ/specs, so whether this turn leaves the spec record unstaged cannot be checked, and a check that could not run has not passed. Run git status there to see the failure, repair it, then end the turn."
+# THE REPOSITORY GIT READ MUST BE THIS ONE (DE19, spec 0159; F6 of the 2.9.0
+# leg). Below a corrupt or empty .git, git walks past it and answers for an
+# ENCLOSING repository, whose specs/ may ignore the instance entirely, so the
+# turn ended in silence or was refused over the parent's paths. The top git
+# reports is compared with the root as a DIRECTORY (the same device and inode,
+# the shell's -ef), never as a string: git answers with the stored, physical
+# spelling, so a project reached through a symlink, or typed in another case on
+# a filesystem that folds case, is the same directory and must still be judged
+# (the second measured by this spec's cold review, round 3). A .git entry exists
+# here (the DE11 guard above), so a different directory is a broken repository.
+GIT_TOP="$(git -C "$PROJ" rev-parse --show-toplevel 2>/dev/null)" || GIT_TOP=""
+if [[ -z "$GIT_TOP" ]] || ! [[ "$GIT_TOP" -ef "$PROJ" ]]; then
+  PROJ_R="$(bound_paths 1 "$PROJ")"; TOP_R="no repository"; [[ -z "$GIT_TOP" ]] || TOP_R="$(bound_paths 1 "$GIT_TOP")"
+  E=""; case "$PROJ_R$TOP_R" in *'?'*) E="$EDITED" ;; esac
+  refuse SP-NO-GIT "[SP-NO-GIT]: run git status in the project root, repair its .git, then end the turn. git read $TOP_R in place of $PROJ_R, so the spec record cannot be checked.$E"
 fi
-
+# THE PORCELAIN IS READ WITH -z (spec 0171, L2 F14 of the 2.10.0 second leg):
+# NUL-terminated records that git never quotes, so no delimiter is parsed out
+# of a name. The line form quoted a path carrying a space and wrote a rename as
+# "old -> new", and this loop took the text after " -> " BEFORE stripping the
+# quotes, so an untracked spec whose name carried " -> " read as a path ending
+# in a quote, failed the Markdown test and ended the turn in silence. A rename or
+# a copy is followed by one more record, its old path, which is consumed here.
+# (The -z form is also what spec 0164's F17 wanted of core.quotePath=false: a
+# name is read as the bytes it is.) git's exit status rides a last record of
+# this hook's own, which no porcelain record can spell (an XY code never starts
+# with #), because a NUL cannot be kept in a variable to be read after the fact.
+#
 # UNSTAGED means the working tree differs from the index: porcelain's second
 # column is not a space (modified, deleted, type-changed), or the entry is
 # untracked (??). A change that is STAGED is the session's deliberate act and
@@ -146,33 +204,42 @@ fi
 # .md file is the spec record; a .DS_Store, an editor swap file or a merge's .orig
 # is not, and refusing every turn on one offered two remedies that fail on a file
 # git has never tracked. Such a file gets its own remedy line below.
-UNSTAGED_STATUS=""; UNSTAGED_SPECS=""; UNTRACKED_SPECS=""
-while IFS= read -r line; do
-  [[ -n "$line" ]] || continue
-  x="${line:0:1}"; y="${line:1:1}"; path="${line:3}"
-  case "$path" in *' -> '*) path="${path##* -> }" ;; esac
-  case "$path" in \"*\") path="${path#\"}"; path="${path%\"}" ;; esac
+UNSTAGED_STATUS=""; N_SPECS=0; FIRST_SPEC=""; N_UNTRACKED=0; FIRST_UNTRACKED=""; STATUS_RC=""
+while IFS= read -r -d '' rec; do
+  case "$rec" in '#rc='*) STATUS_RC="${rec#\#rc=}"; continue ;; esac
+  [[ -n "$rec" ]] || continue
+  x="${rec:0:1}"; y="${rec:1:1}"; path="${rec:3}"
+  case "$x" in R|C) IFS= read -r -d '' _ || true ;; esac
   if [[ "$x$y" == "??" ]]; then
-    case "$path" in *.md) UNTRACKED_SPECS="${UNTRACKED_SPECS:+$UNTRACKED_SPECS, }$path" ;; *) continue ;; esac
+    case "$path" in *.md) N_UNTRACKED=$((N_UNTRACKED + 1)); [[ -n "$FIRST_UNTRACKED" ]] || FIRST_UNTRACKED="$path" ;; *) continue ;; esac
   fi
   if [[ "$x$y" == "??" || "$y" != " " ]]; then
     case "$path" in
       specs/STATUS.md) UNSTAGED_STATUS="$path" ;;
-      *) UNSTAGED_SPECS="${UNSTAGED_SPECS:+$UNSTAGED_SPECS, }$path" ;;
+      *) N_SPECS=$((N_SPECS + 1)); [[ -n "$FIRST_SPEC" ]] || FIRST_SPEC="$path" ;;
     esac
   fi
-done <<< "$STATUS"
-
-UNTRACKED_NOTE=""
-if [[ -n "$UNTRACKED_SPECS" ]]; then
-  UNTRACKED_NOTE=" Git has never tracked $UNTRACKED_SPECS, so git restore does not apply to it: stage it (git add $UNTRACKED_SPECS) if it is a spec record, or remove it if it is not."
+done < <(git -C "$PROJ" status --porcelain=v1 -z --untracked-files=all -- specs/ 2>/dev/null; printf '#rc=%s\0' "$?")
+if [[ "$STATUS_RC" != "0" ]]; then
+  PROJ_R="$(bound_paths 1 "$PROJ")"; E=""; case "$PROJ_R" in *'?'*) E="$EDITED" ;; esac
+  refuse SP-NO-GIT "[SP-NO-GIT]: run git status -- specs/ in the project root to see the failure, repair it, then end the turn. It failed in $PROJ_R, so the spec record cannot be checked.$E"
 fi
-if [[ -n "$UNSTAGED_STATUS" && -n "$UNSTAGED_SPECS" ]]; then
-  refuse "[SP-UNSTAGED-STATUS]: specs/STATUS.md is changed and not staged, and so is the spec record ($UNSTAGED_SPECS). A turn that ends here leaves the inventory and the record disagreeing with what is committed, and the next session re-grounds on the committed page. Stage them (git add specs/) and commit them with the work they describe, or restore them (git checkout -- specs/STATUS.md, git restore <file>) if the edit was not meant, then end the turn.$UNTRACKED_NOTE This hook refuses once; the continuation it grants passes."
+
+SPECS_R=""; [[ "$N_SPECS" -eq 0 ]] || SPECS_R="$(bound_paths "$N_SPECS" "$FIRST_SPEC")"
+UNTRACKED_NOTE=""; UNTRACKED_R=""
+if [[ "$N_UNTRACKED" -gt 0 ]]; then
+  # The path is named ONCE; the remedy takes the directory, which git always
+  # accepts and which no filename can make unrunnable.
+  UNTRACKED_R="$(bound_paths "$N_UNTRACKED" "$FIRST_UNTRACKED")"
+  UNTRACKED_NOTE=" Untracked: $UNTRACKED_R; git add specs/ or remove it."
+fi
+EDIT_NOTE=""; case "$SPECS_R$UNTRACKED_R" in *'?'*) EDIT_NOTE="$EDITED" ;; esac
+if [[ -n "$UNSTAGED_STATUS" && "$N_SPECS" -gt 0 ]]; then
+  refuse SP-UNSTAGED-STATUS "[SP-UNSTAGED-STATUS]: stage specs/ (git add specs/) and commit it, or git restore what was not meant, then end the turn. STATUS.md and $SPECS_R are unstaged; the next session reads the committed page.$UNTRACKED_NOTE$EDIT_NOTE Refuses once."
 elif [[ -n "$UNSTAGED_STATUS" ]]; then
-  refuse "[SP-UNSTAGED-STATUS]: specs/STATUS.md is changed and not staged. A turn that ends here leaves the inventory page disagreeing with what is committed, and the next session re-grounds on the committed page. Stage it (git add specs/STATUS.md) and commit it with the work it describes, or restore it (git checkout -- specs/STATUS.md) if the edit was not meant, then end the turn. This hook refuses once; the continuation it grants passes."
-elif [[ -n "$UNSTAGED_SPECS" ]]; then
-  refuse "[SP-UNSTAGED-SPEC]: the spec record is changed and not staged ($UNSTAGED_SPECS). A turn that ends here leaves the record disagreeing with what is committed, and the next session re-grounds on the committed page. Stage it (git add specs/) and commit it with the work it describes, or restore it (git restore <file>) if the edit was not meant, then end the turn.$UNTRACKED_NOTE This hook refuses once; the continuation it grants passes."
+  refuse SP-UNSTAGED-STATUS "[SP-UNSTAGED-STATUS]: stage specs/STATUS.md (git add specs/STATUS.md) and commit it with its work, or git restore it if not meant, then end the turn. It is unstaged, and the next session re-grounds on the committed page. Refuses once."
+elif [[ "$N_SPECS" -gt 0 ]]; then
+  refuse SP-UNSTAGED-SPEC "[SP-UNSTAGED-SPEC]: stage specs/ (git add specs/) and commit it, or git restore what was not meant, then end the turn. The spec record ($SPECS_R) is unstaged; the next session reads the committed page.$UNTRACKED_NOTE$EDIT_NOTE Refuses once."
 fi
 
 # fail-open-ok: every file under specs/ is committed or staged, which is the

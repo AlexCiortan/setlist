@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Setlist pre-commit hook: the CHEAP checks, over the index that is about to
 # become a commit.
 #
@@ -51,6 +52,33 @@
 
 set -u
 
+# THE CHAIN RUNNER'S ENTRY (spec 0173, item 2). One EXIT trap, set before anything
+# can exit, so whatever this hook decides (a pass, a refusal, the SETLIST_SKIP_HOOKS
+# escape), a hook manager recorded as "hooks_chain" in .claude/sdd.json then runs
+# its hook of the same name with the same arguments, and the exit status carries
+# both verdicts (slh_chain_displaced in the library says how). The library is
+# sourced here when this hook exited before sourcing it. It deletes nothing: this
+# hook creates no directory (spec 0180, F11: a line copied from pre-push removed
+# whatever path the caller's environment named CFG_TMPD).
+SETLIST_HOOK_ARGS=("$@")
+setlist_chain_on_exit() {
+  local rc=$? lib top
+  trap - EXIT
+  if ! declare -F slh_chain_displaced >/dev/null; then
+    lib="$(dirname "$0")/setlist-hook-lib.sh"
+    [ -f "$lib" ] || exit "$rc"
+    # shellcheck source=/dev/null
+    . "$lib" || exit "$rc"
+  fi
+  # A library without the chain runner (a mixed generation the refresh's atomic
+  # delivery never produces) leaves the hook's own status in charge.
+  declare -F slh_chain_displaced >/dev/null || exit "$rc"
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit "$rc"
+  slh_chain_displaced "$top" "${0##*/}" "$rc" ${SETLIST_HOOK_ARGS[@]+"${SETLIST_HOOK_ARGS[@]}"}
+  exit $?
+}
+trap setlist_chain_on_exit EXIT
+
 if [ "${SETLIST_SKIP_HOOKS:-}" = "1" ]; then
   printf 'setlist: pre-commit skipped by SETLIST_SKIP_HOOKS=1\n' >&2
   # fail-open-ok: the DOCUMENTED escape hatch, announced on stderr.
@@ -77,6 +105,11 @@ if [ -z "$LIB" ]; then
 fi
 # shellcheck source=/dev/null
 . "$LIB"
+
+# THE CHAINED HOOK RUNS FIRST HERE (spec 0180, F4): the index this hook judges becomes
+# the commit, and a chained hook that restages would otherwise change it after the
+# scan below read it. Its status waits for the exit trap, which combines both verdicts.
+slh_chain_first "$PROJ" "${0##*/}" ${SETLIST_HOOK_ARGS[@]+"${SETLIST_HOOK_ARGS[@]}"}
 
 # The tools the library runs on must actually work before anything it decides can
 # be trusted. A broken grep turned this hook into a silent pass (v1.7 gate, F2).
@@ -112,6 +145,9 @@ STAGED="$(slh_staged_files "$PROJ")"
 # substitution loses it: a git that ran and died rendered nothing, and nothing
 # read as clean. A scan that could not run has not passed.
 if __DIFF="$(git -C "$PROJ" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ 2>/dev/null)"; then
+  # Text past a -diff or binary attribute (spec 0173, item 5; the library says how and why).
+  __DIFF="$__DIFF
+$(slh_scan_text_past_attributes "$PROJ" cached)"
   slh_scan_added "$PROJ" "$__DIFF" "staged content"
 else
   slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render the staged diff, so the scan of staged content read nothing and has judged nothing. A scan that could not run has not passed. Run 'git diff --cached' here to see the failure (a configuration value git cannot parse, or a diff driver that fails, looks like this)."
@@ -150,14 +186,14 @@ if slh_record_present "$PROJ" ""; then
   # adoption commit that creates the record is an opt-in, not a flip) demands
   # the human page in the same commit, which is what checkpoint writes anyway.
   if git -C "$PROJ" diff --cached --name-only --diff-filter=M 2>/dev/null | grep -qx '.claude/status.json'; then
-    if ! printf '%s\n' "$STAGED" | grep -qx 'specs/STATUS.md'; then
+    if ! grep -qx 'specs/STATUS.md' <<< "$STAGED"; then
       slh_refuse "SLH-STATUS-MISSING" "this commit changes the status record (.claude/status.json) but does not stage specs/STATUS.md; /setlist:checkpoint writes the record and the human inventory page in the same commit, so a record change arriving alone is a hand edit or half a checkpoint."
     fi
   fi
   # A STAGED RECORD MUST PARSE, at the earliest layer that can refuse it. This
   # is where a hand edit outside checkpoint gets caught before it is history:
   # present-and-malformed refuses, never a pass, never a fallback to the page.
-  if printf '%s\n' "$STAGED" | grep -qx '.claude/status.json'; then
+  if grep -qx '.claude/status.json' <<< "$STAGED"; then
     __REC_STAGED="$(slh_record_show "$PROJ" "")"
     if [ "$(slh_record_verdict "$__REC_STAGED")" != "ok" ]; then
       slh_refuse "SLH-RECORD-MALFORMED" "the staged .claude/status.json is not a well-formed status record (Part 3 of the edition: setlist_status 1; specs.<num> with a lowercase lifecycle token, qa_pass_1 exactly ok, diagram exactly updated or no-impact; chores.<id> open or done with files as an array). Only /setlist:checkpoint writes this file; fix the staged copy rather than committing a record no gate can read, because every gate that reads it refuses a malformed record outright."
@@ -175,7 +211,7 @@ else
 $SPEC_LIST
 EOF
   if [ "${#SPEC_PATHS[@]}" -gt 0 ] && slh_lifecycle_added "$PROJ" "$STATES_RE" "${SPEC_PATHS[@]}"; then
-    if ! printf '%s\n' "$STAGED" | grep -qx 'specs/STATUS.md'; then
+    if ! grep -qx 'specs/STATUS.md' <<< "$STAGED"; then
       slh_refuse "SLH-STATUS-MISSING" "this commit changes a spec lifecycle state but does not stage specs/STATUS.md; update the inventory row in the same commit."
     fi
   fi
@@ -206,8 +242,14 @@ ATTEST_ROLES="$(slh_role_paths "$PROJ")" || exit 1
 ATTEST_CODE=0
 if [ -n "$ATTEST_ROLES" ]; then
   while IFS= read -r __rp; do
+    # THROUGH THE SHARED NORMALISATION (spec 0164, fix round 2, F8): this was
+    # the one role reader that normalised nothing, so a declared "src/",
+    # "./src" or "src//" matched no staged path and the attestation
+    # requirement fell silent over exactly the work it governs.
+    __rp="$(slh_role_norm "$__rp")"
     [ -n "$__rp" ] || continue
-    if printf '%s\n' "$STAGED" | grep -qE "^$__rp/"; then ATTEST_CODE=1; fi
+    # A literal prefix, as the trunk audit reads a role (spec 0169, E-e).
+    if printf '%s\n' "$STAGED" | SLH_ROLE="$__rp" awk 'index($0, ENVIRON["SLH_ROLE"] "/") == 1 || $0 == ENVIRON["SLH_ROLE"] { f = 1 } END { exit !f }'; then ATTEST_CODE=1; fi
   done <<EOF
 $ATTEST_ROLES
 EOF
@@ -281,6 +323,11 @@ if [ -n "$LANDING" ] && slh_on_trunk "$PROJ" "$TRUNK"; then
   SLH_CLOSE_SINGLE_PARENT=0
   # shellcheck disable=SC2034  # read by slh_verify_close in the sourced library, which is the contract its header comment states
   [ "$LANDING" = "squash merge" ] && SLH_CLOSE_SINGLE_PARENT=1
+  # An octopus left staged (a conflicted `git merge a b`) completes here: MERGE_HEAD
+  # carries one line per merged head (spec 0173, item 4).
+  if [ "$LANDING" = "merge" ]; then
+    slh_refuse_octopus "$TRUNK" "$(grep -c . "$GITDIR/MERGE_HEAD" 2>/dev/null || printf '0')"
+  fi
   # fail-open-ok: both refusals are recorded in SLH_REFUSED and decided below, so
   # a non-zero return must not abort before every check has had its say.
   slh_verify_close "$PROJ" "$TRUNK" "this $LANDING" || true

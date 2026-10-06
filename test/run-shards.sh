@@ -2,7 +2,8 @@
 #
 # run-shards.sh - run test/run-tests.sh as N parallel shards and aggregate.
 #
-# Usage: bash test/run-shards.sh [--shards N] [--verify]
+# Usage: bash test/run-shards.sh [--shards N] [--verify] [--smoke] [--retry-dead] [--whole-failures]
+#        (N defaults to the host's core count)
 # Exit:  0  every shard green and every invariant held
 #        1  a shard was red, or the aggregation refused
 #        2  usage error, or a precondition that makes the answer meaningless
@@ -44,15 +45,27 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SUITE="$SCRIPT_DIR/run-tests.sh"
-SHARDS=4
+# ONE SHARD PER CORE by default (spec 0168, item 2). The default was 4 while the
+# prelude ran in every shard and more shards only repeated it: on the reference
+# Mac 8 and 10 shards read 215 and 245 s against 243 s at 4. With the prelude in
+# measured regions the same host reads 171, 125, 109 and 106 s at 4, 6, 8 and 10,
+# so the host's own core count is the default and --shards still overrides it.
+SHARDS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || true)"
+case "$SHARDS" in ''|*[!0-9]*|0) SHARDS=4 ;; esac
 VERIFY=0
+SMOKE_ARG=""   # --smoke: the platform smoke's regions only (spec 0168, item 8)
+RETRY_DEAD=0   # --retry-dead: one retry of a shard that died before its first case (spec 0180)
+WHOLE_FAIL=0   # --whole-failures: every detail line of a red shard's failures (spec 0180, E-j)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --shards) SHARDS="${2:-}"; shift 2 || exit 2 ;;
     --verify) VERIFY=1; shift ;;
-    -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
-    *) printf 'usage: %s [--shards N] [--verify]\n' "$0" >&2; exit 2 ;;
+    --smoke) SMOKE_ARG="--smoke"; shift ;;
+    --retry-dead) RETRY_DEAD=1; shift ;;
+    --whole-failures) WHOLE_FAIL=1; shift ;;
+    -h|--help) sed -n '2,9p' "$0"; exit 0 ;;
+    *) printf 'usage: %s [--shards N] [--verify] [--smoke] [--retry-dead] [--whole-failures]\n' "$0" >&2; exit 2 ;;
   esac
 done
 
@@ -68,9 +81,21 @@ W="$(mktemp -d "${TMPDIR:-/tmp}/setlist-shards.XXXXXX")" || {
   exit 2
 }
 trap 'rm -rf "$W"' EXIT
+# A DEAD SHARD'S LOG OUTLIVES THE SCRATCH (spec 0179, 0168's E-i as ruled). A shard
+# that recorded no exit status or no totals line is the one whose log matters, and
+# the trap above deletes it with the scratch, so a shard that died on the Windows
+# guest in run 35955750662 left nothing to diagnose. The log is copied beside the
+# scratch, under the same TMPDIR, and its path is printed with the refusal.
+keep_dead_log() { # keep_dead_log <k>
+  local keep
+  [[ -f "$W/log$1" ]] || { printf '                    It left no log at all.\n' >&2; return 0; }
+  keep="$(mktemp "${TMPDIR:-/tmp}/setlist-dead-shard-$1of$SHARDS.XXXXXX")" && cp "$W/log$1" "$keep" \
+    && printf '                    Its whole log is kept at %s\n' "$keep" >&2
+}
 
 # --- the manifest, fail closed ----------------------------------------------
-bash "$SUITE" --list-regions > "$W/manifest" 2>/dev/null || {
+bash "$SUITE" --list-regions $SMOKE_ARG > "$W/manifest" 2>"$W/manifest.err" || {
+  cat "$W/manifest.err" >&2
   printf 'run-shards: the suite refused --list-regions, so the region set is unknown.\n' >&2
   exit 2
 }
@@ -88,20 +113,59 @@ if [[ "$(LC_ALL=C sort -u "$W/manifest" | grep -c .)" -ne "$MANIFEST_N" ]]; then
   exit 2
 fi
 
-printf 'run-shards: %s regions, %s shards, one TMPDIR each\n\n' "$MANIFEST_N" "$SHARDS"
+printf 'run-shards: %s regions, %s shards, one TMPDIR each%s\n\n' "$MANIFEST_N" "$SHARDS" "${SMOKE_ARG:+ (the platform smoke)}"
 
 # --- run ---------------------------------------------------------------------
 START="$(date +%s)"
+run_shard() { # run_shard <k>: one shard, its log, exit status and end time under $W
+  TMPDIR="$W/tmp$1" bash "$SUITE" --shard "$1/$SHARDS" $SMOKE_ARG > "$W/log$1" 2>&1
+  printf '%d\n' "$?" > "$W/rc$1"
+  date +%s > "$W/end$1"
+}
 k=1
 while [[ "$k" -le "$SHARDS" ]]; do
   mkdir -p "$W/tmp$k"
-  (
-    TMPDIR="$W/tmp$k" bash "$SUITE" --shard "$k/$SHARDS" > "$W/log$k" 2>&1
-    printf '%d\n' "$?" > "$W/rc$k"
-  ) &
+  run_shard "$k" &
   k=$((k + 1))
 done
 wait
+
+# ONE RETRY OF A SHARD THAT DIED BEFORE ITS FIRST CASE (spec 0180; the validator's ruling at 0179's
+# close). On the Windows guest a shard's own bash has died about 26 s in, before any case, under the
+# runner's service account on the emulated machine (the E-h class of 0179 reaching a shard process):
+# its log held the header and the root line and nothing else (254a928, e1aee07), and the same bytes
+# read green on the next run. With --retry-dead, and only then, such a shard is run ONCE more in a
+# fresh TMPDIR, and its first log is printed whole into this output first, with a DEAD-SHARD: line per
+# death so every sighting is counted. A shard that died after a case line is never retried, and a
+# second death is refused exactly as the first would have been: the retry adds a run, it never removes
+# a refusal. The Windows jobs pass the flag; every other caller reads the wrapper as it was.
+shard_dead() { [[ ! -f "$W/rc$1" ]] || ! grep -qE '^passed [0-9]+, failed [0-9]+, total [0-9]+$' "$W/log$1" 2>/dev/null; }
+shard_casefree() { ! grep -qE '^(PASS|FAIL) ' "$W/log$1" 2>/dev/null; }
+print_dead_log() { # print_dead_log <k> <label>
+  printf 'DEAD-SHARD: shard %d/%d %s; its whole log (%s lines):\n' "$1" "$SHARDS" "$2" "$( (cat "$W/log$1" 2>/dev/null || true) | wc -l | tr -d ' ')" >&2
+  if [[ -f "$W/log$1" ]]; then sed 's/^/    | /' "$W/log$1" >&2; else printf '    | (no log)\n' >&2; fi
+}
+if [[ "$RETRY_DEAD" -eq 1 ]]; then
+  k=1
+  while [[ "$k" -le "$SHARDS" ]]; do
+    if shard_dead "$k"; then
+      if shard_casefree "$k"; then
+        print_dead_log "$k" "died before its first case, retried once"
+        keep_dead_log "$k"
+        rm -rf "$W/tmp$k" "$W/rc$k" "$W/end$k"; mkdir -p "$W/tmp$k"
+        run_shard "$k"
+        if shard_dead "$k"; then
+          print_dead_log "$k" "died AGAIN on its one retry, so it is refused below, by name"
+        else
+          printf 'DEAD-SHARD: shard %d/%d completed on its one retry.\n' "$k" "$SHARDS" >&2
+        fi
+      else
+        print_dead_log "$k" "died after a case line, which is never retried"
+      fi
+    fi
+    k=$((k + 1))
+  done
+fi
 END="$(date +%s)"
 
 # --- aggregate ---------------------------------------------------------------
@@ -116,6 +180,7 @@ while [[ "$k" -le "$SHARDS" ]]; do
   if [[ ! -f "$W/rc$k" ]]; then
     printf 'run-shards REFUSED: shard %d/%d never recorded an exit status. It did not run to\n' "$k" "$SHARDS" >&2
     printf '                    completion, and a missing shard is not an empty shard.\n' >&2
+    keep_dead_log "$k"
     fails=$((fails + 1)); k=$((k + 1)); continue
   fi
   rc="$(cat "$W/rc$k")"
@@ -128,6 +193,7 @@ while [[ "$k" -le "$SHARDS" ]]; do
     printf 'run-shards REFUSED: shard %d/%d produced no totals line, so it reported no\n' "$k" "$SHARDS" >&2
     printf '                    denominator at all. Last lines of its log:\n' >&2
     tail -n 5 "$W/log$k" | sed 's/^/                    /' >&2
+    keep_dead_log "$k"
     fails=$((fails + 1)); k=$((k + 1)); continue
   fi
   p="$(printf '%s' "$tot" | sed -E 's/^passed ([0-9]+), failed ([0-9]+).*/\1/')"
@@ -153,7 +219,16 @@ while [[ "$k" -le "$SHARDS" ]]; do
 
   if [[ "$rc" -ne 0 ]]; then
     printf '  shard %d/%d is RED. Its failures:\n' "$k" "$SHARDS" >&2
-    grep -A1 '^FAIL ' "$W/log$k" | sed 's/^/    /' >&2
+    if [[ "$WHOLE_FAIL" -eq 1 ]]; then
+      # Every line of each failure, up to the next case, region or timing line (spec 0180, E-j:
+      # one detail line per failure named no cause for the runner account's five cases). Each
+      # terminator is the suite's own spelling of that line, the case lines' two spaces included
+      # (spec 0180, fix round 2, the 2.11.0 leg's F14): a detail line that merely BEGAN with one
+      # of the words, "PASS 2 of a captured sub-run", ended the failure and dropped the cause.
+      awk '/^FAIL  /{on=1; print; next} on && (/^PASS  / || /^__REGION__ [^ ]+ [0-9]+ [0-9]+/ || /^__SHARD__ [0-9]+\/[0-9]+ / || /^TIME [0-9]+\.[0-9][0-9][0-9][0-9][0-9][0-9] / || /^HOOKTIME [^ ]+ [0-9]+\.[0-9][0-9][0-9][0-9][0-9][0-9] / || /^passed [0-9]+, failed [0-9]+, total [0-9]+/){on=0} on' "$W/log$k" | sed 's/^/    /' >&2
+    else
+      grep -A1 '^FAIL ' "$W/log$k" | sed 's/^/    /' >&2
+    fi
     fails=$((fails + 1))
   fi
 
@@ -200,6 +275,18 @@ if LC_ALL=C comm -23 "$W/manifest_sorted" "$W/claimed_uniq" > "$W/unclaimed" && 
     printf 'run-shards REFUSED: region %s was claimed by NO shard, so it did not run in this\n' "$id" >&2
     printf '                    parallel run at all and the total below would be short by it.\n' >&2
   done < "$W/unclaimed"
+  # The shard that should have run them is one that claimed NO region although the
+  # manifest gave it some: it printed its totals, so the refusal above kept no log.
+  # Its log is the one that says why (spec 0179: shard 5 of 8 did this once on the
+  # Windows guest, the platform smoke at b85d71b, and left nothing to read).
+  k=1
+  while [[ "$k" -le "$SHARDS" ]]; do
+    if [[ -f "$W/log$k" ]] && ! grep -q '^__REGION__ ' "$W/log$k"; then
+      printf 'run-shards: shard %d/%d claimed no region.\n' "$k" "$SHARDS" >&2
+      keep_dead_log "$k"
+    fi
+    k=$((k + 1))
+  done
   fails=$((fails + 1))
 fi
 if LC_ALL=C comm -13 "$W/manifest_sorted" "$W/claimed_uniq" > "$W/unknown" && [[ -s "$W/unknown" ]]; then
@@ -227,7 +314,7 @@ fi
 if [[ "$VERIFY" -eq 1 ]]; then
   printf '\nrun-shards --verify: running the suite unsharded on this host to compare.\n'
   mkdir -p "$W/tmpfull"
-  TMPDIR="$W/tmpfull" bash "$SUITE" > "$W/logfull" 2>&1
+  TMPDIR="$W/tmpfull" bash "$SUITE" $SMOKE_ARG > "$W/logfull" 2>&1
   fullrc=$?
   fulltot="$(grep -E '^passed [0-9]+, failed [0-9]+, total [0-9]+$' "$W/logfull" | tail -n 1)"
   fullp="$(printf '%s' "$fulltot" | sed -E 's/^passed ([0-9]+),.*/\1/')"
@@ -240,6 +327,28 @@ if [[ "$VERIFY" -eq 1 ]]; then
   else
     printf 'verify: sharded and unsharded agree at %d assertions on this host.\n' "$((sum_pass + sum_fail))"
   fi
+fi
+
+# PER-SHARD ELAPSED, and with SETLIST_SUITE_TIMES=1 every case's TIME line
+# (spec 0165, the owner's instruction on the Windows measurement): the wall
+# clock alone cannot say which shard, or which case, carries a platform's gap.
+# Printed before the totals line, which stays the last line its callers read.
+printf '\n'
+k=1
+while [[ "$k" -le "$SHARDS" ]]; do
+  if [[ -f "$W/end$k" ]]; then
+    printf 'shard %d/%d: elapsed %ds\n' "$k" "$SHARDS" "$(( $(cat "$W/end$k") - START ))"
+  fi
+  k=$((k + 1))
+done
+if [[ "${SETLIST_SUITE_TIMES:-}" == "1" || "${SETLIST_SUITE_HOOKTIME:-}" == "1" ]]; then
+  # HOOKTIME lines too (spec 0168, item 7): the hooks' share measured per shard would
+  # otherwise stay in the shard logs this wrapper deletes.
+  k=1
+  while [[ "$k" -le "$SHARDS" ]]; do
+    grep -E '^(TIME|HOOKTIME) ' "$W/log$k" 2>/dev/null | sed "s|^|shard $k/$SHARDS |"
+    k=$((k + 1))
+  done
 fi
 
 printf '\n%s\n' "-----------------------------------------------"

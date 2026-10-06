@@ -205,6 +205,63 @@ KNOWN_SETLIST_HOOK_BLOBS="
   f87c78c62f2a925a3ac52adabf740d5d061aba60
   fb240463618c7b16025c217e75b833437f6c8512
   ff54ee3f1de169584ad16713ba79cf561c5d8d66
+  38ab0ea94e84a885aebbe412e310075dccca22a7
+  8e5002d0abf0e57ddc66e79566c5202af8065b89
+  9f58ecd6a4f431d65a6f6b507d839ae2e8b1176e
+  eb2ff8b574b0cf2cf6ab1449ce6ae9567bb7edb6
+  09d6e9720b384879313e6b7b052965838c7e80eb
+  5a183dec5d123ef0b053260e9b8d4fbd8481b6f5
+  4033dd347ccee9168c739dd47557e2b5b583ed16
+  ee4083e2746f18e126434a5c5fe5775d5fa51b30
+  9cc50367296a77e761dbc5d7c0b76fb30f84c4d8
+  46e1af28886d4d7a89d46521a3cd71ba19997d07
+  7f6da3adf84fb206389387032be1c7d8861f929f
+  25b4c2d97d1bd9af418b58a5ace6b88ed03912aa
+  d7cb6dbbdfc00c93fd916c9ca31538155aecca11
+  be3c9ead63aca1cb8cd8d91f782e7a2464216cd9
+  3d138757464b22c758fb2c08b17d83f056575371
+  445757f6da45ca0e784ba1ed038fab0a94165d21
+  fb3550810f7b5770a2b5614da8e5ade351f0d5fb
+  8ee352eb9e029c2521b1f7c7f98b8396981742d8
+  19f1365441d4feb6b9d5079ee71d08be4dbfbab5
+  bef71edc4db4d18312522b957798a644288534cf
+  c5b41a643e30f076fd2654838ea5f4cccefaf5da
+  7e8a6e2265854b4ac5b8d9d1115f0db733c279f1
+  030acf95e2f9dff0d9352c853bc22ffa27acdc1c
+  f14224d1f9069f07804a50c8c0d155bfa38ae631
+  1e2e09c6014cfe3ee8bee2d63dd4c101dbafa13d
+  e8dad104c475b6001ab2a2028f07085d6a93fc85
+  72ad1ed72b011f5ad1632614f511075de54c7896
+  24d25d49a0d248f1ff9d4b184ae1e72ae3cae4c7
+  28acc3c260bd660de50dd75fe843419ddf84faa3
+  be34ff02cefe5b3aa0ccad3c0a794631ad0f1df1
+  303250f9bdf787e59884aadf3d0e38755f08418a
+  91419f86ef761b9b370c66166a11617010c38aa6
+  5b04c5ebd733610cc631f0797ecf11cb30589b31
+  43c4cff9041510a7617840fdfecdb76bea3e8bb9
+  40197796929112d4332da60d63d2b8b7e0613397
+  0e830fb931e198b5c7e141bb7167482b308754b8
+  2d1b0ff7078777852e86c986405eeb0d8740b4c4
+  bd31fdca398c8c62eeb321b6ebfebc0dfbcee1d9
+  9b9804a073a7ac8d5aa271367ea67bb1aefeec1c
+  eec47151fb20b1107c40523e4d13fbdb0ca7409f
+  8b347adadefb16d98c06b034a75147faad5152b8
+  470035fc4b7b6b1c1d4d6ccfd3a83824803d89ab
+  4d58b62275f01904dd00842fb6be6c9850913325
+  b39bf09131f1e41f3ff33cb321250a94390d04a8
+  f5a3a739f5ed81b0b950b3af7baab7d2939ca62a
+  a2fded7b58851a27c6671113bf8d232738fefd71
+  3a56f3d883b2a7a99fbdd9413bbcb6aac73ecc98
+  204a2d1fe8c02f19229bad6429c8f1ffd2606f70
+  3bdd4b357856686210926bbf9a65d70a1737bc3b
+  581a044fe563314c3ba89bdc62c04fa548af3120
+  712ab6ab968688233d8e3bf83e36a9b98a6e9e33
+  75bf723b089b1015db49751c4a6be50af54abe8b
+  964db962ed345c09ae4991ef1b0253673ad74dcd
+  ea90291b3c4f266bca7bd73dd1649cf193fe0f0c
+  eeff1b1bb6293e7c74d1646db89a7103d0b0e2e2
+  fb6a7e604acf2467940b17c042bee441f5155eae
+  28cf15b8ae2906a4d4eaa79fc7b76f7f7b2b376f
 "
 
 # THE HASH IS COMPUTED, NEVER ASKED OF GIT (adversary round 3, findings 1-2).
@@ -238,8 +295,9 @@ setlist_hook_blob_is_known() { # setlist_hook_blob_is_known <file> -> 0 when the
   # character (`--cached\r` is a different, broken argument) and `tr -d` would
   # have squashed it, letting a behaviourally-different hook whose secret scan
   # is dead hash as ours. Line-ending-only normalization cannot change what a
-  # hook does.
-  if LC_ALL=C grep -q $'\r' "$f" 2>/dev/null; then
+  # hook does. -U (spec 0179): without it the grep Git for Windows ships drops a line's
+  # CR before matching, so on Windows, where this retry exists for, it never ran.
+  if LC_ALL=C grep -qU $'\r' "$f" 2>/dev/null; then
     local nsize nb
     nsize="$(awk '{ sub(/\r$/, ""); print }' "$f" | wc -c)"; nsize="${nsize//[[:space:]]/}"
     if command -v shasum >/dev/null 2>&1; then
@@ -319,6 +377,10 @@ hooks_layer_is_ours() { # hooks_layer_is_ours <dir> -> 0 when nothing foreign ru
 # is now printed as EMPTY, and the caller treats unresolvable as FOREIGN,
 # because a guard that cannot see a layer must refuse rather than assume it
 # is not there.
+# setlist_path_abs <path>: rc 0 for an absolute path. Under MSYS or Cygwin git answers a path in
+# its own drive spelling (C:/...), a tilde expanded or an absolute value stored, and that is
+# absolute too there (spec 0179); elsewhere C:/x is a relative path, as it always was.
+setlist_path_abs() { case "$1" in /*) return 0 ;; [A-Za-z]:/*) case "${OSTYPE:-}" in msys*|cygwin*) return 0 ;; esac ;; esac; return 1; }
 setlist_resolve_hookspath() { # setlist_resolve_hookspath <repo> <raw-value> -> the directory git would use, or empty for UNRESOLVABLE
   local repo="$1" hp="$2" dir top
   top="$(git -C "$repo" rev-parse --show-toplevel 2>/dev/null || true)" # fail-open-ok: outside a work tree the instance path itself is the only anchor and is used below
@@ -333,7 +395,7 @@ setlist_resolve_hookspath() { # setlist_resolve_hookspath <repo> <raw-value> -> 
       "~"*) printf ''; return 0 ;;
     esac
   fi
-  case "$dir" in /*) ;; *) dir="$top/$dir" ;; esac
+  setlist_path_abs "$dir" || dir="$top/$dir"
   while [[ "$dir" == *"//"* ]]; do dir="${dir//\/\///}"; done
   while [[ "$dir" == *"/./"* ]]; do dir="${dir//\/.\///}"; done
   [[ "$dir" == */. ]] && dir="${dir%/.}"
@@ -392,10 +454,7 @@ setlist_refusal_dir() { # setlist_refusal_dir <repo> <printed-value>
     printf '%s' "$top/.githooks"
     return 0
   fi
-  case "$printed" in
-    /*) printf '%s' "$printed" ;;
-    *)  setlist_resolve_hookspath "$repo" "$printed" ;;
-  esac
+  if setlist_path_abs "$printed"; then printf '%s' "$printed"; else setlist_resolve_hookspath "$repo" "$printed"; fi
 }
 
 foreign_hookspath() { # foreign_hookspath <repo-dir>
@@ -610,5 +669,50 @@ setlist_arming_target_foreign() { # setlist_arming_target_foreign <repo> -> prin
   if ! hooks_layer_is_ours "$target"; then
     printf '%s' ".githooks"
   fi
+  return 0
+}
+
+# THE CHAIN (spec 0173, item 2; the validator's E-c, option 1). Where a hook layer
+# that is not Setlist's already runs, the refresh and the stamp used to REFUSE to arm,
+# because git runs one hooks directory and arming would switch the other layer off.
+# Now they CHAIN it: arm .githooks, record where the other layer runs as "hooks_chain"
+# in .claude/sdd.json, and every Setlist git hook runs that layer's hook of the same
+# name after its own verdict (the library's slh_chain_displaced). Hook names Setlist
+# does not stamp get the fixed pass-through file, so a manager's commit-msg keeps
+# running. These helpers are shared so the two delivery paths decide one way.
+#
+# The names git runs (githooks(5)). A pass-through is written only under one of these,
+# never under a helper a manager keeps beside its hooks (husky's `h`, for one).
+SETLIST_GIT_HOOK_NAMES="applypatch-msg pre-applypatch post-applypatch pre-commit pre-merge-commit prepare-commit-msg commit-msg post-commit pre-rebase post-checkout post-merge pre-push pre-receive update proc-receive post-receive post-update reference-transaction push-to-checkout pre-auto-gc post-rewrite sendemail-validate fsmonitor-watchman p4-changelist p4-prepare-changelist p4-post-changelist p4-pre-submit post-index-change"
+
+# setlist_chain_value <repo> -> the value recorded as "hooks_chain": the configured
+# core.hooksPath as git config holds it, or the literal "$GIT_DIR/hooks" when the
+# setting is unset and the displaced layer is git's default directory.
+setlist_chain_value() { # setlist_chain_value <repo>
+  local hp
+  hp="$(git -C "$1" config --get core.hooksPath 2>/dev/null || true)" # fail-open-ok: unset reads as the default directory, which is what git runs then
+  if [[ -n "$hp" ]]; then printf '%s' "$hp"; else printf '%s' '$GIT_DIR/hooks'; fi
+}
+
+# setlist_chainable <repo> <dir> -> 0 when <dir> is a directory the chain can run from:
+# present, listable, and not Setlist's own .githooks. Anything else keeps the refusal,
+# because a layer the guard cannot see is one it cannot promise to run.
+setlist_chainable() { # setlist_chainable <repo> <dir>
+  local top
+  [[ -n "$2" && -d "$2" && -r "$2" && -x "$2" ]] || return 1
+  top="$(git -C "$1" rev-parse --show-toplevel 2>/dev/null || true)" # fail-open-ok: no work tree means no arming, which the caller has already decided
+  [[ -n "$top" ]] || return 1
+  [[ -e "$top/.githooks" && "$2" -ef "$top/.githooks" ]] && return 1
+  return 0
+}
+
+# setlist_chain_passthrough_names <dir> -> one per line, the git hook names <dir> carries
+# as executable files that Setlist does not stamp itself.
+setlist_chain_passthrough_names() { # setlist_chain_passthrough_names <dir>
+  local n
+  for n in $SETLIST_GIT_HOOK_NAMES; do
+    case "$n" in pre-commit|pre-merge-commit|pre-push) continue ;; esac
+    [[ -f "$1/$n" && -x "$1/$n" ]] && printf '%s\n' "$n"
+  done
   return 0
 }

@@ -7,9 +7,10 @@ disable-model-invocation: true
 Run QA Pass 1 for the active spec against the real production build. Reads and
 reports; never edits source files and never closes a spec.
 
-0. Preflight the tooling before anything else: Playwright resolves
-   (`npx playwright --version`) and its Chromium browser is installed
-   (`npx playwright install --dry-run chromium` reports it present, or a
+0. Preflight the tooling before anything else: the project's own Playwright
+   resolves (`npx --no-install playwright --version`, which never downloads)
+   and its Chromium browser is installed
+   (`npx --no-install playwright install --dry-run chromium` reports it present, or a
    trivial launch succeeds). If either is missing, STOP and report the exact
    install command (`npm i -D playwright` / `npx playwright install chromium`)
    as a finding; never install software yourself. A QA run on missing tooling
@@ -38,7 +39,7 @@ reports; never edits source files and never closes a spec.
    one `<criterion>: PASS|PARTIAL|FAIL` line each, criterion a bare identifier
    with no spaces, and nothing else inside the fence: a non-verdict line there is
    refused rather than skipped. Then the per-criterion report with evidence,
-   pasted verbatim below it for the human. A QA pass that is not in the repo did
+   pasted verbatim below it, inside a four-backtick fence, for the human. A QA pass that is not in the repo did
    not happen.
 
 ## Gotchas (field-observed)

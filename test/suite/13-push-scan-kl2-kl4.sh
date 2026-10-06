@@ -207,6 +207,9 @@ kl4_commit() { # kl4_commit <dir> <msg> -> rc, output in KL4_ERR
 kl4_push() { # kl4_push <dir> <branch> -> rc, output in KL4_ERR
   KL4_ERR="$(git -C "$1" push -q origin "$2" 2>&1)"
 }
+# >>> SHARD-BEGIN kl4-scope-13 cost=9
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region kl4-scope-13; then
 
 # --- the four cells, both directions at both layers -------------------------
 
@@ -357,9 +360,11 @@ NEW: $new"
 else
   ok "KL4 default-unchanged: pre-feature hook blobs not present here (export tree); the source-repo run asserts the differential"
 fi
+fi; shard_region_end
+# <<< SHARD-END kl4-scope-13
 
 # --- malformed config fails CLOSED, at both layers, asserted both ways ------
-# >>> SHARD-BEGIN kl4-malformed-config cost=15
+# >>> SHARD-BEGIN kl4-malformed-config cost=17
 if shard_region kl4-malformed-config; then
 #
 # Never a silent full-scan and never a silent no-scan. Both directions are
@@ -634,6 +639,9 @@ fi; shard_region_end
 # The same shape the lexer lockstep assertions carry. Three copies of a rule is
 # how a gate and its backstop went blind together in leg 5; the exclusion reader
 # gets the assertion rather than a comment asking people to remember.
+# >>> SHARD-BEGIN kl4-delivery-13 cost=1
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region kl4-delivery-13; then
 KL4_READERS="$(grep -l 'scan_exclusions' "$ROOT/templates/git-hooks/"* 2>/dev/null | wc -l | tr -d ' ')"
 if [[ "$KL4_READERS" == "1" ]] && grep -q 'scan_exclusions' "$ROOT/templates/git-hooks/setlist-hook-lib.sh"; then
   ok "KL4 A9: exactly ONE file under templates/git-hooks/ names the scan_exclusions key, and it is the shared lib"
@@ -724,4 +732,6 @@ if instance_fixture "$KL4_INST2" 1.0.0 >/dev/null 2>&1; then
 else
   bad "KL4 delivery: the absent-key refresh fixture builds" "instance_fixture failed"
 fi
+fi; shard_region_end
+# <<< SHARD-END kl4-delivery-13
 

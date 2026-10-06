@@ -21,7 +21,7 @@
 # THE LIBRARY IS PRIVATE TOOLING. The export does not carry it, so this region
 # reports one SKIPPED line there, the precedent shards 09 and 14 set.
 # =============================================================================
-# >>> SHARD-BEGIN probe-seed-0151 cost=3
+# >>> SHARD-BEGIN probe-seed-0151 cost=1
 if shard_region probe-seed-0151; then
 
 PSL_LIB="$ROOT/dogfood/probes/lib.sh"
@@ -56,6 +56,24 @@ psl_served="$( (source "$PSL_LIB" && probe_served_model "$PSL_FIX/result-served-
 [[ "$psl_served" == "claude-haiku-4-5-20251001" ]] \
   && ok "probe seed E13: a session served by Haiku is read as Haiku" \
   || bad "probe seed E13: a session served by Haiku is read as Haiku" "read '$psl_served'"
+# AN UNEVALUABLE PREDICATE IS rc 1 AND NO NAME (spec 0164, fix round 2, F6 of
+# the 2.10.0 leg). The matcher compared fields that might be absent, so jq
+# compared null with null and one entry "matched": an array modelUsage read as
+# the model "0", and a result with no usage block named a model nobody was
+# served. The gate record's SERVED-MODEL line rests on this contract.
+psl_bad="$WORK/psl-unevaluable"; mkdir -p "$psl_bad"
+printf '{"type":"result","usage":{"output_tokens":10,"cache_read_input_tokens":0},"modelUsage":[0]}\n' > "$psl_bad/array.json"
+printf '{"type":"result","modelUsage":{"claude-fable-5":{"outputTokens":10,"cacheReadInputTokens":0}}}\n' > "$psl_bad/nousage.json"
+printf '{"type":"result","usage":{"output_tokens":"ten"},"modelUsage":{"claude-fable-5":{"outputTokens":"ten"}}}\n' > "$psl_bad/strings.json"
+for psl_f in array nousage strings; do
+  psl_out="$( (source "$PSL_LIB" && probe_served_model "$psl_bad/$psl_f.json") 2>&1 )"; psl_rc=$?
+  if [[ "$psl_rc" -ne 0 && -z "$psl_out" ]]; then
+    ok "probe seed 0164 F6 ($psl_f): an unevaluable predicate is rc 1 and no name, never a fabricated one"
+  else
+    bad "probe seed 0164 F6 ($psl_f): an unevaluable predicate is rc 1 and no name, never a fabricated one" "rc=$psl_rc name='$psl_out'"
+  fi
+done
+
 psl_served="$( (source "$PSL_LIB" && probe_served_model "$PSL_FIX/stream-served-sonnet.jsonl") 2>&1)"
 [[ "$psl_served" == "claude-sonnet-5" ]] \
   && ok "probe seed E13: a stream-json transcript is read at its result line" \
@@ -181,6 +199,29 @@ if [[ "$psl_o" == *"I wrote the file."* && "$psl_o" == *"probe-stream"* && "$psl
   ok "probe seed outcomes: the model's text excludes text that arrived only in a tool result"
 else
   bad "probe seed outcomes: the model's text excludes tool-result text" "read '$psl_o'"
+fi
+
+# --- 6. the Stop arm (spec 0159) -----------------------------------------------
+# The twin is INVERTED against the pair table above: it carries its sentinel where no cap can reach
+# and must read SEEN, so a harness that delivers no Stop reason at all cannot read as "capped".
+psl_o="$( (source "$PSL_LIB"
+  probe_stop_pair_outcome SEEN SEEN; probe_stop_pair_outcome NOT-SEEN SEEN
+  probe_stop_pair_outcome SEEN NOT-SEEN; probe_stop_pair_outcome NOT-SEEN NOT-SEEN
+  probe_stop_pair_outcome BLOCKED SEEN; probe_stop_pair_outcome SEEN BLOCKED
+  probe_stop_pair_outcome SEEN CONTROL-FAILED; probe_stop_pair_outcome maybe SEEN) 2>&1 | tr '\n' ';')"
+[[ "$psl_o" == "SEEN;NOT-SEEN;CONTROL-FAILED;CONTROL-FAILED;BLOCKED;BLOCKED;CONTROL-FAILED;CONTROL-FAILED;" ]] \
+  && ok "probe seed Stop arm: the twin must read SEEN, a BLOCKED anywhere is BLOCKED, and an unknown word is CONTROL-FAILED" \
+  || bad "probe seed Stop arm: the pair table" "read '$psl_o'"
+psl_o="$( (source "$PSL_LIB"
+  r="$(probe_padded_reason SENTINEL-ab 520 'head text')"; printf '%s|%s|%s;' "${#r}" "${r:520}" "${r:0:9}"
+  r="$(probe_padded_reason SENTINEL-cd 30 "$(printf 'x%.0s' $(seq 1 31))")"; printf 'rc=%s;' "$?") 2>/dev/null)"
+[[ "$psl_o" == "531|SENTINEL-ab|head text;rc=2;" ]] \
+  && ok "probe seed Stop arm: the sentinel begins exactly after the offset, and a text longer than the offset is refused" \
+  || bad "probe seed Stop arm: the padded reason" "read '$psl_o'"
+if bash "$ROOT/dogfood/probes/session-hooks-probe.sh" --fixtures-only >/dev/null 2>&1; then
+  ok "probe seed Stop arm: the session-hooks probe's fixtures measure what they claim, with no session (--fixtures-only)"
+else
+  bad "probe seed Stop arm: the session-hooks probe's fixtures measure what they claim (--fixtures-only)" "$(bash "$ROOT/dogfood/probes/session-hooks-probe.sh" --fixtures-only 2>&1 | grep -i 'fixture:' | head -3)"
 fi
 
 rm -rf "$PSL_W"

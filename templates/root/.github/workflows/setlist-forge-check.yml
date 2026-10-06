@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Setlist: the forge check, run as a REQUIRED status check on every pull request.
 #
 # This workflow carries NO mechanism byte. It runs the check your instance
@@ -11,13 +12,22 @@
 #
 # WHAT TO REQUIRE, AND WHERE. Branch protection requires status checks BY NAME,
 # and a renamed job silently stops being required. The job below is named
-# `setlist forge check`; require exactly that name on your trunk (Settings >
-# Branches or Rules > require status checks to pass), together with a pull
-# request and one approving review. Under "forge" custody the check verifies
-# that both are required and refuses when they are not.
+# `setlist forge check`; require exactly that name on your trunk in a RULESET
+# (Settings > Rules > a ruleset targeting the trunk: require status checks to
+# pass, and branches up to date), together with a pull request, one approving
+# review, and "Require review from Code Owners". A ruleset, not classic branch
+# protection: this job's token reads rulesets, and the classic protection
+# endpoint needs repository administration, which no permissions block can
+# grant, so under "forge" custody a trunk protected by classic rules alone is
+# refused as unverifiable (FC-FORGE-FORBIDDEN). The
+# last is what makes the stamped .github/CODEOWNERS bind: this job runs the
+# pull request's OWN copy of the check, the hooks and this file, so an edit to
+# any of them is a reviewed change only where the trunk requires review from
+# Code Owners. Under "forge" custody the check verifies that all three are
+# required and refuses when they are not.
 #
 # There is no escape variable. To skip the check, edit this file, which the
-# stamped .github/CODEOWNERS makes a reviewed change.
+# stamped .github/CODEOWNERS makes a reviewed change under that setting.
 name: setlist forge check
 
 on:
@@ -33,11 +43,13 @@ jobs:
     name: setlist forge check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # The check builds the merge it audits and runs the trunk audit over
           # it; a shallow checkout has no history to read and is refused.
           fetch-depth: 0
+      # jq reads .claude/sdd.json; when the runner lacks it, it comes from the runner's own
+      # distribution, and the pinned parser below is the only other install in this job.
       - name: ensure jq
         run: command -v jq >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq jq)
       # THE MERMAID PARSER, AT A PINNED VERSION, AS ITS OWN STEP (edition v1.15,

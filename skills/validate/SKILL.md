@@ -60,6 +60,12 @@ Checks:
    and `/setlist:upgrade`'s refresh writes it. A role path
    of `"."` is a finding: the scope hook ignores it by design (Part 6);
    recommend enumerating the real code paths as a list.
+   A role path that does not exist, or that holds no tracked file (`git ls-files
+   -- <path>` prints nothing), is a finding too: it governs no code while the
+   instance reads armed (a retrofit stamped with the default `src` and `tests` on
+   a project laid out otherwise). Name it with the retrofit skill's inventory
+   scan beside it (the tracked source files by top-level directory, most first),
+   which `refresh-instance.sh` prints in its report, and recommend the real paths.
 4. Required files exist: CLAUDE.md, README.md, ROADMAP.md, RUNBOOK.md,
    DECISIONS.md, .gitignore, .env.example, specs/STATUS.md, specs/TEMPLATE.md,
    the steering docs, and exactly ONE committed edition file at the repo root:
@@ -88,13 +94,20 @@ Checks:
     report any survivor with the removal step from the upgrade protocol.
 11. Binding dependencies are installed: `jq` resolves on PATH (all four
     stamped hooks need it), and, when `.claude/skills/browser-qa/` exists,
-    Playwright resolves (`npx playwright --version`) with its Chromium
+    Playwright resolves (`npx --no-install playwright --version`, never a download) with its Chromium
     installed. Without jq the session hooks report their verdict and PERMIT
     (the scope hook says so in its own text, the bypass deny is silent; both
     are advisory since v1.7), and the re-grounding pointer says so at session
     start. The git hooks fail closed, so commits, merges and pushes are
     refused until it is installed. Report the exact install command for
-    anything missing; install nothing yourself.
+    anything missing; install nothing yourself. Read `claude --version` too,
+    and report it beside the floor the plugin's README names: read the floor
+    from the "Requires Claude Code" sentence of `${CLAUDE_PLUGIN_ROOT}/README.md`
+    rather than from memory, since that sentence is the one copy. Below the
+    floor, name the update. Below 2.1.277, report that the re-grounding pointer
+    may be partly dropped on a resumed, continued or cleared session (the
+    harness fixed that in 2.1.277), and name the update. Both are reports, not
+    findings.
 12. The instance records which plugin stamped it: `.claude/sdd.json` carries
     `plugin.version`. An instance stamped before 1.0.2 records none, which is a
     finding recommending `/setlist:upgrade` (the refresh records it), not an
@@ -171,6 +184,41 @@ Checks:
     Both config settings live in `.git/config`, which is not cloned, so a fresh
     clone legitimately lacks them and the fix is to re-run the refresh.
     Report what is missing and the exact command that restores it.
+    - **The trunk audit's declared baseline** (`audit.baseline` in
+      `.claude/sdd.json`, edition v1.18). The audit walks from the commit that
+      introduced `.claude/sdd.json` unless this key declares another, and for an
+      instance whose hooks arrived LATER than its stamp the default is not
+      merely imprecise: every merge in between was made when no
+      `pre-merge-commit` existed to record a completion, so the audit refuses
+      every push and calls those commits "made after this instance adopted the
+      rules". Two directions, both REPORT-ONLY. **Ask the audit's own
+      question, never re-derive it:** run
+      `bash "${CLAUDE_PLUGIN_ROOT}/scripts/refresh-instance.sh" .` in REPORT
+      mode (no `--apply`; it writes nothing) and quote its
+      `.claude/sdd.json audit.baseline` line, which is computed by
+      `slh_baseline_frame`, the same function the trunk audit runs (edition
+      v1.19, spec 0167).
+      - **Present**: the key is usable when it resolves to a commit here and is
+        an ancestor of the recorded trunk; the audit walks from the oldest
+        commit on the trunk's own first-parent line that contains it (the
+        declared commit itself, or the merge that brought it in), and the line
+        names that frame. It should equal what the refresh writes: the commit
+        that added `.githooks/pre-push`, or, when the refresh is delivering the
+        boundary now and no such commit exists yet, the trunk's tip at that
+        moment. Any other usable value is a DECLARATION that differs from what
+        the refresh would write: say so, name both commits and how many merges
+        lie between them, and leave it alone. A value the audit cannot use at
+        all (not a full 40-character lowercase-hex id, a present value that is
+        not a string, unresolvable, or not an ancestor of the trunk) is the same
+        report with the refusal the line names, because that instance is
+        refused at every push until it is corrected.
+      - **Absent** while `.githooks/pre-push` was added in a LATER commit than
+        `.claude/sdd.json` (compare the two with
+        `git log --root --diff-filter=A --format=%H -- <path> | tail -n1`):
+        that is a FINDING. Name the refresh as the fix and the value it would
+        write, because this is the instance that is refused at every push.
+        Absent with the two arriving together is correct and not a finding: the
+        default is the same commit.
 
 19. **The status record versus the page** (Part 3, edition v1.12). In a
     structured instance (`.claude/status.json` present), cross-check the
@@ -190,9 +238,12 @@ Checks:
     `Owns:` sets, or in a spec's set and a chore's `files`. INFORMATION, never
     a finding: the audit checks coverage per closing spec, so a double
     declaration is legal and sometimes honest (a file that genuinely changed
-    hands), and refusing it would need a cross-spec read at declaration time
-    whose cost nobody has measured. Report the file and both owners; the human
-    decides whether it is a handoff or a lie.
+    hands), and refusing it at declaration time would need a cross-spec read
+    whose cost nobody has measured. The one overlap the audit DOES refuse is
+    at close time, two specs in flight at once (`SLH-OWNS-OVERLAP`, plugin
+    2.11.0): a second close whose branch never took the first's change. Report
+    the file and both owners; the human decides whether it is a handoff or a
+    lie.
 21. **The two wiring files the refresh never replaces** (2.6.0, spec 0132, the
     owner's ruling 2 of 2026-09-07). `.github/workflows/setlist-forge-check.yml`
     and `.github/CODEOWNERS` are delivered by `/setlist:upgrade`'s refresh when
@@ -241,6 +292,37 @@ Checks:
       generated artifact worth ignoring, and saying which is the reader's call.
     Report each as a list with its subject, the measured evidence, and the
     one-edit fix, which is the message shape the whole diagram half uses.
+23. **What loads from outside the instance** (plugin 2.11.0). Name the skills and
+    plugins this machine loads into every session beside the instance's own:
+    the directories under `~/.claude/skills/` (the user's) and
+    `~/.claude/skills/synced/<bucket>/` (synced from the account), the plugin
+    keys in `~/.claude/plugins/installed_plugins.json`, and the directories
+    under `~/.claude/plugins/synced/<bucket>/` (`$CLAUDE_CONFIG_DIR` in place of
+    `~/.claude` where it is set). The refresh's report prints the same list
+    (`refresh-instance.sh .`, under "outside this instance"). Names only: read
+    no content, and say that no Setlist check compares these files, so a stale
+    edition claim or a model binding living there is in no report. This is a
+    report, not a finding.
+24. **The model binding answers now** (Part 2's third fact under the bindings
+    table; plugin 2.11.0). Where `.claude/settings.json` sets `"model":
+    "opusplan"`, say first, before anything runs, that this check spends two
+    short headless sessions of the user's quota (measured at about 0.21 USD for
+    the pair on 2026-09-29), then run
+    `bash "${CLAUDE_PLUGIN_ROOT}/scripts/model-probe.sh"` and quote its lines.
+    It probes the plan phase and the execution phase of `opusplan` and prints
+    the model each served. The bootstrap probe's recorded answer is a yes or a
+    no and names no version; do not read it in place of this check. rc 1
+    (`[MP-PLAN-OFF-TIER]` or `[MP-EXEC-OFF-TIER]`) is a finding: a phase was
+    served by a model outside its tier's family, which a managed allowlist
+    changed after the stamp (exact version matching, or a denied model) or a
+    provider that does not serve the family can cause, since the harness
+    substitutes a blocked model rather than refusing it; report the phase, the
+    model and the script's sentence, and fix nothing. rc 2
+    (`[MP-PROBE-UNAVAILABLE]`, `[MP-FAMILY-UNREADABLE]`) is a report with its
+    reason, never a pass. A served version older than the one Part 2's table
+    names, in the right family, is a line, not a finding: the table names the
+    alias. Where the model line is absent or names something else, say the
+    check did not run and why.
 
 ## Gotchas (field-observed)
 

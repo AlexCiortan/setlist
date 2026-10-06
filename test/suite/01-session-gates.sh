@@ -99,6 +99,29 @@ close_fixture() {
 
 MERGE_CMD='git merge --no-ff spec/0001-thing'
 
+# Shared with later shards (spec 0168, item 2): defined above the region.
+sh_fixture() { # sh_fixture <dir> <status> <with-hash: yes|no> <body>
+  local d="$1" st="$2" wh="$3" body="$4"
+  rm -rf "$d"; mkdir -p "$d/specs" "$d/.claude"
+  printf '{"trunk":"main","scaffolded":true,"roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+  {
+    printf '# Spec 0001 - thing\n\nStatus: %s\n' "$st"
+    [[ "$wh" == "yes" ]] && printf 'Spec-hash: PLACEHOLDER\n'
+    printf '\n## Goal\n%s\n\n## Closing report\n- What was built: pending\n' "$body"
+  } > "$d/specs/0001-thing.md"
+  printf '| Num | Title | Status | Note |\n|---|---|---|---|\n| 0001 | Thing | %s | wip |\n' "$st" > "$d/specs/STATUS.md"
+  if [[ "$wh" == "yes" ]]; then
+    local h; h="$(bash "$ROOT/scripts/spec-hash.sh" "$d/specs/0001-thing.md")"
+    sed -e "s/Spec-hash: PLACEHOLDER/Spec-hash: $h/" "$d/specs/0001-thing.md" > "$d/specs/0001-thing.md.t" \
+      && mv "$d/specs/0001-thing.md.t" "$d/specs/0001-thing.md"
+  fi
+}
+sh_context() { printf '%s' "$HOOK_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty'; }
+
+# >>> SHARD-BEGIN session-gates-01 cost=7
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region session-gates-01; then
+
 
 # =============================================================================
 # scope-hook.sh
@@ -189,7 +212,11 @@ cat > "$SCD/.claude/sdd.json" <<'EOF'
 }
 EOF
 run_hook "$HOOKS/scope-hook.sh" "$SCD" "$(edit_payload "$SCD/anything.js")"
-expect_allow "scope-hook roles: the inert dot role covers nothing, by design"
+# The dot role covered nothing, silently, at every reader, and was pinned here as inert by
+# design. Since spec 0180's fix round 2 (the 2.11.0 leg's F8) a `.` segment in a role path is
+# refused by name at all three readers, the lone `.` included: it guards nothing, which is the
+# class the refusal exists to name. The scope hook's refusal is advice, as ever.
+expect_context "scope-hook roles: the dot role is named as a role that guards nothing (SH-ROLES-SHAPE), never inert in silence" "SH-ROLES-SHAPE"
 
 # =============================================================================
 # regrounding-hook.sh
@@ -227,23 +254,7 @@ expect_context "regrounding w3: compact warns a summary is not the spec" "a summ
 # deliberately different in shape.
 # =============================================================================
 
-sh_fixture() { # sh_fixture <dir> <status> <with-hash: yes|no> <body>
-  local d="$1" st="$2" wh="$3" body="$4"
-  rm -rf "$d"; mkdir -p "$d/specs" "$d/.claude"
-  printf '{"trunk":"main","scaffolded":true,"roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
-  {
-    printf '# Spec 0001 - thing\n\nStatus: %s\n' "$st"
-    [[ "$wh" == "yes" ]] && printf 'Spec-hash: PLACEHOLDER\n'
-    printf '\n## Goal\n%s\n\n## Closing report\n- What was built: pending\n' "$body"
-  } > "$d/specs/0001-thing.md"
-  printf '| Num | Title | Status | Note |\n|---|---|---|---|\n| 0001 | Thing | %s | wip |\n' "$st" > "$d/specs/STATUS.md"
-  if [[ "$wh" == "yes" ]]; then
-    local h; h="$(bash "$ROOT/scripts/spec-hash.sh" "$d/specs/0001-thing.md")"
-    sed -e "s/Spec-hash: PLACEHOLDER/Spec-hash: $h/" "$d/specs/0001-thing.md" > "$d/specs/0001-thing.md.t" \
-      && mv "$d/specs/0001-thing.md.t" "$d/specs/0001-thing.md"
-  fi
-}
-sh_context() { printf '%s' "$HOOK_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty'; }
+# (sh_fixture and sh_context are defined above region session-gates-01: later shards call them.)
 
 # AC1: writing the computed value does not change the value. Without the
 # field-line exclusion this is false and the mechanism cannot work at all.
@@ -471,6 +482,8 @@ run_hook "$HOOKS/scope-hook.sh" "$BARE" "$(edit_payload "$BARE/src/app.js")"
 expect_allow "no-sdd x1: the scope hook stays silent outside an instance"
 run_hook "$HOOKS/regrounding-hook.sh" "$BARE" "$(session_payload startup)"
 expect_allow "no-sdd x2: the regrounding hook stays silent outside an instance"
+fi; shard_region_end
+# <<< SHARD-END session-gates-01
 
 # =============================================================================
 # y. stamp integrity: hooks are copied byte-verbatim (C2)
@@ -485,7 +498,17 @@ ui=no
 opusplan_verified=yes
 design_surface=no
 EOF
-if bash "$ROOT/scripts/stamp.sh" "$WORK/answers.txt" "$STAMP_TARGET" >/dev/null 2>&1; then
+# The stamp RUNS here, in the prelude, because every shard reads its result (STAMP_TARGET and the
+# answers file); its ASSERTION is a region of its own (spec 0168): a prelude that asserts only what
+# cannot differ by platform keeps run-shards.sh's prelude-agreement refusal meaningful on Windows,
+# where this case can fail in one shard and pass in the next.
+STAMP_RC=0
+bash "$ROOT/scripts/stamp.sh" "$WORK/answers.txt" "$STAMP_TARGET" >/dev/null 2>&1 || STAMP_RC=$?
+
+# >>> SHARD-BEGIN stamp-verbatim-01 cost=1
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region stamp-verbatim-01; then
+if [[ "$STAMP_RC" -eq 0 ]]; then
   STAMP_DIFF=""
   for h in scope-hook regrounding-hook stop-hook bypass-deny; do
     if ! cmp -s "$HOOKS/$h.sh" "$STAMP_TARGET/.claude/hooks/$h.sh"; then
@@ -501,4 +524,31 @@ if bash "$ROOT/scripts/stamp.sh" "$WORK/answers.txt" "$STAMP_TARGET" >/dev/null 
 else
   bad "stamp y: stamp.sh copies all four hooks byte-verbatim" "stamp.sh exited non-zero"
 fi
+fi; shard_region_end
+# <<< SHARD-END stamp-verbatim-01
 
+
+# THE CLOSE REVIEWER, STAMPED (spec 0175, item 1): the prelude's stamp (STAMP_TARGET) writes the
+# read-only agent byte-verbatim, its model line names the ALIAS (never a version: the edition's
+# Part 2 table names tiers), and the two other places that deliver it say so: the upgrade adds it
+# where missing, as it adds the qa-verifier, and STAMP-TREE maps it.
+# >>> SHARD-BEGIN close-review-stamp-0175 cost=1
+if shard_region close-review-stamp-0175; then
+CRS_F="$STAMP_TARGET/.claude/agents/close-reviewer.md"
+CRS_BAD=""
+[[ "$STAMP_RC" -eq 0 ]] || CRS_BAD="$CRS_BAD stamp-rc=$STAMP_RC"
+if [[ ! -f "$CRS_F" ]]; then CRS_BAD="$CRS_BAD agent-absent"
+elif ! cmp -s "$ROOT/templates/claude/agents/close-reviewer.md" "$CRS_F"; then CRS_BAD="$CRS_BAD agent-not-byte-identical"; fi
+CRS_FM="$(awk 'NR == 1 && $0 == "---" { on = 1; next } on && $0 == "---" { exit } on' "$CRS_F" 2>/dev/null || true)" # fail-open-ok: an empty frontmatter fails every line below
+grep -qx 'name: close-reviewer' <<< "$CRS_FM" || CRS_BAD="$CRS_BAD name"
+grep -qx 'model: opus' <<< "$CRS_FM" || CRS_BAD="$CRS_BAD model-not-the-opus-alias"
+grep -qx 'disallowedTools: Write, Edit' <<< "$CRS_FM" || CRS_BAD="$CRS_BAD not-read-only"
+grep -qF 'templates/claude/agents/close-reviewer.md' "$ROOT/skills/upgrade/SKILL.md" || CRS_BAD="$CRS_BAD upgrade-does-not-add-it"
+grep -qF '| `claude/agents/close-reviewer.md` | `.claude/agents/close-reviewer.md` |' "$ROOT/templates/STAMP-TREE.md" || CRS_BAD="$CRS_BAD stamp-tree-row"
+if [[ -z "$CRS_BAD" ]]; then
+  ok "0175 cr stamp: the stamp writes the close-reviewer agent byte-verbatim (opus alias, read-only), the upgrade adds it where missing, STAMP-TREE maps it"
+else
+  bad "0175 cr stamp: the stamp writes the close-reviewer agent byte-verbatim (opus alias, read-only), the upgrade adds it where missing, STAMP-TREE maps it" "$CRS_BAD"
+fi
+fi; shard_region_end
+# <<< SHARD-END close-review-stamp-0175

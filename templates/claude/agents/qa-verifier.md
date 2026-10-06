@@ -29,7 +29,8 @@ You run QA Pass 1 of the framework's QA loop (Part 5 of the committed edition).
   line is REFUSED by the gates, not skipped, so nothing else goes in it: no
   totals, no commentary, no "criteria that did not pass" summary. Then the full
   per-criterion report with one line of evidence each, pasted verbatim below the
-  block as the evidence a human reads. No gate parses that part.
+  block, inside a four-backtick fence, as the evidence a human reads. No gate parses
+  that part, and the fence keeps any heading you write from ending the Closing report.
 - Honest PARTIALs: anything you cannot exercise is a PARTIAL with the reason,
   never a claimed PASS. Human acceptance criteria are always PARTIAL for you:
   only the developer can pass them.

@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # Trunk audit: does the trunk's HISTORY show every piece of feature code
 # arriving through a closed spec?
 #
 # Usage:
-#   trunk-audit.sh [<instance-dir>] [--since <ref>] [--until <ref>]
+#   trunk-audit.sh [<instance-dir>] [--since <ref>] [--until <ref>] [--config-from <commit>]
 #
 # THIS FILE IS A GATE (SP2-F5, corrected 2026-08-27). For four editions this
 # header called the script advisory, said nothing ran it automatically, and said
@@ -56,14 +57,98 @@
 
 set -u
 
+# EVERY READER IN THIS PROCESS READS BYTES (spec 0169; L2 F2 and F11). This
+# file ships alone and is run by hand as well as from pre-push, so it sets its
+# own rather than trusting a caller: under a UTF-8 locale one byte that is not
+# valid UTF-8 in specs/STATUS.md or a spec aborted macOS awk and sed mid-read,
+# and the partial read reported a compliant trunk as a violation. The library
+# carries the same line and the same reasoning.
+LC_ALL=C; export LC_ALL
+
+# NO READER EXITS BEFORE ITS WRITER IS DONE (spec 0169, CHK-REPORT-READ's cause,
+# h5). `printf ... | grep -q` let grep exit at its first match while the writer
+# was still writing; where SIGPIPE is ignored (the Linux CI runner) the writer
+# then printed "write error: Broken pipe" into the hook's or the audit's output,
+# so a report varied under load while its verdict did not. Readers of computed
+# text are fed from a here-string, and a first line is taken by a reader that
+# reads the whole text. A git writer is left as it is: git exits quietly.
+
+# A VALUE THE REPOSITORY CHOSE, IN A SENTENCE THIS FILE SPEAKS (spec 0169, sweep
+# A.3.4). A refusal is read by the model driving git and by a CI log a forge
+# parses for workflow commands, and it used to carry repository text whole: a
+# file name holding a newline printed forged report lines, and a configured
+# string shaped as prose read as the framework speaking. The precedent is the
+# regrounding hook's armed check (spec 0164, F14). Three kinds:
+#   name  <v>     a path, a trunk, a role, a label, a token, an identity or a
+#                 configured string: quoted, every byte outside the set a path
+#                 needs replaced with ?, cut at 80 characters, and the edit said.
+#   names <list>  one name per line, each bounded as above, joined with ", ",
+#                 at most 20 and the rest counted.
+#   text  <v>     free text by design (a commit subject, a command's output):
+#                 its characters and the caller's cap kept, its control bytes,
+#                 escapes and newlines gone.
+# BYTE-IDENTICAL to the copy in templates/git-hooks/setlist-hook-lib.sh; this
+# file ships alone, and the suite asserts the two match.
+# The CODEOWNERS reader's own description of a line it does not evaluate is
+# fixed text, except the one that quotes the offending owner token: only that
+# token is the repository's, so only it is bounded (spec 0169, sweep A.3.4).
+# BYTE-IDENTICAL to the copy in templates/git-hooks/setlist-hook-lib.sh.
+slh_codeowners_what() { # slh_codeowners_what <description> -> the description with its owner token bounded
+  local d="$1" t
+  case "$d" in
+    "an owner that is not @login, @org/team or an email ("*")")
+      t="${d#an owner that is not @login, @org/team or an email (}"; t="${t%)}"
+      printf 'an owner that is not @login, @org/team or an email (%s)' "$(slh_bound name "$t")" ;;
+    *) printf '%s' "$d" ;;
+  esac
+}
+slh_bound() { # slh_bound <name|names|text> <value>
+  local k="$1" v="$2" s e="" n=0 l out=""
+  case "$k" in
+    text)
+      v="${v//$'\n'/ }"; v="${v//$'\r'/ }"; v="${v//$'\t'/ }"
+      printf '%s' "$v" | tr -d '\000-\037\177'
+      return 0 ;;
+    names)
+      while IFS= read -r l; do
+        [ -n "$l" ] || continue
+        n=$((n + 1))
+        [ "$n" -le 20 ] && out="${out:+$out, }$(slh_bound name "$l")"
+      done <<SLHBOUNDEOF
+$v
+SLHBOUNDEOF
+      [ "$n" -gt 20 ] && out="$out and $((n - 20)) more"
+      printf '%s' "$out"
+      return 0 ;;
+  esac
+  s="${v//[^A-Za-z0-9._\/ :+=@-]/?}"
+  [ "$s" = "$v" ] || e=" (characters outside a path set replaced with ?)"
+  if [ "${#s}" -gt 80 ]; then s="${s:0:80}"; e="$e (cut at 80 characters)"; fi
+  printf '"%s"%s' "$s" "$e"
+}
+
 INSTANCE="."
 SINCE=""
+# WHERE THE WALK START CAME FROM, not merely what it is (spec 0157). The
+# instance may DECLARE its baseline in .claude/sdd.json, and a declared value is
+# read only when the command line named none: scripts/forge-check.sh passes the
+# pull request's own base with --since, and a key read there would let a pull
+# request move the forge's pre-rule exemption by editing a file in its own
+# checkout. So this flag, and not the emptiness of SINCE, decides.
+SINCE_GIVEN=0
 # --until <ref>: audit the history ending at THIS commit rather than at the
 # trunk's current tip. Added 2026-08-04 for pre-push, which receives the OID
 # actually being pushed and must audit that rather than whatever the local trunk
 # happens to point at (1.1.0 leg, F17). Defaults to the trunk, which is every
 # other caller and the behaviour this script has always had.
 UNTIL=""
+# --config-from <commit>: read .claude/sdd.json from THIS commit when the instance's
+# working tree carries none (spec 0173, item 1). pre-push passes the tip it is
+# pushing when the checked-out branch has no configuration and the pushed commit
+# does, so a push of governed history is audited under the history's own
+# configuration whatever is checked out. The working tree's file, when present, is
+# still the one read: every other caller, and every existing verdict, unchanged.
+CONFIG_FROM=""
 # A VALUE-LESS --since OR --until IS REFUSED, NOT ABSORBED (F12).
 #
 # These read `SINCE="${2:-}"; shift 2`, and `shift 2` with only one argument
@@ -77,14 +162,15 @@ UNTIL=""
 # "not a directory: --since=HEAD~5": a confusing error for a correct command.
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --since=*) SINCE="${1#--since=}"; shift ;;
+    --since=*) SINCE="${1#--since=}"; SINCE_GIVEN=1; shift ;;
     --until=*) UNTIL="${1#--until=}"; shift ;;
-    --since|--until)
+    --config-from=*) CONFIG_FROM="${1#--config-from=}"; shift ;;
+    --since|--until|--config-from)
       if [[ $# -lt 2 ]]; then
         printf 'trunk-audit.sh: %s needs a <ref> value. A missing value used to loop forever rather than say so.\n' "$1" >&2
         exit 2
       fi
-      case "$1" in --since) SINCE="$2" ;; *) UNTIL="$2" ;; esac
+      case "$1" in --since) SINCE="$2"; SINCE_GIVEN=1 ;; --until) UNTIL="$2" ;; *) CONFIG_FROM="$2" ;; esac
       shift 2
       ;;
     *) INSTANCE="$1"; shift ;;
@@ -94,6 +180,13 @@ done
 die() { printf 'trunk-audit.sh: %s\n' "$1" >&2; exit 2; }
 
 [[ -d "$INSTANCE" ]] || die "not a directory: $INSTANCE"
+# JQ'S LINE ENDING (spec 0179). A native jq on Windows ends every line in CRLF,
+# and Git Bash drops a CR only at the very end of a command substitution, so
+# every line of a jq list but the last kept one ("src\r") and each verdict read
+# from a list failed open. jq -b (jq 1.7 and later) writes LF there. The probe
+# reads a two-line list, so a jq that ends lines in CR is found on any platform;
+# one that also refuses -b fails this file's output probe and is refused by name.
+case "$(printf '["x","y"]' | command jq -r '.[]' 2>/dev/null)" in *$'\r'*) jq() { command jq -b "$@"; } ;; esac
 command -v jq >/dev/null 2>&1 || die "jq is required to read .claude/sdd.json"
 # jq is RUN and its OUTPUT compared before it reads anything (spec 0130, the
 # same probe the hook library runs in slh_require_toolchain): a jq that exits 0
@@ -152,6 +245,21 @@ probe_tool head x head -n1
 probe_tool tail x tail -n1
 probe_tool sort x sort
 SDD="$INSTANCE/.claude/sdd.json"
+# Emptied first (spec 0180, F11): the exit traps remove CFG_TMPD, so it holds only what mktemp gave this process.
+CFG_TMPD=""
+if [[ ! -f "$SDD" && -n "$CONFIG_FROM" ]]; then
+  # The configuration of the commit being pushed, materialised once; a copy that
+  # cannot be made refuses (exit 2), never audits under no configuration.
+  CFG_TMPD="$(mktemp -d 2>/dev/null)" || CFG_TMPD=""
+  [[ -n "$CFG_TMPD" ]] || die "--config-from $(slh_bound name "$CONFIG_FROM"): no private workspace for the pushed commit's .claude/sdd.json; check TMPDIR"
+  trap 'rm -rf "$CFG_TMPD"' EXIT
+  git -C "$INSTANCE" show "$CONFIG_FROM:.claude/sdd.json" > "$CFG_TMPD/sdd.json" 2>/dev/null \
+    || die "--config-from $(slh_bound name "$CONFIG_FROM"): that commit carries no readable .claude/sdd.json"
+  SDD="$CFG_TMPD/sdd.json"
+fi
+# What a message calls the file: its path, or, when read from a pushed commit, that commit's copy.
+CFG_SHOWN="$SDD"
+[[ -z "${CFG_TMPD:-}" ]] || CFG_SHOWN=".claude/sdd.json at $(slh_bound name "$CONFIG_FROM")"
 [[ -f "$SDD" ]] || die "no .claude/sdd.json at $INSTANCE; this is not a framework instance"
 jq -e . "$SDD" >/dev/null 2>&1 || die "$SDD does not parse"
 
@@ -182,8 +290,49 @@ mapfile_roles() { jq -r 'if ((.roles // {}) | length) == 0 then ["src","tests"] 
 if [[ "$(jq -r 'if (.roles == null) then "absent" elif ((.roles | type) == "object") then "ok" else "bad" end' "$SDD" 2>/dev/null)" == "bad" ]]; then
   die ".claude/sdd.json has a \"roles\" value that is not an object, so the role paths this audit reads cannot be established and it would report a trunk carrying unreviewed feature code as clean. Set \"roles\" to an object, or remove the key to accept the defaults."
 fi
+# A SHALLOW CLONE CANNOT BE AUDITED (spec 0164, fix round 2, F7 of the 2.10.0
+# leg). `git clone --depth 1` keeps the tip and grafts away the history this
+# walk reads, so the audit found no commits after the baseline and printed
+# "nothing to audit yet" at exit 0 over a history it could not see: a violating
+# trunk reported clean. scripts/forge-check.sh has refused this since 2.6.0
+# ([FC-SHALLOW-CHECKOUT]); the layer that runs at every push had no such guard.
+# Its own work is still refused in such a clone, so this is the retrospective
+# sweep failing open, which is the half nobody notices.
+if [[ "$(git -C "$INSTANCE" rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]]; then
+  die "[SLH-SHALLOW-CLONE] $INSTANCE is a shallow clone, so the history this audit walks is not here and a clean report would say nothing about what the trunk actually carries. A check that could not read has not passed. Fetch the full history (git fetch --unshallow), or audit a clone that has it."
+fi
+
 ROLES="$(mapfile_roles)"
 [[ -n "$ROLES" ]] || die "no role paths recorded in $SDD"
+
+# A GLOB IN A ROLE VALUE IS REFUSED HERE TOO (spec 0164, fix round 2, F3 of the
+# 2.10.0 leg), by the same question the hook library asks: this reader matched
+# `packages/*` literally while the close verification expanded it against the
+# working directory, so one declared spelling meant two different sets and a
+# merge that the hooks refused audited clean at push. A9's rule, one question,
+# one answer.
+while IFS= read -r _role; do
+  [[ -n "$_role" ]] || continue
+  case "$_role" in
+    *'*'*|*'?'*|*'['*)
+      die "[SLH-ROLES-SHAPE] $CFG_SHOWN declares the role path $(slh_bound name "$_role"), which carries a glob character (* ? [). This audit matches role paths literally and the commit-time hooks would expand it against the working directory, so one spelling would mean two different sets and this report could not be trusted either way. Name the directory itself, one role per path." ;;
+  esac
+  # A `..` SEGMENT, refused by the same question the hook library asks (spec
+  # 0169, L2 F10): such a role matched no path, so this audit reported a trunk
+  # carrying direct feature code as clean at rc 0.
+  case "/$_role/" in
+    */../*)
+      die "[SLH-ROLES-SHAPE] $CFG_SHOWN declares the role path $(slh_bound name "$_role"), which has a .. segment. Git records no path with one, so this audit would match nothing under it and report the trunk clean whatever it carries. Name the directory itself by its path from the repository root." ;;
+  esac
+  # And a `.` segment after any leading ./ (spec 0180, F8; the hook library says why).
+  _rt="$_role"; while [[ "${_rt#./}" != "$_rt" ]]; do _rt="${_rt#./}"; done
+  case "/$_rt/" in
+    */./*)
+      die "[SLH-ROLES-SHAPE] $CFG_SHOWN declares the role path $(slh_bound name "$_role"), which has a . segment after its start. Git records no path with one, so this audit would match nothing under it and report the trunk clean whatever it carries. Name the directory itself by its path from the repository root." ;;
+  esac
+done <<EOF
+$ROLES
+EOF
 
 # A TRUNK THAT NAMES "WHEREVER HEAD IS" NAMES NO TRUNK (V19-F8).
 #
@@ -207,12 +356,12 @@ ROLES="$(mapfile_roles)"
 # enumeration is always one spelling short of the next one.
 case "$TRUNK" in
   HEAD|@|*@\{*\}*)
-    die "the recorded trunk '$TRUNK' names a POSITION rather than a branch, so which ref this audit reads would depend on where HEAD happens to point rather than on what this project protects. Record the plain branch NAME (for example \"main\") in .claude/sdd.json."
+    die "the recorded trunk $(slh_bound name "$TRUNK") names a POSITION rather than a branch, so which ref this audit reads would depend on where HEAD happens to point rather than on what this project protects. Record the plain branch NAME (for example \"main\") in .claude/sdd.json."
     ;;
 esac
 
 git -C "$INSTANCE" rev-parse --verify --quiet "$TRUNK" >/dev/null 2>&1 \
-  || die "the recorded trunk '$TRUNK' does not resolve in this repository"
+  || die "the recorded trunk $(slh_bound name "$TRUNK") does not resolve in this repository"
 
 # THE TRUNK VALUE MUST NAME A LOCAL BRANCH, and "it resolves" is not that check.
 # A remote-tracking spelling resolves perfectly well, which is why the rev-parse
@@ -240,7 +389,7 @@ if ! git -C "$INSTANCE" show-ref --verify --quiet "refs/heads/$TRUNK" 2>/dev/nul
       ;;
   esac
   git -C "$INSTANCE" show-ref --verify --quiet "refs/heads/$TRUNK" 2>/dev/null \
-    || die "the recorded trunk '$TRUNK' is not a local branch in this repository, so this audit would read a ref that is not the trunk being pushed and could report it clean. Record the plain branch NAME (for example \"main\"), not a ref path such as refs/remotes/origin/main."
+    || die "the recorded trunk $(slh_bound name "$TRUNK") is not a local branch in this repository, so this audit would read a ref that is not the trunk being pushed and could report it clean. Record the plain branch NAME (for example \"main\"), not a ref path such as refs/remotes/origin/main."
 fi
 
 # The tip to audit. --until names it explicitly; otherwise it is the trunk.
@@ -254,6 +403,139 @@ if [[ -n "$UNTIL" ]]; then
   AUDIT_TIP="$UNTIL"
 fi
 
+# THE DECLARED BASELINE (spec 0157, the 2.10.0 intake section 1).
+#
+# The default below is the commit that introduced .claude/sdd.json, and it is
+# right for every instance whose stamp and hooks arrived together. For the
+# instances where it is wrong it is wrong in the worst direction: an instance
+# stamped before the git hooks existed has merges that no pre-merge-commit could
+# have witnessed, and this audit refuses every push from then on while printing
+# "made after this instance adopted the rules" about commits made before any
+# rule existed. Measured on a real instance: 33 violations at the default
+# baseline, 0 at the commit that delivered .githooks/.
+#
+# So the frame is DECLARABLE: one key, .audit.baseline, a full commit id in the
+# file this audit already takes its trunk, its roles and its exclusions from.
+# A commit id and never a ref, for the reason the trunk key refuses a POSITION
+# a hundred lines above: this audit decides by identity and a ref moves.
+#
+# READ ONLY WHEN --since IS ABSENT, and then by BOTH baseline readers, the walk
+# start here and the pre-rule exemption's RULE_BASELINE below. Under --since the
+# command line wins outright and neither reader touches the key, which is what
+# keeps scripts/forge-check.sh (whose only call passes --since) byte-for-byte
+# unaffected and stops a pull request moving the forge's exemption by editing
+# sdd.json in its own checkout.
+#
+# A key that cannot be USED is a refusal, never a fallback to the default: the
+# instance declared a frame and an audit that quietly walked a different one
+# would attest to something nobody asked for. Same reason the --until and
+# --since resolutions refuse rather than default.
+# --- THE BASELINE FRAME (spec 0167) -------------------------------------------
+# LOCKSTEP: everything from this banner to the one that closes it is
+# BYTE-IDENTICAL in scripts/trunk-audit.sh and scripts/refresh-instance.sh, and
+# the suite asserts it (the audit ships alone into .claude/hooks/ and sources
+# nothing from the plugin, so one text in two files is how it is shared).
+#
+# ONE READER FOR THREE CALLERS: the trunk audit, the refresh's usability probe,
+# and /setlist:validate step 18, which reaches it through the refresh's report
+# mode. The 2.10.0 second leg's F1, F3, F4, F5 and F9 were these callers asking
+# three different questions of one key: the audit required the key on the
+# trunk's first-parent line, the refresh wrote the commit that ADDED
+# .githooks/pre-push, which sits on a side branch whenever the hooks arrived
+# through a merge (the upgrade's chore branch under merge.ff=false makes that
+# the ordinary shape), and the refresh's probe asked plain ancestry. Every push
+# after such an upgrade was refused by name while the refresh called the key
+# healthy. Measured on the owner's instance: refused at once.
+#
+# So the frame is COMPUTED, not required. Any ancestor of the tip is a valid
+# declaration, and the walk starts at the OLDEST commit on the tip's
+# first-parent line that contains it: the declared commit itself when it is on
+# that line, otherwise the merge that brought it in. Containment is monotone
+# along the line (a commit that contains it has descendants that do too), so
+# walking from the tip and stopping at the first commit that does NOT contain
+# it finds that frame. Never the tip for an older declaration: that would walk
+# nothing and attest every trunk clean (spec 0167, ruling E-a).
+#
+# One line out, compared by bytes across the callers by the suite's key corpus:
+#   absent                                  no key
+#   frame <frame-id> <declared-id>          walk from <frame-id>
+#   refuse SLH-BASELINE-<CODE> <reason>     the audit refuses it at exit 2
+# A git failure while computing the frame refuses: a later frame walks less, so
+# a guessed one is the fail-open direction. Every git call is tested with
+# if/else rather than `$?` so the function behaves the same under `set -e`.
+slh_baseline_frame() { # slh_baseline_frame <repo> <sdd.json> <tip>
+  local repo="$1" sdd="$2" tip="$3" v c prev="" rc fp
+  # The shape guard both scripts carried since 0157: a present "audit" that is
+  # not an object, or a present baseline that is not a string (JSON false and
+  # null included, spec 0164 F21), is MALFORMED, never read as "no key".
+  if ! v="$(jq -r 'if has("audit") and ((.audit | type) != "object") then error("audit-not-object")
+        elif ((.audit // {}) | has("baseline")) and ((.audit.baseline | type) != "string") then error("baseline-not-string")
+        else (.audit.baseline // empty) end' "$sdd" 2>/dev/null)"; then
+    printf 'refuse SLH-BASELINE-MALFORMED type\n'; return 0
+  fi
+  if [[ -z "$v" ]]; then printf 'absent\n'; return 0; fi
+  # LC_ALL=C: a shell bracket range collates by the LOCALE, so under a UTF-8
+  # locale `[!0-9a-f]` does not match `A` (spec 0157, the suite's case b3).
+  if ! LC_ALL=C grep -qE '^[0-9a-f]{40}$' <<< "$v"; then
+    printf 'refuse SLH-BASELINE-MALFORMED shape\n'; return 0
+  fi
+  if ! git -C "$repo" rev-parse --verify --quiet "${v}^{commit}" >/dev/null 2>&1; then
+    printf 'refuse SLH-BASELINE-UNRESOLVED commit\n'; return 0
+  fi
+  if git -C "$repo" merge-base --is-ancestor "$v" "$tip" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+  case "$rc" in
+    0) ;;
+    1) printf 'refuse SLH-BASELINE-NOT-ANCESTOR ancestry\n'; return 0 ;;
+    *) printf 'refuse SLH-BASELINE-UNRESOLVED git\n'; return 0 ;;
+  esac
+  if ! fp="$(git -C "$repo" rev-list --first-parent "$tip" 2>/dev/null)"; then
+    printf 'refuse SLH-BASELINE-UNRESOLVED git\n'; return 0
+  fi
+  while IFS= read -r c; do
+    [[ -n "$c" ]] || continue
+    if git -C "$repo" merge-base --is-ancestor "$v" "$c" >/dev/null 2>&1; then rc=0; else rc=$?; fi
+    case "$rc" in
+      0) prev="$c" ;;
+      1) break ;;
+      *) printf 'refuse SLH-BASELINE-UNRESOLVED git\n'; return 0 ;;
+    esac
+  done <<SLH_FRAME_EOF
+$fp
+SLH_FRAME_EOF
+  if [[ -z "$prev" ]]; then printf 'refuse SLH-BASELINE-UNRESOLVED git\n'; return 0; fi
+  printf 'frame %s %s\n' "$prev" "$v"
+}
+# --- END THE BASELINE FRAME ---------------------------------------------------
+DECLARED_BASELINE=""
+BASELINE_FRAME=""
+if [[ "$SINCE_GIVEN" -eq 0 ]]; then
+  BL_VERDICT="$(slh_baseline_frame "$INSTANCE" "$SDD" "$AUDIT_TIP")"
+  # DISPLAY ONLY: the value as written, quoted back in a refusal. It decides
+  # nothing; the verdict above is the one reader's.
+  BL_SHOWN="$(jq -r '(.audit.baseline? // empty) | tostring' "$SDD" 2>/dev/null || true)" # fail-open-ok: display only, the verdict above decides
+  case "$BL_VERDICT" in
+    absent) : ;;
+    "frame "*)
+      read -r _ BASELINE_FRAME DECLARED_BASELINE <<< "$BL_VERDICT"
+      SINCE="$BASELINE_FRAME"
+      ;;
+    "refuse SLH-BASELINE-MALFORMED type")
+      die "[SLH-BASELINE-MALFORMED] $CFG_SHOWN has an \"audit\" value that is not an object, or an \"audit.baseline\" that is present and is not a string (JSON false and null are values, not an absent key), so the declared baseline cannot be read and this audit would silently walk from the default instead of the frame this instance declares. Set \"audit\" to an object: {\"baseline\": \"<full 40-character commit id>\"}, or remove the key." ;;
+    "refuse SLH-BASELINE-MALFORMED shape")
+      die "[SLH-BASELINE-MALFORMED] $CFG_SHOWN records audit.baseline $(slh_bound name "$BL_SHOWN"), which is not a full 40-character commit id in lowercase hex: it names a ref, an abbreviation or a position rather than a commit, and this audit decides by identity because a ref moves and an abbreviation can stop being unique. Record the full id ('git rev-parse <ref>'), or remove the key to audit from the commit that introduced .claude/sdd.json." ;;
+    "refuse SLH-BASELINE-UNRESOLVED commit")
+      die "[SLH-BASELINE-UNRESOLVED] $CFG_SHOWN records audit.baseline $(slh_bound name "$BL_SHOWN"), which does not resolve to a commit in this repository, so the audit cannot establish what to walk and a clean report would be a false attestation. Record a commit this repository carries, or remove the key to audit from the commit that introduced .claude/sdd.json." ;;
+    "refuse SLH-BASELINE-NOT-ANCESTOR "*)
+      # ONE MEANING (spec 0167): not an ancestor of the tip at all. A commit a
+      # merge brought in from a side branch IS an ancestor and is framed at
+      # that merge; this refusal is only for a commit no part of the audited
+      # history contains, where no frame exists to declare.
+      die "[SLH-BASELINE-NOT-ANCESTOR] $CFG_SHOWN records audit.baseline $(slh_bound name "$BL_SHOWN"), which is not an ancestor of the history being audited ($AUDIT_TIP): no commit of that history contains it, so it declares no frame this audit could walk from, and a clean report would be a false attestation. Record a commit this trunk's history contains, or remove the key to audit from the commit that introduced .claude/sdd.json." ;;
+    *)
+      die "[SLH-BASELINE-UNRESOLVED] $CFG_SHOWN records audit.baseline $(slh_bound name "$BL_SHOWN"), and git could not answer which commit of the history being audited ($AUDIT_TIP) first contains it, so the frame cannot be computed; a guessed frame would walk less than the declaration says. Check the repository with 'git fsck', or remove the key to audit from the commit that introduced .claude/sdd.json." ;;
+  esac
+fi
+
 # Baseline. Everything before the instance was stamped is pre-framework and
 # not this audit's business; auditing it would produce noise that trains the
 # reader to ignore the report.
@@ -262,7 +544,10 @@ if [[ -z "$SINCE" ]]; then
   # `log.showRoot=false` git renders a ROOT commit as adding nothing, so an
   # instance whose first commit adopted the rules had no findable baseline and
   # every push was refused by accident. Measured: 0 commits without it, 1 with.
-  SINCE="$(git -C "$INSTANCE" log --root --format=%H --diff-filter=A -- .claude/sdd.json | tail -n1)"
+  # Under --config-from the walk starts at the pushed commit rather than HEAD (spec 0173,
+  # item 1): with no configuration checked out, HEAD is the branch that lacks it, and
+  # its history has no adding commit to find. Without the flag, HEAD, as always.
+  SINCE="$(git -C "$INSTANCE" log --root --format=%H --diff-filter=A ${CONFIG_FROM:+"$CONFIG_FROM"} -- .claude/sdd.json | tail -n1)"
   [[ -n "$SINCE" ]] || die "cannot find the commit that introduced .claude/sdd.json; pass --since <ref>"
 fi
 
@@ -274,9 +559,31 @@ git -C "$INSTANCE" rev-parse --verify --quiet "${SINCE}^{commit}" >/dev/null 2>&
   || die "the baseline '$SINCE' does not resolve to a commit in this repository, so the audit cannot establish what to walk. Pass a --since that names a commit on the trunk."
 
 printf 'trunk audit: %s\n' "$(cd "$INSTANCE" && pwd)"
-printf '  trunk: %s   roles: %s\n' "$TRUNK" "$(printf '%s' "$ROLES" | tr '\n' ' ')"
-printf '  since: %s (%s)\n\n' "$(git -C "$INSTANCE" rev-parse --short "$SINCE")" \
-  "$(git -C "$INSTANCE" log -1 --format=%s "$SINCE" | cut -c1-60)"
+# THE ROLE LIST AS DECLARED, BOUNDED ONLY WHEN IT NEEDS TO BE (spec 0169, sweep
+# A.3.4): a list whose every role is inside the set a path needs prints exactly
+# as it always has, so the report of an ordinary instance stays byte-identical
+# to earlier generations (the differentials in shards 14 and 17 compare it);
+# a role outside that set switches the whole list to the bounded form, the
+# edit said.
+_roles_shown="$(printf '%s' "$ROLES" | tr '\n' ' ')"
+case "$_roles_shown" in *[!A-Za-z0-9._/\ :+=@-]*) _roles_shown="$(slh_bound names "$ROLES")" ;; esac
+printf '  trunk: %s   roles: %s\n' "$TRUNK" "$_roles_shown"
+# WHICH FRAME PRODUCED THIS REPORT, said in the report (spec 0157). Under
+# --since the line keeps today's bytes exactly: the caller named the range, the
+# word would describe nothing the caller does not already know, and the forge
+# check's stderr stays byte-identical (0157 ruling E-b).
+BASELINE_NOTE=""
+if [[ "$SINCE_GIVEN" -eq 0 ]]; then
+  # When the frame is not the declared commit itself (it came in on a merged
+  # branch), both are named, so the report says what was declared and where
+  # the walk actually starts (spec 0167). When they are the same commit the
+  # line keeps its 2.10.0 bytes.
+  if [[ -z "$DECLARED_BASELINE" ]]; then BASELINE_NOTE=" (default)"
+  elif [[ "$BASELINE_FRAME" == "$DECLARED_BASELINE" ]]; then BASELINE_NOTE=" (declared)"
+  else BASELINE_NOTE=" (declared $(git -C "$INSTANCE" rev-parse --short "$DECLARED_BASELINE"), framed at the first trunk commit that contains it)"; fi
+fi
+printf '  since: %s (%s)%s\n\n' "$(git -C "$INSTANCE" rev-parse --short "$SINCE")" \
+  "$(slh_bound text "$(git -C "$INSTANCE" log -1 --format=%s "$SINCE" | cut -c1-60)")" "$BASELINE_NOTE"
 
 row_is_closed() { # row_is_closed <status-md-text> <spec-num>
   # The status is a CELL, not a word anywhere in the row (leg 5, F8). Factored
@@ -309,26 +616,74 @@ row_is_closed() { # row_is_closed <status-md-text> <spec-num>
 # case-sensitive filesystem they really are different directories and matching
 # them together would cry wolf about a path that is genuinely not a role path.
 # The probe is done once rather than per file.
-ROLE_FOLD=0
-_rfprobe="$(mktemp -d "${TMPDIR:-/tmp}/setlist-case.XXXXXX")"
-: > "$_rfprobe/aa"
-[[ -e "$_rfprobe/AA" ]] && ROLE_FOLD=1
-rm -rf "$_rfprobe"
+#
+# IT PROBES THE REPOSITORY, NOT THE TEMPORARY DIRECTORY (spec 0164, fix round 2,
+# F1 and F4 of the 2.10.0 leg). It used to probe under TMPDIR, which answers a
+# question about a DIFFERENT filesystem: measured on this project, one
+# repository on a case-insensitive disk read 1 violation with the ordinary
+# TMPDIR and 0 with TMPDIR on a case-sensitive volume, and the reverse arm
+# refused legitimate work on a case-sensitive repository whose TMPDIR folds
+# case. The scope hook asks the same question under the project root
+# (templates/hooks/scope-hook.sh, sh_folds_case); this asks it under the
+# instance, so the two layers answer about one filesystem.
+#
+# AND A PROBE THAT CANNOT RUN REFUSES, rather than leaving ROLE_FOLD at its
+# unset default: with an unwritable or absent TMPDIR the old line printed
+# mktemp's error, read no status, and reported a violating trunk clean at exit
+# 0. A check that could not run has not passed.
+# AND SINCE 0169 IT PROBES BESIDE EACH ROLE DIRECTORY (L2 F16): a repository
+# can span volumes, and a role directory mounted from a volume whose case
+# behaviour differs from the instance root's was judged by the root's, a false
+# VIOLATION one way and a silent pass the other. Each role is probed in the
+# deepest directory of its path that exists, inside the instance, once per
+# directory, and it folds only where its own probe folded. The scope hook asks
+# the same question the same way (templates/hooks/scope-hook.sh, sh_folds_case).
+ROLE_FOLDS=""   # one line per role: "<0|1><TAB><role as declared>"
+_rf_seen=""
+while IFS= read -r _rrole; do
+  [[ -n "$_rrole" ]] || continue
+  _rfdir="$INSTANCE/$_rrole"
+  while [[ ! -d "$_rfdir" && "$_rfdir" == "$INSTANCE"/* ]]; do _rfdir="$(dirname "$_rfdir")"; done
+  [[ -d "$_rfdir" ]] || _rfdir="$INSTANCE"
+  case "$_rf_seen" in
+    *"|$_rfdir=1|"*) _rf=1 ;;
+    *"|$_rfdir=0|"*) _rf=0 ;;
+    *)
+      _rf=0
+      _rfname=".setlist-case-probe.$$.${RANDOM:-0}"
+      _rfupper="$(printf '%s' "$_rfname" | tr '[:lower:]' '[:upper:]')"
+      if ( : > "$_rfdir/$_rfname" ) 2>/dev/null; then
+        [[ -e "$_rfdir/$_rfupper" ]] && _rf=1
+        rm -f "$_rfdir/$_rfname" 2>/dev/null
+      else
+        die "[SLH-CASE-PROBE-FAILED]: the case-folding probe could not write under $_rfdir, so whether the filesystem a role directory lives on folds case is unknown and role paths cannot be matched either way. A check that could not run has not passed. Make the instance writable, or run the audit where it is."
+      fi
+      _rf_seen="$_rf_seen|$_rfdir=$_rf|" ;;
+  esac
+  ROLE_FOLDS="$ROLE_FOLDS$_rf	$_rrole
+"
+done <<ROLESEOF
+$ROLES
+ROLESEOF
 
 touches_role_file() { # touches_role_file <path> -> 0 if the path is under a role
-  local f="$1" r
-  if [[ "$ROLE_FOLD" -eq 1 ]]; then f="$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')"; fi
-  while IFS= read -r r; do
+  local f="$1" fl="" r rf
+  while IFS='	' read -r rf r; do
     [[ -n "$r" && "$r" != "." ]] || continue
     while [[ "$r" == ./* ]]; do r="${r#./}"; done
     r="$(printf '%s' "$r" | tr -s '/')"
     r="${r#/}"; r="${r%/}"
     [[ -n "$r" && "$r" != "." ]] || continue
-    if [[ "$ROLE_FOLD" -eq 1 ]]; then r="$(printf '%s' "$r" | tr '[:upper:]' '[:lower:]')"; fi
-    case "$f" in "$r"/*|"$r") return 0 ;; esac
-  done <<EOF
-$ROLES
-EOF
+    if [[ "$rf" == "1" ]]; then
+      [[ -n "$fl" ]] || fl="$(printf '%s' "$f" | tr '[:upper:]' '[:lower:]')"
+      r="$(printf '%s' "$r" | tr '[:upper:]' '[:lower:]')"
+      case "$fl" in "$r"/*|"$r") return 0 ;; esac
+    else
+      case "$f" in "$r"/*|"$r") return 0 ;; esac
+    fi
+  done <<FOLDSEOF
+$ROLE_FOLDS
+FOLDSEOF
   return 1
 }
 
@@ -407,9 +762,19 @@ touches_role_tree() { # touches_role_tree <commit>
 # granted. The exemption is a claim about being older than the rules; an audit
 # that cannot say when the rules started cannot grant it. This is the fail-CLOSED
 # direction, chosen deliberately: the fail-open one is the finding.
-RULE_BASELINE="$(git -C "$INSTANCE" log --root --diff-filter=A --format=%H -- .claude/sdd.json 2>/dev/null | tail -n1)" # fail-open-ok: an empty baseline is handled explicitly below and refuses the exemption rather than granting it
+# ONE VALUE FOR BOTH READERS (spec 0157). When the instance declares its
+# baseline the walk start above and this exemption come from the SAME commit, so
+# a merge the walk reaches never gets the pre-rule excuse and a merge older than
+# the declaration is not walked at all. Under --since neither reads the key and
+# this is computed exactly as it always was.
+# The COMPUTED frame (spec 0167), not the declared commit: for every commit the
+# walk reaches, post_baseline answers the same for either, and one value keeps
+# the walk start and the exemption on the same commit by construction.
+RULE_BASELINE="$BASELINE_FRAME"
+[[ -n "$RULE_BASELINE" ]] \
+  || RULE_BASELINE="$(git -C "$INSTANCE" log --root --diff-filter=A --format=%H ${CONFIG_FROM:+"$CONFIG_FROM"} -- .claude/sdd.json 2>/dev/null | tail -n1)" # fail-open-ok: an empty baseline is handled explicitly below and refuses the exemption rather than granting it
 if [[ -z "$RULE_BASELINE" ]]; then
-  RULE_BASELINE="$(git -C "$INSTANCE" log --root --diff-filter=A --format=%H -- .githooks/setlist-hook-lib.sh 2>/dev/null | tail -n1)" # fail-open-ok: as above; both absent means no exemption is available at all
+  RULE_BASELINE="$(git -C "$INSTANCE" log --root --diff-filter=A --format=%H ${CONFIG_FROM:+"$CONFIG_FROM"} -- .githooks/setlist-hook-lib.sh 2>/dev/null | tail -n1)" # fail-open-ok: as above; both absent means no exemption is available at all
 fi
 
 # post_baseline <commit> -> 0 when the commit is at or after the instance
@@ -452,6 +817,13 @@ CHORES=0
 # then, which let a later illustrative block replace a real verdict);
 # setlist-hook-lib.sh carries the full reasoning.
 QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; qa_seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } } else { if (__r == "qa-pass-1" && inclose && !qa_seen) { inb = 1; qch = __c; qlen = __m; n = 0; bad = 0; next } fence = 1; fch = __c; flen = __m; next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "") next; if (l ~ /^[A-Za-z0-9._-]+[[:space:]]*:[[:space:]]*(PASS|PARTIAL|FAIL)$/) n++; else bad = 1; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) inclose = 0 } } END { if (incmt) print "unclosed-comment"; else if (inb) print "unclosed"; else if (!qa_seen) print "none"; else if (bad) print "malformed"; else if (n == 0) print "empty"; else print "ok" }'
+
+# THE CLOSE REVIEW BLOCK and THE VERSION COMPARISON (spec 0175). LOCKSTEP: byte-identical to
+# setlist-hook-lib.sh, asserted; the library carries the full reasoning. The first reads a
+# close-review block's last round (one line out, its first word the token); the second is the
+# comparison rule_in_force below made first, shared so the gate dates a rule as this audit does.
+SLH_CLOSE_REVIEW_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); __ti = __raw; sub(/^[ \t]+/, "", __ti); sub(/[ \t]+$/, "", __ti); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } if (__ti == "close-review" && inclose && !seen && !nin) { nin = NR; ninl = fline; nint = ftext } } else { if (__ti == "close-review" && inclose && !seen) { inb = 1; qch = __c; qlen = __m; next } if (__ti == "close-review" && !inclose && endl && !seen && !late) late = NR; fence = 1; fch = __c; flen = __m; fline = NR; ftext = substr(__l, 1, 40); next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "" || bad != "") next; if (acc) { bad = "a line after the ACCEPTED-BY-HUMAN verdict"; next } if (l ~ /^round[ \t]+[0-9]+[ \t]*:[ \t]*(PASS|FAIL|SKIP-DOCS-ONLY)$/) { __n = l; sub(/^round[ \t]+/, "", __n); sub(/[ \t]*:.*$/, "", __n); __n = __n + 0; __t = l; sub(/^[^:]*:[ \t]*/, "", __t); if (__n > 2) bad = "a third round"; else if (__n != nr + 1) bad = "round " __n " out of order"; else if (nr >= 1 && (tok[1] == "SKIP-DOCS-ONLY" || __t == "SKIP-DOCS-ONLY")) bad = "SKIP-DOCS-ONLY beside another round"; else { nr = __n; tok[nr] = __t } next } if (l ~ /^verdict[ \t]*:/) { if (l !~ /^verdict[ \t]*:[ \t]*ACCEPTED-BY-HUMAN([ \t]|$)/) { bad = "a verdict line other than ACCEPTED-BY-HUMAN"; next } if (nr != 2) { bad = "ACCEPTED-BY-HUMAN outside round 2"; next } if (tok[2] != "FAIL") { bad = "ACCEPTED-BY-HUMAN beside round 2 reading " tok[2]; next } __ids = l; sub(/^verdict[ \t]*:[ \t]*ACCEPTED-BY-HUMAN[ \t]*/, "", __ids); __k = split(__ids, __a, /[ \t]+/); if (__k == 0) { bad = "ACCEPTED-BY-HUMAN names no finding"; next } for (__i = 1; __i <= __k; __i++) { if (__a[__i] !~ /^[A-Za-z0-9._-]+$/) { bad = "ACCEPTED-BY-HUMAN names something that is not a finding id"; next } acc_id[__a[__i]] = 1; acc_list = acc_list " " __a[__i] } acc = 1; next } if (nr == 0) { bad = "a line before the first round header"; next } if (tok[nr] == "SKIP-DOCS-ONLY") { bad = "a SKIP-DOCS-ONLY round that carries lines"; next } if (l ~ /^[A-Za-z0-9._-]+[ \t]*:[ \t]*(PASS|PARTIAL|FAIL)$/) { cn[nr]++; if (l ~ /FAIL$/ && cf[nr] == "") { __cn = l; sub(/[ \t]*:.*$/, "", __cn); cf[nr] = __cn } next } if (index(l, "|")) { __k = split(l, __f, "|"); if (__k < 6) { bad = "a finding line with fewer than six fields"; next } for (__i = 1; __i <= 5; __i++) { sub(/^[ \t]+/, "", __f[__i]); sub(/[ \t]+$/, "", __f[__i]) } __fx = __f[6]; for (__i = 7; __i <= __k; __i++) __fx = __fx "|" __f[__i]; sub(/^[ \t]+/, "", __fx); sub(/[ \t]+$/, "", __fx); if (__f[1] !~ /^[A-Za-z0-9._-]+$/) { bad = "a finding whose id is not a bare identifier"; next } if (__f[2] !~ /^([A-Za-z0-9._-]+|-)$/) { bad = "finding " __f[1] " names no criterion"; next } if (__f[3] !~ /^(BLOCKER|MAJOR|MINOR)$/) { bad = "finding " __f[1] " has no severity"; next } if (__f[4] !~ /^[^ \t|]+:[0-9]+$/) { bad = "finding " __f[1] " has no file and line"; next } if (__f[5] == "" || __fx == "") { bad = "finding " __f[1] " says no what or no fix"; next } __key = nr SUBSEP __f[1]; if (__key in fid) { bad = "finding " __f[1] " appears twice in round " nr; next } fid[__key] = __f[3]; if (__f[3] != "MINOR") { if (mj[nr] == "") mj[nr] = __f[1] " " __f[3]; if (nr == 2) mj2[__f[1]] = __f[3] } next } bad = "a line that is not a round header, a criterion verdict, a finding or the human verdict"; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report([ \t]+\(.*\))?[ \t]*(#+[ \t]*)?$/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) { inclose = 0; endl = NR; endh = substr(__l, 1, 60) } } } END { if (incmt) { print "unclosed-comment"; exit } if (inb) { print "unclosed"; exit } if (!seen && nin) { print "malformed the close-review fence at line " nin " opens inside a fence opened at line " ninl " (" nint ") that is not closed before it, so it is read as content of that fence"; exit } if (!seen && late) { print "malformed the close-review fence at line " late " sits after the heading \"" endh "\" at line " endl ", which ends the Closing report section; a report pasted into the Closing report goes inside a fence, where its headings are content"; exit } if (fence && !seen) { print "malformed an unclosed fence opened at line " fline " (" ftext ") runs to the end of the spec, so no block after it is read"; exit } if (!seen) { print "none"; exit } if (bad != "") { print "malformed " bad; exit } if (nr == 0) { print "empty"; exit } for (__i = 1; __i <= nr; __i++) { if (tok[__i] == "SKIP-DOCS-ONLY") continue; if (cn[__i] == 0) { print "malformed round " __i " carries no criterion verdict"; exit } if (tok[__i] == "PASS" && mj[__i] != "") { print "malformed round " __i " reads PASS beside " mj[__i]; exit } if (tok[__i] == "PASS" && cf[__i] != "") { print "malformed round " __i " reads PASS beside criterion " cf[__i] " FAIL"; exit } } if (acc) { __k = split(acc_list, __a, " "); for (__i = 1; __i <= __k; __i++) { __key = 2 SUBSEP __a[__i]; if (!(__key in fid)) { print "malformed ACCEPTED-BY-HUMAN names " __a[__i] ", which round 2 does not carry"; exit } } for (__x in mj2) if (!(__x in acc_id)) { print "malformed ACCEPTED-BY-HUMAN leaves round 2 finding " __x " " mj2[__x] " unaccepted"; exit } print "accepted"; exit } if (tok[nr] == "PASS") print "pass"; else if (tok[nr] == "FAIL") print "fail"; else print "skip" }'
+SLH_VERSION_AT_LEAST_AWK='BEGIN { if (v !~ /^[0-9]+\.[0-9]+(\.|$)/) exit 1; split(v, a, /[.]/); split(want, w, /[.]/); if (a[1] + 0 > w[1] + 0) exit 0; if (a[1] + 0 == w[1] + 0 && a[2] + 0 >= w[2] + 0) exit 0; exit 1 }'
 
 # HOISTED, same reason as QA_PASS1_AWK above: the linear close check needs it
 # too. LOCKSTEP: byte-identical to setlist-hook-lib.sh. Strips
@@ -570,7 +942,12 @@ SLH_DIAGRAM_MERMAID_BLOCK_AWK='{ l=$0; sub(/\r$/,"",l) } l ~ /^[[:space:]]*```[[
 
 # One candidate DRAWN NAME per line as "<spec-or-dash>\t<kind>\t<name>", kind
 # being `node`, `subgraph id` or `subgraph title`. The spec is the `%% spec NNNN`
-# comment on the name's own line, which is what decides whose node a stale one is
+# comment on a line of its own directly above the declaration (spec 0180, F-b: Mermaid
+# 11.14.0, the forge check's pinned parser, reads a `%%` comment only on a line of its own,
+# so the spelling the skill taught, the marker after the node on the same line, failed the
+# forge's render check); it attributes the next line that is not blank and nothing after it.
+# The trailing spelling is still read, so a drawing already made that way keeps its
+# attribution. The spec is what decides whose node a stale one is
 # (D11); the kind is what lets every message downstream name what it is talking
 # about, which this reader gave it no way to do until spec 0139.
 #
@@ -610,22 +987,71 @@ SLH_DIAGRAM_MERMAID_BLOCK_AWK='{ l=$0; sub(/\r$/,"",l) } l ~ /^[[:space:]]*```[[
 # does not teach and which no pair reader here ever opened; and a label attached
 # by a space (`a ["src/a"]`) rather than directly. All three are silent, all
 # three are filed as DE8, and the render check is what stands behind the third.
-# One member of DE6's class is NOT fixed and is filed with them: Mermaid's
-# inline edge-text form, `a -- reads(src/gone/x) --> b`, puts the span against
-# an identifier and so passes the test below. No regex separates it from a
-# declaration, because `-- text --` and `-->` are the same dash run to a lexer
-# that does not know whether the link closed.
+#
+# INLINE EDGE TEXT IS A LABEL (spec 0161, closing the open limitation
+# inline-edge-text, DE8's arm (a)). Mermaid's other edge-label spelling,
+# `a -- reads(src/gone/x) --> b`, puts the span against an identifier, so the
+# adjacency test alone read it as a node and refused a close for a path nobody
+# drew. The line is now read the way Mermaid's own lexer reads it, left to right:
+# a TEXT OPENER is exactly `--`, `==` or `-.` not followed by a further link
+# character, and the edge text runs to the first link token that ends it (`--`
+# then one of `-`, `x`, `o`, `>`; `==` then one of `=`, `x`, `o`, `>`; a dot run
+# then `-`). That text is blanked before any declaration is looked for. Anything
+# else is a complete link and is stepped over whole, so `a --- b(src/b)`,
+# `a === b(src/b)` and `a --open(src/b)--> c` still declare a node, exactly as
+# Mermaid 11.14.0 (the forge check's pinned parser) draws them; and an opener
+# that never closes on its line leaves the span a declaration, which refuses
+# rather than hides. Every spelling was read against that parser first.
 SLH_DIAGRAM_NODE_AWK='
+function slh_link_end(s, j, ch) {
+  while (substr(s, j, 1) == ch) j++
+  if (index(">ox", substr(s, j, 1)) > 0 && substr(s, j, 1) != "") j++
+  return j
+}
+function slh_edge_blank(s,    n, i, c, c3, o, rest, q) {
+  n=length(s); i=1
+  while (i < n) {
+    c=substr(s, i, 2); c3=substr(s, i+2, 1); o=""
+    if (c == "--") {
+      if (c3 == "" || index("-xo>", c3) > 0) { i=slh_link_end(s, i+2, "-"); continue }
+      o="-"
+    } else if (c == "==") {
+      if (c3 == "" || index("=xo>", c3) > 0) { i=slh_link_end(s, i+2, "="); continue }
+      o="="
+    } else if (c == "-.") {
+      if (c3 == "." || c3 == "-") {
+        i+=2
+        while (substr(s, i, 1) == "-" || substr(s, i, 1) == ".") i++
+        if (substr(s, i, 1) != "" && index(">ox", substr(s, i, 1)) > 0) i++
+        continue
+      }
+      o="."
+    } else { i++; continue }
+    rest=substr(s, i+2)
+    if (o == "-") q=match(rest, /--[-xo>]/)
+    else if (o == "=") q=match(rest, /==[=xo>]/)
+    else q=match(rest, /\.+-/)
+    if (q == 0) { i+=2; continue }
+    s=substr(s, 1, i+1) sprintf("%" (RSTART-1) "s", "") substr(s, i+1+RSTART)
+    i=i+1+RSTART
+  }
+  return s
+}
 { l=$0; sub(/\r$/,"",l) }
-l ~ /^[[:space:]]*```[[:space:]]*mermaid[[:space:]]*$/ { inb=1; next }
+l ~ /^[[:space:]]*```[[:space:]]*mermaid[[:space:]]*$/ { inb=1; pend=""; next }
 inb && l ~ /^[[:space:]]*```/ { inb=0; next }
 !inb { next }
+l ~ /^[[:space:]]*%%[[:space:]]*spec[[:space:]]*[0-9]+[[:space:]]*$/ {
+  pend=l; sub(/^[[:space:]]*%%[[:space:]]*spec[[:space:]]*/, "", pend); sub(/[[:space:]]+$/, "", pend); next
+}
+l ~ /^[[:space:]]*$/ { next }
 {
   sp="-"
   if (match(l, /%%[[:space:]]*spec[[:space:]]*[0-9]+/)) {
     s=substr(l, RSTART, RLENGTH); sub(/^%%[[:space:]]*spec[[:space:]]*/, "", s); sp=s
     l=substr(l, 1, RSTART-1)
-  }
+  } else if (pend != "") sp=pend
+  pend=""
   sub(/%%.*$/, "", l)
   while (match(l, /\|[^|]*\|/)) l=substr(l, 1, RSTART-1) " " substr(l, RSTART+RLENGTH)
   nc=0
@@ -638,7 +1064,7 @@ inb && l ~ /^[[:space:]]*```/ { inb=0; next }
       if (ci > 0) { nc++; ck[nc]="subgraph title"; cv[nc]=substr(tail, 2, ci-1) }
     } else { nc++; ck[nc]="subgraph id"; cv[nc]=rest }
   } else {
-    rest=l
+    rest=slh_edge_blank(l)
     while (match(rest, /[A-Za-z0-9_.-][[(]/)) {
       tail=substr(rest, RSTART+RLENGTH-1); cl=(substr(tail, 1, 1) == "[") ? "]" : ")"
       ci=index(substr(tail, 2), cl)
@@ -674,7 +1100,7 @@ slh_diagram_field_line() { # slh_diagram_field_line <spec-text> -> the field lin
   # each field reader as a single line and requires the live-text rule ON IT, so
   # a reader split across a continuation would read as a raw grep to the pin that
   # exists to catch raw greps. The property and its check agree here by shape.
-  printf '%s\n' "$1" | awk "$SLH_TEMPLATE_FENCE_AWK" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | head -n1
+  printf '%s\n' "$1" | awk "$SLH_TEMPLATE_FENCE_AWK" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | awk 'NR == 1'
 }
 
 slh_diagram_field_answer() { # slh_diagram_field_answer <field-line> -> updated | no-impact | ""
@@ -708,7 +1134,7 @@ slh_diagram_field_files() { # slh_diagram_field_files <field-line> -> one path p
 slh_diagram_touched() { # slh_diagram_touched <proj> <base-rev> <rev-new-or-""> <changed-files>
   local proj="$1" base="$2" new="$3" changed="$4" old_b new_b
   printf '%s\n' "$changed" | grep -E '^docs/diagrams/' || true # fail-open-ok: grep exits 1 only when NOTHING under docs/diagrams/ changed, which is the true answer in that case; a match cannot be suppressed by the status, so this cannot turn a touched diagram into an untouched one
-  if printf '%s\n' "$changed" | grep -qx 'steering/structure.md'; then
+  if grep -qx 'steering/structure.md' <<< "$changed"; then
     old_b="$(git -C "$proj" show "$base:steering/structure.md" 2>/dev/null | awk "$SLH_DIAGRAM_MERMAID_AWK" || true)" # fail-open-ok: an unreadable old version yields empty, which DIFFERS from a present new one and so counts the file as touched, the accusing direction
     if [ -z "$new" ]; then
       new_b="$(git -C "$proj" show ":steering/structure.md" 2>/dev/null | awk "$SLH_DIAGRAM_MERMAID_AWK" || true)" # fail-open-ok: as above
@@ -755,13 +1181,13 @@ audit_diagram_tokens() { # audit_diagram_tokens <base> <commit> <spec-text> -> p
       if [ -z "$named" ]; then printf ' diagram-claim-names-nothing'; return 0; fi
       while IFS= read -r f; do
         [ -n "$f" ] || continue
-        printf '%s\n' "$changed" | grep -qxF "$f" || { printf ' diagram-claim-unbacked(%s)' "$f"; return 0; }
+        grep -qxF "$f" <<< "$changed" || { printf ' diagram-claim-unbacked(%s)' "$(slh_bound name "$f")"; return 0; }
       done <<EOF
 $named
 EOF
       ;;
     no-impact)
-      [ -z "$touched" ] || printf ' diagram-undeclared(%s)' "$(printf '%s' "$touched" | tr '\n' ',' | sed 's/,$//')" ;;
+      [ -z "$touched" ] || printf ' diagram-undeclared(%s)' "$(slh_bound names "$touched")" ;;
   esac
   return 0
 }
@@ -784,10 +1210,10 @@ audit_diagram_nodes() { # audit_diagram_nodes <base> <commit> <closing-nums> -> 
         *) skipped=$((skipped+1)); continue ;;
       esac
       slh_diagram_path_exists "$INSTANCE" "$rev" "$label" && continue
-      if [ "$sp" != "-" ] && printf '%s\n' "$closing" | grep -qw "$sp"; then
-        out="$out diagram-stale-node($f:$label)"
+      if [ "$sp" != "-" ] && grep -qw "$sp" <<< "$closing"; then
+        out="$out diagram-stale-node($(slh_bound name "$f:$label"))"
       else
-        printf 'REPORT   %s  [SLH-DIAGRAM-STALE-NODE] %s draws a %s "%s" whose path does not exist at this commit; an EARLIER spec drew it, so it is reported and not counted. Redraw it in a close that names the file, or retire it with a note.\n' "$SHORT" "$f" "$kind" "$label" >&2
+        printf 'REPORT   %s  [SLH-DIAGRAM-STALE-NODE] %s draws a %s %s whose path does not exist at this commit; an EARLIER spec drew it, so it is reported and not counted. Redraw it in a close that names the file, or retire it with a note.\n' "$SHORT" "$(slh_bound name "$f")" "$kind" "$(slh_bound name "$label")" >&2
       fi
     done <<EOF
 $(printf '%s\n' "$blob" | awk "$SLH_DIAGRAM_NODE_AWK")
@@ -914,7 +1340,7 @@ codeowners_arm() { # codeowners_arm <rev-with-the-file> <closing-commit> <declar
   bad="$(printf '%s\n' "$text" | awk -v mode=parse "$SLH_CODEOWNERS_AWK" | grep '^!unreadable' || true)" # fail-open-ok: an empty result means the file parsed; a parse that printed nothing at all yields no owners below, which is "no owner", the design's own reading of an owner-less pattern
   if [[ -n "$bad" ]]; then
     printf 'VIOLATION %s  [SLH-CODEOWNERS-UNREADABLE] line %s of %s uses %s, which this reader does not evaluate; a close that declares files under an unreadable ownership file cannot be checked against it. The reader accepts the core grammar the forges share (a path pattern with /, * and **, then owners as @login, @org/team or an email; last match wins).\n' \
-      "$SHORT" "$(printf '%s' "$bad" | cut -f2)" "$path" "$(printf '%s' "$bad" | cut -f3)"
+      "$SHORT" "$(printf '%s' "$bad" | cut -f2)" "$path" "$(slh_codeowners_what "$(printf '%s' "$bad" | cut -f3)")"
     VIOLATIONS=$((VIOLATIONS + 1))
     return 1
   fi
@@ -934,12 +1360,12 @@ codeowners_arm() { # codeowners_arm <rev-with-the-file> <closing-commit> <declar
     done
     [[ "$matched" == "1" ]] && continue
     if [[ -n "$unresolved" ]]; then
-      printf 'report    %s  [SLH-OWNS-CODEOWNERS-UNRESOLVED] %s is declared by this close and %s assigns it to%s, which this audit cannot resolve against %s (an email); the forge check resolves handles and teams against the forge. Reported, not refused.\n' \
-        "$SHORT" "$f" "$path" "$unresolved" "${ident:-an unreadable author}"
+      printf 'report    %s  [SLH-OWNS-CODEOWNERS-UNRESOLVED] %s is declared by this close and %s assigns it to %s, which this audit cannot resolve against %s (an email); the forge check resolves handles and teams against the forge. Reported, not refused.\n' \
+        "$SHORT" "$(slh_bound name "$f")" "$path" "$(slh_bound name "${unresolved# }")" "$(slh_bound name "${ident:-an unreadable author}")"
       continue
     fi
     printf 'VIOLATION %s  [SLH-OWNS-CODEOWNERS] %s is declared by this close and %s assigns it to %s, which does not include %s. A close may declare only files its closer owns under the repository'"'"'s own ownership file; ask an owner to close it, or change the ownership file through its own review.\n' \
-      "$SHORT" "$f" "$path" "$owners" "${ident:-an unreadable author}"
+      "$SHORT" "$(slh_bound name "$f")" "$path" "$(slh_bound name "$owners")" "$(slh_bound name "${ident:-an unreadable author}")"
     VIOLATIONS=$((VIOLATIONS + 1))
   done <<EOF
 $list
@@ -947,10 +1373,234 @@ EOF
   [[ "$VIOLATIONS" -eq "$before" ]]
 }
 
+# A RULE IS DATED BY THE RELEASE THAT INTRODUCED IT (spec 0174, decision 3; ruling E-c).
+# The audit re-walks the whole post-baseline history at every push, so a question added in
+# 2.11.0 and asked of history made under 2.6.0 to 2.10.0 would condemn (or report on, at
+# every push, with no remedy) work that was compliant when it was made; post_baseline dates
+# a rule by the instance's ADOPTION, which is the wrong date for a rule added later. So an
+# arm introduced in 2.11.0 is in force for a merge only when the merge's OWN tree stamps
+# `plugin.version` 2.11.0 or later in .claude/sdd.json (the upgrade's refresh moves the
+# key, so the first close after an upgrade carries it). Older, absent or unreadable: not in
+# force, the pre-rule exemption's direction, stated rather than hidden.
+RIF_KEY=""; RIF_RC=1  # the last answer: both arms ask it of the same merge in turn
+rule_in_force() { # rule_in_force <commit> <major.minor> -> 0 when the commit's own sdd.json stamps that version or later
+  local v
+  [[ "$RIF_KEY" != "$1 $2" ]] || return "$RIF_RC"
+  RIF_KEY="$1 $2"; RIF_RC=1
+  v="$(git -C "$INSTANCE" show "$1:.claude/sdd.json" 2>/dev/null | jq -r '(.plugin.version // "") | strings' 2>/dev/null || true)" # fail-open-ok: an unreadable stamp is the pre-rule exemption this function exists to state
+  awk -v v="$v" -v want="$2" "$SLH_VERSION_AT_LEAST_AWK" && RIF_RC=0
+  return "$RIF_RC"
+}
+
+# THE CLOSE REVIEW (spec 0175): the close-review block read with the library's one reader
+# (SLH_CLOSE_REVIEW_AWK above), at the four places this audit judges a close: the linear arm's
+# record and page paths, and the merge arm's two landings beside codeowners_arm and
+# audit_owns_overlap. A fast-forward or a forge-button close fires no merge hook, so the linear
+# arm is the only reader it meets, which is why the linear arm reads the block too (the F4
+# class). Each read is dated by rule_in_force on the close's own plugin.version, so an upgrade
+# never condemns a close made before the review existed; each refusal carries the gate's code.
+# A SKIP-DOCS-ONLY block is accepted only where the close brings no role-path change: the role
+# paths decide the skip, never the reviewer.
+# THE TREE THE GATE READ (spec 0180, fix round 2, the 2.11.0 leg's F9). The close gate reads
+# the block from the index, and at a merge the index IS the merge commit; the merge arms read it
+# from the merged parent's copy, so one close was judged two ways: a block written in the merge
+# resolution passed the gate and was refused at push, and a FAIL written over the branch's PASS
+# reached the trunk reading clean. At a merge the block is read from the merge commit's own tree,
+# the question pre-commit asked, as merge_completion_may_read_commit does for the record; the
+# linear arm already read the commit's own tree. The other readers of the merge arms keep the
+# merged parent: this moves the close review alone.
+# fail-open-ok: an unreadable tree yields empty text, which the reader answers "none", a refusal.
+close_review_text_at() { git -C "$INSTANCE" show "$1:$2" 2>/dev/null | awk "$TEMPLATE_FENCE_AWK" || true; }
+audit_close_review() { # audit_close_review <commit> <spec-text, template-stripped> <spec-num> <first-parent> -> adds VIOLATIONS; 0 when nothing refused
+  local c="$1" out tok
+  rule_in_force "$c" 2.11 || return 0
+  out="$(printf '%s\n' "$2" | awk "$SLH_CLOSE_REVIEW_AWK")"
+  tok="${out%% *}"
+  case "$tok" in
+    pass|accepted) return 0 ;;
+    skip)
+      touches_role "$4" "$c" || return 0
+      printf 'VIOLATION %s  [SLH-CLOSE-REVIEW-SKIP-REFUSED] spec %s reads SKIP-DOCS-ONLY in its close review, but its close brings a file under a declared role path. The skip is decided by the role paths, never by the reviewer: it covers a close that touches no role path.\n' "$SHORT" "$3" ;;
+    fail)
+      printf 'VIOLATION %s  [SLH-CLOSE-REVIEW-FAIL] spec %s reached %s with a close review whose last round reads FAIL. The review runs again on the fixed diff (two rounds at most), and after round 2 the decision is the human'"'"'s, written as verdict: ACCEPTED-BY-HUMAN with the ids it accepts.\n' "$SHORT" "$3" "$TRUNK" ;;
+    *)
+      printf 'VIOLATION %s  [SLH-NO-CLOSE-REVIEW] spec %s reached %s without a usable close-review block in its Closing report (the reader said: %s). Since plugin 2.11.0 /setlist:checkpoint writes it from the close-reviewer agent, or as round 1: SKIP-DOCS-ONLY for a close that touches no role path.\n' "$SHORT" "$3" "$TRUNK" "${out:-nothing}" ;;
+  esac
+  VIOLATIONS=$((VIOLATIONS + 1))
+  return 1
+}
+
+# TWO SPECS IN FLIGHT THAT DECLARE ONE FILE (spec 0174, item 3; TE1, the intake's O-10 as
+# ruled). Disjoint `Owns:` sets let two specs proceed on two branches and close in turn. When
+# the sets overlap, the SECOND close is the one whose branch never saw the first close's change:
+# its branch left the trunk before the first close landed. That is decidable from the history
+# this audit already walks, with no other branch read: the close under audit is a two-parent
+# merge C with the trunk side P1 and the branch P2, BASE is their merge base (computed by the
+# merge arm), and the window is the trunk's own first-parent commits after BASE up to P1. Each
+# window commit E closed the specs whose status is closed at E and not at E^1 (the record's
+# closed set where E carries .claude/status.json, the page's CLOSED cell otherwise); each such
+# spec's `Owns:` set is read from its file AT E with the one ownership reader. A file in both
+# sets refuses C by name, with the exact remedy: a catch-up merge of the trunk into the branch
+# moves BASE past E, so the window no longer holds it and the same close is accepted. The first
+# close is never refused (its window cannot hold the later one), nor is sequential work (a spec
+# cut after E has BASE at or after E). NOT SEEN, and stated in the public text: a second close
+# that is not a two-parent merge (squash, fast-forward: no branch point), and the `git pull`
+# sync shape, which puts the earlier close on the pull merge's SECOND parent, off the
+# first-parent line. REFUSED ALTHOUGH HONEST, and stated too (the validator's ruling E-b): a
+# branch that took the earlier spec by merging its BRANCH rather than the trunk keeps BASE
+# before E; the remedy the message names still works. Dated by rule_in_force (E-c).
+OV_DONE=$'\n'  # the window commits already read, one per line
+OV_DECL=""      # "<commit><TAB><spec><TAB><file>": each file a spec declares, keyed by the commit that closed it
+audit_owns_overlap() { # audit_owns_overlap <merge> <p1> <base> <spec-num> <declared, newline-separated> -> adds VIOLATIONS; 0 when nothing refused
+  local c="$1" p1="$2" base="$3" num="$4" list="$5" before="$VIOLATIONS" e e1 closed0 closed1 pg0 pg1 n sf f hit reported=$'\n'
+  [[ -n "$list" ]] || return 0
+  rule_in_force "$c" 2.11 || return 0
+  [[ "$(git -C "$INSTANCE" cat-file -t "$base" 2>/dev/null)" == "commit" ]] || return 0 # unrelated histories: the branch never left this trunk, so there is no window
+  while IFS= read -r e; do
+    [[ -n "$e" ]] || continue
+    # What E closed and declared is a fact about E alone, read once per audit: windows of
+    # branches in flight together overlap, and each would read the same commits again.
+    case "$OV_DONE" in *$'\n'"$e"$'\n'*) ;; *)
+      OV_DONE="$OV_DONE$e"$'\n'
+      e1="$(git -C "$INSTANCE" rev-parse -q --verify "$e^1" 2>/dev/null)" || continue # a root has nothing before it to have closed since
+      if record_present_at "$e"; then
+        closed1="$(record_at "$e" | jq -r "$SLH_RECORD_CLOSED_JQ" 2>/dev/null || true)" # fail-open-ok: an unreadable record at E closes nothing here; the merge arm refuses a malformed record on its own
+        closed0="$(record_at "$e1" | jq -r "$SLH_RECORD_CLOSED_JQ" 2>/dev/null || true)" # fail-open-ok: as above; an absent record before E reads as nothing closed, so E's whole closed set is new
+      else
+        # The page: a close flips its row, so the candidates are the rows E changed, each
+        # confirmed CLOSED at E and not at E^1 by the page's one cell reader.
+        # Each copy read through the live-text rule, as every page read here is: a row quoted
+        # in a fence or a comment is not a close.
+        closed1=""; closed0=""; pg1=""; pg0=""
+        pg1="$(git -C "$INSTANCE" show "$e:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK" || true)" # fail-open-ok: an unreadable page at E closes nothing here
+        pg0="$(git -C "$INSTANCE" show "$e1:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK" || true)" # fail-open-ok: an absent page before E reads as nothing closed
+        while IFS= read -r n; do
+          [[ -n "$n" ]] || continue
+          row_is_closed "$pg1" "$n" || continue
+          row_is_closed "$pg0" "$n" && continue
+          closed1="$closed1$n"$'\n'
+        done < <(git -C "$INSTANCE" diff "$e1" "$e" -- specs/STATUS.md 2>/dev/null | sed -n 's/^+[[:space:]]*|[[:space:]]*\([0-9][0-9]*[a-z]*\)[[:space:]]*|.*/\1/p')
+      fi
+      while IFS= read -r n; do
+        [[ -n "$n" ]] || continue
+        grep -qxF -- "$n" <<< "$closed0" && continue
+        sf="$(git -C "$INSTANCE" ls-tree --name-only "$e" specs/ 2>/dev/null | grep -E "^specs/$n-[^/]*\.md$" | head -n1 || true)" # fail-open-ok: a closed spec whose file is gone declares nothing to compare
+        [[ -n "$sf" ]] || continue
+        while IFS= read -r f; do
+          [[ -n "$f" ]] && OV_DECL="$OV_DECL$e"$'\t'"$n"$'\t'"$f"$'\n'
+        done < <(git -C "$INSTANCE" show "$e:$sf" 2>/dev/null | awk "$SLH_OWNS_AWK" | grep -v '^!' || true) # fail-open-ok: no declarations is the blockless close, never compared
+      done <<< "$closed1"
+    ;; esac
+    while IFS=$'\t' read -r _ n f; do
+      [[ -n "$n" && "$n" != "$num" ]] || continue
+      case "$reported" in *$'\n'"$e $n"$'\n'*) continue ;; esac
+      grep -qxF -- "$f" <<< "$list" || continue
+      hit="$f"; reported="$reported$e $n"$'\n'
+      printf 'VIOLATION %s  [SLH-OWNS-OVERLAP] spec %s declares %s, which spec %s also declares and closed at %s after this branch left %s; the branch never carried that change. Merge %s into the spec branch so it carries that close, re-run the close, and merge again.\n' \
+        "$SHORT" "$num" "$(slh_bound name "$hit")" "$n" "$(git -C "$INSTANCE" rev-parse --short "$e")" "$(slh_bound name "$TRUNK")" "$(slh_bound name "$TRUNK")"
+      VIOLATIONS=$((VIOLATIONS + 1))
+    done < <(grep -F -- "$e"$'\t' <<< "$OV_DECL" || true) # fail-open-ok: no line is E declaring nothing
+  # Only the window commits that changed the record or the page can have closed anything, and
+  # git names them in ONE read, each commit diffed against its FIRST parent (`-m` with
+  # --first-parent): measured, a branch that lived through 200 trunk commits paid 20 s at every
+  # push reading every one (spec 0174, E-d). NOT a pathspec: git's path-limited walk drops a
+  # merge that is TREESAME to its second parent, which is exactly a --no-ff close of a branch
+  # the trunk had not moved past (measured, control h read accepted under it).
+  done < <(git -C "$INSTANCE" log --first-parent -m --name-only --format='@%H' "$p1" "^$base" 2>/dev/null \
+    | awk '/^@/ { c = substr($0, 2); next } ($0 == ".claude/status.json" || $0 == "specs/STATUS.md") && !(c in seen) { seen[c] = 1; print c }')
+  [[ "$VIOLATIONS" -eq "$before" ]]
+}
+
+# THE EVIL-EDIT ARM, REPORT-ONLY (spec 0174, item 1; the intake's O-3). The injected-file
+# check below reads a merge's own ADDED files; an EDIT to a file both parents carry answered
+# no to it by construction. git 2.38 and later can compute the clean merge of two parents
+# without a worktree (`git merge-tree --write-tree`), and a merge commit's tree differs from
+# that clean merge in exactly two ways: inside the files that CONFLICTED (a hand resolution,
+# which is every real merge's business) and outside them (an edit the merge made that no
+# parent asked for). This names every file of the second kind, every file and not role paths
+# only, as a `report` line under [SLH-MERGE-EDIT-OUTSIDE-CONFLICT]; it adds no violation and
+# never moves the exit status: a refusing arm needs a release of measurement first. Below git
+# 2.38 it is skipped BY NAME, once per audit. A merge it cannot compute is reported by name
+# and the audit goes on. merge-tree WRITES the clean tree's objects; they go to a private
+# object directory with the instance's own as an alternate, removed at exit, so the audit
+# writes nothing into the repository it reads (decision 4).
+MT_STATE=""     # "", ok, old
+MT_OBJDIR=""
+MT_REALOBJ=""
+audit_merge_tree() { # audit_merge_tree <merge> <p1> <p2> <short>: prints report lines only
+  local c="$1" p1="$2" p2="$3" short="$4" gv maj=0 min=0 out tree f conflicted=$'\n' shown="" n=0
+  if [[ -z "$MT_STATE" ]]; then
+    gv="$(git version 2>/dev/null || true)" # fail-open-ok: an unreadable version is read as below 2.38 and the arm is skipped by name, never run blind
+    if [[ "$gv" =~ ([0-9]+)\.([0-9]+) ]]; then maj="${BASH_REMATCH[1]}"; min="${BASH_REMATCH[2]}"; fi
+    if [[ "$maj" -gt 2 ]] || [[ "$maj" -eq 2 && "$min" -ge 38 ]]; then
+      MT_STATE=ok
+    else
+      MT_STATE=old
+      printf 'report    [SLH-MERGE-EDIT-OUTSIDE-CONFLICT] skipped: %s is older than 2.38, which has no `git merge-tree --write-tree`, so no merge on %s was compared with the clean merge of its parents. Reported, not refused.\n' \
+        "$(slh_bound text "${gv:-an unreadable git version}")" "$(slh_bound name "$TRUNK")"
+    fi
+  fi
+  [[ "$MT_STATE" == "ok" ]] || return 0
+  if [[ -z "$MT_OBJDIR" ]]; then
+    MT_REALOBJ="$(git -C "$INSTANCE" rev-parse --path-format=absolute --git-path objects 2>/dev/null || true)" # fail-open-ok: an empty answer is caught on the next line and reported
+    MT_OBJDIR="$(mktemp -d 2>/dev/null || true)" # fail-open-ok: as above
+    trap 'rm -rf "${CFG_TMPD:-}" "${MT_OBJDIR:-}"' EXIT
+    if [[ -z "$MT_REALOBJ" || -z "$MT_OBJDIR" ]]; then
+      MT_STATE=nowhere
+      printf 'report    [SLH-MERGE-EDIT-OUTSIDE-CONFLICT] skipped: no private object directory for the clean merges (check TMPDIR), so no merge on %s was compared. Reported, not refused.\n' "$(slh_bound name "$TRUNK")"
+      return 0
+    fi
+  fi
+  out="$(GIT_OBJECT_DIRECTORY="$MT_OBJDIR" GIT_ALTERNATE_OBJECT_DIRECTORIES="$MT_REALOBJ${GIT_ALTERNATE_OBJECT_DIRECTORIES:+:$GIT_ALTERNATE_OBJECT_DIRECTORIES}" \
+    git -C "$INSTANCE" merge-tree --write-tree -z --name-only --no-messages "$p1" "$p2" 2>/dev/null | tr '\0' '\n')"
+  tree="$(head -n1 <<< "$out")"
+  if [[ ! "$tree" =~ ^[0-9a-f]{40,64}$ ]]; then
+    printf 'report    %s  [SLH-MERGE-EDIT-OUTSIDE-CONFLICT] git could not compute the clean merge of this merge'"'"'s parents, so its tree was not compared. Reported, not refused.\n' "$short"
+    return 0
+  fi
+  conflicted="$conflicted$(tail -n +2 <<< "$out")"$'\n'
+  while IFS= read -r -d '' f; do
+    [[ -n "$f" ]] || continue
+    case "$conflicted" in *$'\n'"$f"$'\n'*) continue ;; esac
+    n=$((n + 1))
+    [[ "$n" -le 20 ]] && shown="$shown${shown:+, }$(slh_bound name "$f")"
+  done < <(GIT_OBJECT_DIRECTORY="$MT_OBJDIR" GIT_ALTERNATE_OBJECT_DIRECTORIES="$MT_REALOBJ${GIT_ALTERNATE_OBJECT_DIRECTORIES:+:$GIT_ALTERNATE_OBJECT_DIRECTORIES}" \
+    git -C "$INSTANCE" diff -z --name-only --no-renames "$tree" "$c" 2>/dev/null)
+  [[ "$n" -gt 20 ]] && shown="$shown and $((n - 20)) more"
+  [[ "$n" -eq 0 ]] && return 0
+  printf 'report    %s  [SLH-MERGE-EDIT-OUTSIDE-CONFLICT] this merge differs from the clean merge of its parents in %d file(s) outside the files that conflicted: %s. A conflict resolution changes only conflicted files, so each of these is an edit the merge itself made; review it at the forge. Reported, not refused.\n' \
+    "$short" "$n" "$shown"
+}
+
 record_present_at() { git -C "$INSTANCE" cat-file -e "$1:.claude/status.json" 2>/dev/null; }
 # fail-open-ok: unreadable-but-present yields empty text, which is not "ok" to
 # record_verdict, so every consumer treats it as the malformed record it is.
 record_at() { git -C "$INSTANCE" show "$1:.claude/status.json" 2>/dev/null || true; }
+
+# THE MERGE COMMIT'S OWN COMPLETION (spec 0157, F10-2026 closed).
+#
+# pre-merge-commit refuses a merge that records no completion and its message
+# says to add the line "in this same commit"; git then says to complete the
+# merge with `git commit`, which fires pre-commit, whose merge-completion
+# verification reads the INDEX and accepts. That index becomes the MERGE COMMIT.
+# This arm read only the merged PARENT, so the identical commit was accepted at
+# commit time and refused at push, on the route the refusal text itself
+# prescribes. Measured by the 2.4.1 adversarial review, identical on the shipped
+# 2.4.0 bytes, and disclosed as an open limitation until now.
+#
+# So when the merged parent answers the completion question with nothing, the
+# question is asked of the merge commit against the trunk side, which is exactly
+# what pre-commit asked of the index. TWO PARENTS ONLY: crediting one record
+# written on a merge commit to SEVERAL merged parents would re-open the
+# laundering route the B6 fix closed (`git merge spec/0001-ok sneaky`), and the
+# refused-then-completed case is the ordinary two-parent one.
+#
+# It widens WHERE a completion may be written and nothing else: a merge with the
+# completion on neither side is refused exactly as before, and the suite pins
+# both controls beside the flipped case.
+merge_completion_may_read_commit() { # merge_completion_may_read_commit -> 0 for a two-parent merge
+  [[ "$NPAR" -eq 2 ]]
+}
 # ONE TOKEN OUT, the attestation verifier's calling convention: the caller
 # refuses anything that is not exactly "ok", so an empty result, a crashed jq
 # or a truncated read refuses BY CONSTRUCTION. jq's exit status is carried.
@@ -977,8 +1627,31 @@ while IFS= read -r C; do
   P1="${PARENT_ARR[1]:-}"
   PARENTS="${PARENT_ARR[*]:1}"
   NPAR=$(( ${#PARENT_ARR[@]} - 1 ))
-  SUBJ="$(git -C "$INSTANCE" log -1 --format=%s "$C" | cut -c1-58)"
+  SUBJ="$(slh_bound text "$(git -C "$INSTANCE" log -1 --format=%s "$C" | cut -c1-58)")"
   SHORT="$(git -C "$INSTANCE" rev-parse --short "$C")"
+
+  # THE OCTOPUS ONTO THE TRUNK (spec 0173, item 4; the intake's ratified row, 0166 row 28).
+  # A close merges ONE spec branch, so a commit on the trunk with more than two parents is
+  # never a compliant close, whatever its parents carry: it is refused BY NAME, ahead of and
+  # instead of the per-parent reading, which judged it as a chore-shaped merge with no
+  # recorded completion (measured) or passed it when every parent was a compliant close.
+  # Post-adoption only: the B2 restatement below keeps the doctrine that an audit does not
+  # condemn history made before its rules, and a pre-adoption octopus keeps that exemption
+  # ("audit age d"). The CHAINED route, an octopus merged INTO a spec branch and closed with
+  # two parents, is untouched: it is the `git pull` shape (Known limitations, crafted merges).
+  # DATED BY THE RELEASE THAT INTRODUCED IT (spec 0180, 0174's E-e as ruled): this is a 2.11.0
+  # rule, so it is in force only for a merge whose OWN tree stamps plugin.version 2.11.0 or later
+  # (rule_in_force, as 0174's arms and 0175's reader are dated; the reason is at rule_in_force's
+  # comment above). An octopus a 2.9.0 or 2.10.0 instance made and pushed after adoption was
+  # accepted then, and refusing it now would refuse every later push with a remedy that cannot
+  # apply to pushed history ("audit age e"). Such a merge still takes the per-parent reading
+  # below, so an unjustified parent is still a violation ("audit age c").
+  if [[ "$NPAR" -gt 2 ]] && post_baseline "$C" && rule_in_force "$C" 2.11; then
+    printf 'VIOLATION %s  [SLH-OCTOPUS-MERGE] a merge of %d branches reached %s at once, made after this instance adopted the rules; a close merges ONE spec branch, so merge each branch on its own\n' "$SHORT" "$((NPAR - 1))" "$TRUNK"
+    printf '          %s\n' "$SUBJ"
+    VIOLATIONS=$((VIOLATIONS + 1))
+    continue
+  fi
 
   if [[ "$NPAR" -lt 2 ]]; then
     # CLOSE VERIFICATION BINDS TO THE EVENT, NOT TO THE MERGE SHAPE (v1.7 claims
@@ -1024,12 +1697,12 @@ while IFS= read -r C; do
         else
           LIN_C_CLOSED="$(printf '%s' "$LIN_REC_C" | jq -r "$SLH_RECORD_CLOSED_JQ" 2>/dev/null || printf '\n!jq-failed')"
           LIN_P1_CLOSED="$(printf '%s' "$LIN_REC_P1" | jq -r "$SLH_RECORD_CLOSED_JQ" 2>/dev/null || printf '\n!jq-failed')"
-          if printf '%s\n' "$LIN_C_CLOSED$LIN_P1_CLOSED" | grep -q '^!jq-failed$'; then
+          if grep -q '^!jq-failed$' <<< "$LIN_C_CLOSED$LIN_P1_CLOSED"; then
             printf 'VIOLATION %s  [SLH-RECORD-MALFORMED] jq failed while reading the status record, so the closing set cannot be established; a reader that could not run has not read.\n' "$SHORT"
             VIOLATIONS=$((VIOLATIONS + 1))
           else
             for LIN_NUM in $LIN_C_CLOSED; do
-              printf '%s\n' "$LIN_P1_CLOSED" | grep -qxF -- "$LIN_NUM" && continue
+              grep -qxF -- "$LIN_NUM" <<< "$LIN_P1_CLOSED" && continue
               LIN_NEWLY="$LIN_NEWLY $LIN_NUM"
             done
             # Chores newly done in this commit's record (F5-2026's half): the
@@ -1041,7 +1714,7 @@ while IFS= read -r C; do
             LIN_C_DONE="$(printf '%s' "$LIN_REC_C" | jq -r "$SLH_RECORD_DONE_JQ" 2>/dev/null || true)"   # fail-open-ok: an empty done set flips no chore and grants nothing
             LIN_P1_DONE="$(printf '%s' "$LIN_REC_P1" | jq -r "$SLH_RECORD_DONE_JQ" 2>/dev/null || true)" # fail-open-ok: as above, empty grants nothing
             for LIN_CN in $LIN_C_DONE; do
-              printf '%s\n' "$LIN_P1_DONE" | grep -qxF -- "$LIN_CN" && continue
+              grep -qxF -- "$LIN_CN" <<< "$LIN_P1_DONE" && continue
               LIN_CHORE_NEW="$LIN_CHORE_NEW $LIN_CN"
             done
           fi
@@ -1068,7 +1741,7 @@ while IFS= read -r C; do
         LIN_HITS="$(git -C "$INSTANCE" ls-tree -r -z --name-only "$C" 2>/dev/null | grep -zE "^specs/${LIN_NUM}-[^/]*\.md$" | tr '\0' '\n' || true)" # fail-open-ok: no file yields empty, handled as its own violation below
         if [ -n "$LIN_HITS" ] && [ "$(printf '%s\n' "$LIN_HITS" | grep -c .)" -ne 1 ]; then
           printf 'VIOLATION %s  spec %s has several files matching specs/%s-*.md, so its close cannot be verified: %s\n' \
-            "$SHORT" "$LIN_NUM" "$LIN_NUM" "$(printf '%s' "$LIN_HITS" | tr '\n' ' ')"
+            "$SHORT" "$LIN_NUM" "$LIN_NUM" "$(slh_bound names "$LIN_HITS")"
           VIOLATIONS=$((VIOLATIONS + 1)); SEEN_BAD=1
           continue
         fi
@@ -1114,6 +1787,13 @@ while IFS= read -r C; do
           VIOLATIONS=$((VIOLATIONS + 1)); SEEN_BAD=1
           continue
         fi
+        # THE CLOSE REVIEW (spec 0175) on the linear route's record path: the block lives in
+        # the Closing report on both paths, as the diagram field does.
+        if ! audit_close_review "$C" "$LIN_DIAG_TEXT" "$LIN_NUM" "$P1"; then
+          printf '          %s\n' "$SUBJ"
+          SEEN_BAD=1
+          continue
+        fi
         # A COMPLIANT CLOSE, ON A COMMIT WITH FEWER THAN TWO PARENTS (F4),
         # established by the record. WHAT IT EXEMPTS is the ownership
         # question (design section 8.2): a spec that DECLARES its files gets
@@ -1128,13 +1808,13 @@ while IFS= read -r C; do
         # THE LITE TIER'S CAP (edition v1.14, P1): the reader appends the token
         # when a `Tier: lite` spec declares more than five files; refused here
         # as at the hooks, then stripped so the declared set is still judged.
-        if printf '%s\n' "$LIN_OWNS_OUT" | grep -q '^!lite-oversized$'; then
+        if grep -q '^!lite-oversized$' <<< "$LIN_OWNS_OUT"; then
           printf 'VIOLATION %s  [SLH-LITE-OVERSIZED] spec %s is declared Tier: lite and declares more than five files under Owns:. A lite spec is at most five files (Part 3 of the edition); the two honest exits are to drop the tier line (a full spec, judged exactly as before) or to split the work, both through /setlist:checkpoint. The tier is a claim about size, and a claim the close cannot honour is refused rather than reread.\n' "$SHORT" "$LIN_NUM"
           printf '          %s\n' "$SUBJ"
           VIOLATIONS=$((VIOLATIONS + 1))
           LIN_OWNS_OUT="$(printf '%s\n' "$LIN_OWNS_OUT" | grep -v '^!lite-oversized$')"
         fi
-        if printf '%s\n' "$LIN_OWNS_OUT" | grep -q '^!'; then
+        if grep -q '^!' <<< "$LIN_OWNS_OUT"; then
           printf 'VIOLATION %s  [SLH-OWNS-MALFORMED] spec %s declares ownership outside the grammar (a glob, a directory, a quoted or empty path, or an Owns: line below the Closing report heading). One verbatim repo-relative file per "Owns: " line, at column 0, inside the hashed range. The range ends at the FIRST line reading "## Closing report", fences included, because that byte-same cut is what attestation signs: a fenced or quoted copy of the Closing-report template ABOVE your declaration ends the range early, and the fix is one edit (move the declaration above the quote, or drop the quoted heading line). A declared set that cannot be enumerated is an exemption wearing a declaration, so this close exempts nothing until the declaration is fixed through /setlist:checkpoint.\n' "$SHORT" "$LIN_NUM"
           printf '          %s\n' "$SUBJ"
           VIOLATIONS=$((VIOLATIONS + 1))
@@ -1181,7 +1861,7 @@ $LIN_CF"
         LIN_HITS="$(git -C "$INSTANCE" ls-tree -r -z --name-only "$C" 2>/dev/null | grep -zE "^specs/${LIN_NUM}-[^/]*\.md$" | tr '\0' '\n' || true)" # fail-open-ok: no file yields empty, handled as its own violation below
         if [ -n "$LIN_HITS" ] && [ "$(printf '%s\n' "$LIN_HITS" | grep -c .)" -ne 1 ]; then
           printf 'VIOLATION %s  spec %s has several files matching specs/%s-*.md, so its close cannot be verified: %s\n' \
-            "$SHORT" "$LIN_NUM" "$LIN_NUM" "$(printf '%s' "$LIN_HITS" | tr '\n' ' ')"
+            "$SHORT" "$LIN_NUM" "$LIN_NUM" "$(slh_bound names "$LIN_HITS")"
           VIOLATIONS=$((VIOLATIONS + 1)); SEEN_BAD=1
           continue
         fi
@@ -1200,9 +1880,9 @@ $LIN_CF"
         # merge close.
         LIN_TEXT="$(printf '%s\n' "$LIN_TEXT" | awk "$TEMPLATE_FENCE_AWK")"
         LIN_MISS=""
-        printf '%s\n' "$LIN_TEXT" | grep -qE $'^ {0,3}#{1,6}[ \t]+Closing report' || LIN_MISS="$LIN_MISS no-closing-report"
+        grep -qE $'^ {0,3}#{1,6}[ \t]+Closing report' <<< "$LIN_TEXT" || LIN_MISS="$LIN_MISS no-closing-report"
         [[ "$(printf '%s\n' "$LIN_TEXT" | awk "$QA_PASS1_AWK")" == "ok" ]] || LIN_MISS="$LIN_MISS no-qa-verdict"
-        LIN_DIAG="$(printf '%s\n' "$LIN_TEXT" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | head -n1)" # fail-open-ok: empty is the missing field, tested next
+        LIN_DIAG="$(printf '%s\n' "$LIN_TEXT" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | awk 'NR == 1')" # fail-open-ok: empty is the missing field, tested next
         LIN_ANS="$(printf '%s' "$LIN_DIAG" | sed -e 's/^[-*+>[:space:]]*Architecture diagram:[[:space:]]*//')"
         # PLACEHOLDER SHAPE, NOT THE CHARACTER '<' (leg F11, here too). This arm
         # kept the pre-F11 predicate after the merge arm below was corrected, so
@@ -1215,16 +1895,23 @@ $LIN_CF"
         # absence differential forbids.
         LIN_ARMED=0; slh_diagram_switch_on "$INSTANCE" "$P1" && LIN_ARMED=1
         if [[ -z "$LIN_DIAG" ]]; then LIN_MISS="$LIN_MISS no-diagram-field"
-        elif ! printf '%s' "$LIN_ANS" | sed 's/^[[:space:]]*//' | grep -qE '^(updated in this commit|no impact)([^A-Za-z]|$)' \
-             && ! { [[ "$LIN_ARMED" == "1" ]] && printf '%s' "$LIN_ANS" | sed 's/^[[:space:]]*//' | grep -qE '^updated[[:space:]]*\('; }; then LIN_MISS="$LIN_MISS diagram-unanswered"; fi
+        elif ! grep -qE '^(updated in this commit|no impact)([^A-Za-z]|$)' <<< "$(printf '%s' "$LIN_ANS" | sed 's/^[[:space:]]*//')" \
+             && ! { [[ "$LIN_ARMED" == "1" ]] && grep -qE '^updated[[:space:]]*\(' <<< "$(printf '%s' "$LIN_ANS" | sed 's/^[[:space:]]*//')"; }; then LIN_MISS="$LIN_MISS diagram-unanswered"; fi
         # THE FIELD AGAINST THE DIFF, AND THE NODES AGAINST THE TREE (v1.15).
         LIN_MISS="$LIN_MISS$(audit_diagram_tokens "$P1" "$C" "$LIN_TEXT")"
         LIN_MISS="$LIN_MISS$(audit_diagram_nodes "$P1" "$C" "$LIN_NUM")"
+        # THE CLOSE REVIEW (spec 0175) on the linear route's page path: its own line, with
+        # the gate's code; a close that fails it is not the compliant close below.
+        LIN_CR_OK=1
+        if ! audit_close_review "$C" "$LIN_TEXT" "$LIN_NUM" "$P1"; then
+          printf '          %s\n' "$SUBJ"
+          LIN_CR_OK=0
+        fi
         if [[ -n "$LIN_MISS" ]]; then
           printf 'VIOLATION %s  spec %s was marked CLOSED without:%s\n' "$SHORT" "$LIN_NUM" "$LIN_MISS"
           printf '          %s\n' "$SUBJ"
           VIOLATIONS=$((VIOLATIONS + 1))
-        else
+        elif [[ "$LIN_CR_OK" == "1" ]]; then
           # A COMPLIANT CLOSE, ON A COMMIT WITH FEWER THAN TWO PARENTS (F4).
           LIN_CLOSED_OK=1
         fi
@@ -1310,8 +1997,8 @@ $LIN_CF"
         # Declared paths match by EXACT bytes, never by fold or glob: a
         # case-variant of a declared path is a different string, reads as
         # undeclared, and refuses, which is the safe direction (PD9's class).
-        if ! printf '%s\n' "$LIN_OWNS_LIST" | grep -qxF -- "$LIN_RF"; then
-          printf 'VIOLATION %s  [SLH-OWNS-UNDECLARED] %s is a role-path file this close does not declare. A declaring close is audited file by file against its declared set, so a whole commit can no longer be exempted by one row flip. Two honest exits: declare the file through /setlist:checkpoint (under attestation custody that means re-approval, correctly), or take the --no-ff merge route, whose arm asks the provenance question instead.\n' "$SHORT" "$LIN_RF"
+        if ! grep -qxF -- "$LIN_RF" <<< "$LIN_OWNS_LIST"; then
+          printf 'VIOLATION %s  [SLH-OWNS-UNDECLARED] %s is a role-path file this close does not declare. A declaring close is audited file by file against its declared set, so a whole commit can no longer be exempted by one row flip. Two honest exits: declare the file through /setlist:checkpoint (under attestation custody that means re-approval, correctly), or take the --no-ff merge route, whose arm asks the provenance question instead.\n' "$SHORT" "$(slh_bound name "$LIN_RF")"
           printf '          %s\n' "$SUBJ"
           VIOLATIONS=$((VIOLATIONS + 1))
           LIN_OWNS_VIOL=1
@@ -1344,6 +2031,14 @@ $LIN_CF"
     continue
   fi
 
+  # AN EDIT NO PARENT ASKED FOR (spec 0174): the evil-edit arm (audit_merge_tree),
+  # report-only, for every two-parent merge made under the release that introduced it,
+  # asked HERE, before the role-path shortcut below: a merge that brings no role-path
+  # change (a docs branch, a `-s ours` merge that drops one side) can still edit a file.
+  if [[ "$NPAR" -eq 2 ]] && rule_in_force "$C" 2.11; then
+    audit_merge_tree "$C" "$P1" "${PARENT_ARR[2]}" "$SHORT"
+  fi
+
   if ! touches_role "$P1" "$C"; then
     CLEAN=$((CLEAN + 1))
     continue
@@ -1364,11 +2059,20 @@ $LIN_CF"
 
     # Which spec did the merged branch carry? Read it from the branch side, so a
     # renamed branch or a lost branch name changes nothing.
-    # Unrelated histories have no merge-base, leaving BASE empty so the diff
-    # reads the whole branch. That over-reports spec files rather than under-
-    # reporting them, and erring toward FINDING a spec errs toward CHECKING it.
-    # fail-open-ok: an empty BASE widens the search, it does not skip it.
-    BASE="$(git -C "$INSTANCE" merge-base "$P1" "$P2" 2>/dev/null || true)"
+    # Unrelated histories have no merge-base, and the comment here used to say
+    # an empty BASE widened the search. It did not (spec 0164, fix round 2, F5
+    # of the 2.10.0 leg): `git diff --name-only "" <p2>` is a fatal argument
+    # error, the search read NOTHING, and a merge that imported a whole
+    # subproject with --allow-unrelated-histories audited clean while its spec
+    # and its role-path files sat on the trunk. The widening is written down
+    # now: with no merge-base the branch is diffed against the EMPTY TREE, which
+    # really is its whole content.
+    BASE="$(git -C "$INSTANCE" merge-base "$P1" "$P2" 2>/dev/null || true)" # fail-open-ok: no merge-base is the unrelated-histories case, and the empty tree below reads the whole branch rather than nothing
+    if [[ -z "$BASE" ]]; then
+      # fail-open-ok: an empty answer here cannot be swallowed, the die below refuses the audit
+      BASE="$(git -C "$INSTANCE" hash-object -t tree /dev/null 2>/dev/null || true)"
+      [[ -n "$BASE" ]] || die "[SLH-RECORD-MALFORMED] git could not name the empty tree in $INSTANCE, so a merge of unrelated histories cannot be read at all and a clean report would be a false attestation."
+    fi
     # Spec numbers carry an optional letter suffix in the field: 0005b and
     # 0008c are ordinary parallel-track specs, and the first cut of this regex
     # required digits-then-dash, so it read every one of them as "no spec file"
@@ -1390,9 +2094,58 @@ $LIN_CF"
     MRG_STRUCTURED=0
     MRG_REC_P2=""
     MRG_REC_P1=""
-    if record_present_at "$P2"; then
+    # The merge commit's own page, read once for the two completion questions
+    # spec 0157 asks of it (the archive line and the CLOSED row). Empty when the
+    # merge is not a two-parent one, so nothing reads it there.
+    STATUS_TEXT_C=""
+    if merge_completion_may_read_commit; then
+      STATUS_TEXT_C="$(git -C "$INSTANCE" show "$C:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK" || true)" # fail-open-ok: an unreadable STATUS.md yields empty, which fails every test below and cannot excuse a merge
+    fi
+    # WHICH RULEBOOK: THE MERGE COMMIT'S OWN READING (spec 0167, decision 3;
+    # L2 F6 of the 2.10.0 second leg). pre-commit chooses record or page from
+    # the INDEX of the commit completing a merge, and that index becomes C. This
+    # arm chose from the merged parent P2 alone, so a branch cut before the
+    # instance adopted .claude/status.json, its refused merge completed on the
+    # trunk side as the message prescribes, passed by the record at commit and
+    # was refused by the page at push, with no amend able to fix it. So for a
+    # TWO-PARENT merge whose branch carries no record, C's own record decides
+    # when it COMPLETES this merge against the trunk side: it newly closes a
+    # spec the branch touched, or, for a branch touching no spec, newly marks a
+    # chore done. A C record that completes nothing leaves the page path on P2
+    # exactly as it was, so no pre-record history is newly refused. An octopus
+    # is not credited (merge_completion_may_read_commit), for the reason 0157
+    # gives. Inline rather than a helper: the question is asked once, here.
+    MRG_REC_FROM_C=0
+    if ! record_present_at "$P2" && merge_completion_may_read_commit && record_present_at "$C"; then
+      MRG_REC_C0="$(record_at "$C")"
+      if [[ "$(record_verdict "$MRG_REC_C0")" == "ok" ]]; then
+        MRG_REC_P10=""
+        record_present_at "$P1" && MRG_REC_P10="$(record_at "$P1")"
+        if [[ -n "$SPECS_TOUCHED" ]]; then
+          MRG_NEW_C="$(printf '%s' "$MRG_REC_C0" | jq -r "$SLH_RECORD_CLOSED_JQ" 2>/dev/null || true)" # fail-open-ok: an empty closed set completes nothing and leaves the page path in charge
+          MRG_OLD_P1="$(printf '%s' "$MRG_REC_P10" | jq -r "$SLH_RECORD_CLOSED_JQ" 2>/dev/null || true)" # fail-open-ok: an unreadable trunk-side record reads as nothing closed before, the permissive direction the record path already takes
+          while IFS= read -r MRG_SF; do
+            [[ -n "$MRG_SF" ]] || continue
+            MRG_SN="$(printf '%s' "$MRG_SF" | sed -e 's#^specs/##' -e 's#-.*##')"
+            if grep -qxF -- "$MRG_SN" <<< "$MRG_NEW_C" && ! grep -qxF -- "$MRG_SN" <<< "$MRG_OLD_P1"; then
+              MRG_REC_FROM_C=1; break
+            fi
+          done <<< "$SPECS_TOUCHED"
+        else
+          MRG_NEW_C="$(printf '%s' "$MRG_REC_C0" | jq -r "$SLH_RECORD_DONE_JQ" 2>/dev/null || true)" # fail-open-ok: an empty done set completes nothing and leaves the page path in charge
+          MRG_OLD_P1="$(printf '%s' "$MRG_REC_P10" | jq -r "$SLH_RECORD_DONE_JQ" 2>/dev/null || true)" # fail-open-ok: as above
+          while IFS= read -r MRG_SN; do
+            [[ -n "$MRG_SN" ]] || continue
+            if ! grep -qxF -- "$MRG_SN" <<< "$MRG_OLD_P1"; then MRG_REC_FROM_C=1; break; fi
+          done <<< "$MRG_NEW_C"
+        fi
+      fi
+    fi
+    if record_present_at "$P2" || [[ "$MRG_REC_FROM_C" == "1" ]]; then
       MRG_STRUCTURED=1
-      MRG_REC_P2="$(record_at "$P2")"
+      # The branch's record, or, on the mixed shape above, the merge commit's:
+      # the record pre-commit read in the index.
+      if [[ "$MRG_REC_FROM_C" == "1" ]]; then MRG_REC_P2="$MRG_REC_C0"; else MRG_REC_P2="$(record_at "$P2")"; fi
       if [[ "$(record_verdict "$MRG_REC_P2")" != "ok" ]]; then
         printf 'VIOLATION %s  [SLH-RECORD-MALFORMED] .claude/status.json on the merged branch is not a well-formed status record, so what this merge closes or records cannot be read from it. Nothing falls back to the page readers; only /setlist:checkpoint writes this file.\n' "$SHORT"
         printf '          %s\n' "$SUBJ"
@@ -1420,10 +2173,25 @@ $LIN_CF"
       [[ -n "$MRG_REC_P1" ]] && MRG_DONE_P1="$(printf '%s' "$MRG_REC_P1" | jq -r "$SLH_RECORD_DONE_JQ" 2>/dev/null || true)" # fail-open-ok: as above, the empty direction suppresses the excuse
       while IFS= read -r CN; do
         [[ -n "$CN" ]] || continue
-        if ! printf '%s\n' "$MRG_DONE_P1" | grep -qxF -- "$CN"; then
+        if ! grep -qxF -- "$CN" <<< "$MRG_DONE_P1"; then
           RECORDED_CHORE="$CN"; break
         fi
       done <<< "$MRG_DONE_P2"
+      # ...and, when the branch records none, the merge commit's own record
+      # (spec 0157): the completion written while completing a refused merge
+      # lands there, which is where pre-commit read it.
+      if [[ -z "$RECORDED_CHORE" ]] && merge_completion_may_read_commit && record_present_at "$C"; then
+        MRG_REC_C="$(record_at "$C")"
+        if [[ "$(record_verdict "$MRG_REC_C")" == "ok" ]]; then
+          MRG_DONE_C="$(printf '%s' "$MRG_REC_C" | jq -r "$SLH_RECORD_DONE_JQ" 2>/dev/null || true)" # fail-open-ok: an empty done set cannot excuse a merge, only fail to excuse it
+          while IFS= read -r CN; do
+            [[ -n "$CN" ]] || continue
+            if ! grep -qxF -- "$CN" <<< "$MRG_DONE_P1"; then
+              RECORDED_CHORE="$CN"; break
+            fi
+          done <<< "$MRG_DONE_C"
+        fi
+      fi
     else
     # fail-open-ok: same, an unreadable STATUS.md fails the row test below.
     # LIVE TEXT AT THE SOURCE (2026-08 consolidation): stripped ONCE at
@@ -1463,10 +2231,22 @@ $LIN_CF"
     RECORDED_CHORE=""
     while IFS= read -r CN; do
       [[ -n "$CN" ]] || continue
-      if ! printf '%s\n' "$PRIOR_STATUS" | grep -qE "^[-*+>[:space:]]*${CN}[[:space:]]*:[[:space:]]*DONE([^A-Za-z]|$)"; then
+      if ! grep -qE "^[-*+>[:space:]]*${CN}[[:space:]]*:[[:space:]]*DONE([^A-Za-z]|$)" <<< "$PRIOR_STATUS"; then
         RECORDED_CHORE="$CN"; break
       fi
     done <<< "$CHORES_NOW"
+    # The page path's half of spec 0157: the archive line added while completing
+    # a refused merge is on the MERGE COMMIT, which is the text pre-commit read
+    # in the index. Same two-parent bound, same trunk-side comparison.
+    if [[ -z "$RECORDED_CHORE" ]] && merge_completion_may_read_commit; then
+      CHORES_AT_C="$(printf '%s\n' "$STATUS_TEXT_C" | grep -oE "$CHORE_DONE_RE" 2>/dev/null | grep -oE 'CHORE-[0-9]+' || true)" # fail-open-ok: no archive line leaves this EMPTY, which cannot excuse a merge, only fail to excuse it
+      while IFS= read -r CN; do
+        [[ -n "$CN" ]] || continue
+        if ! grep -qE "^[-*+>[:space:]]*${CN}[[:space:]]*:[[:space:]]*DONE([^A-Za-z]|$)" <<< "$PRIOR_STATUS"; then
+          RECORDED_CHORE="$CN"; break
+        fi
+      done <<< "$CHORES_AT_C"
+    fi
     fi
 
     if [[ -z "$SPECS_TOUCHED" ]]; then
@@ -1539,7 +2319,21 @@ $LIN_CF"
       # prose Closing report is a human artifact this arm no longer parses on
       # the structured path.
       if [[ "$MRG_STRUCTURED" == "1" ]]; then
-        MRG_ST="$(printf '%s' "$MRG_REC_P2" | jq -r --arg num "$SPEC_NUM" "$SLH_RECORD_STATUS_JQ" 2>/dev/null || printf 'jq-failed')"
+        # The record that answers for this spec: the branch's, or, when the
+        # branch's says nothing and this is a two-parent merge, the merge
+        # commit's own (spec 0157). The close facts written while completing a
+        # refused merge are there, and that is the record pre-commit read.
+        MRG_REC_EFF="$MRG_REC_P2"
+        MRG_ST="$(printf '%s' "$MRG_REC_EFF" | jq -r --arg num "$SPEC_NUM" "$SLH_RECORD_STATUS_JQ" 2>/dev/null || printf 'jq-failed')"
+        MRG_FACTS_EFF="$(printf '%s' "$MRG_REC_EFF" | jq -r --arg num "$SPEC_NUM" "$SLH_RECORD_FACTS_JQ" 2>/dev/null || printf 'jq-failed')"
+        if [[ "$MRG_FACTS_EFF" != "ok" ]] && merge_completion_may_read_commit && record_present_at "$C"; then
+          MRG_REC_C_SPEC="$(record_at "$C")"
+          if [[ "$(record_verdict "$MRG_REC_C_SPEC")" == "ok" ]] \
+             && [[ "$(printf '%s' "$MRG_REC_C_SPEC" | jq -r --arg num "$SPEC_NUM" "$SLH_RECORD_FACTS_JQ" 2>/dev/null || printf 'jq-failed')" == "ok" ]]; then
+            MRG_REC_EFF="$MRG_REC_C_SPEC"
+            MRG_ST="$(printf '%s' "$MRG_REC_EFF" | jq -r --arg num "$SPEC_NUM" "$SLH_RECORD_STATUS_JQ" 2>/dev/null || printf 'jq-failed')"
+          fi
+        fi
         if [[ "$MRG_ST" == "absent" || "$MRG_ST" == "jq-failed" || -z "$MRG_ST" ]]; then
           printf 'VIOLATION %s  [SLH-RECORD-NO-SPEC] spec %s reached %s with no entry in .claude/status.json. Run /setlist:checkpoint to record the spec, then close it through checkpoint; a spec cut before the record existed gets its entry backfilled at its next checkpoint touch.\n' "$SHORT" "$SPEC_NUM" "$TRUNK"
           printf '          %s\n' "$SUBJ"
@@ -1547,7 +2341,7 @@ $LIN_CF"
           SEEN_BAD=1
           continue
         fi
-        MRG_FACTS="$(printf '%s' "$MRG_REC_P2" | jq -r --arg num "$SPEC_NUM" "$SLH_RECORD_FACTS_JQ" 2>/dev/null || printf 'jq-failed')"
+        MRG_FACTS="$(printf '%s' "$MRG_REC_EFF" | jq -r --arg num "$SPEC_NUM" "$SLH_RECORD_FACTS_JQ" 2>/dev/null || printf 'jq-failed')"
         if [[ "$MRG_FACTS" != "ok" ]]; then
           printf 'VIOLATION %s  [SLH-RECORD-NO-CLOSE] spec %s reached %s without its close facts in .claude/status.json (status closed, qa_pass_1 ok, diagram updated or no-impact; the reader said: %s). /setlist:checkpoint writes these at the close.\n' "$SHORT" "$SPEC_NUM" "$TRUNK" "${MRG_FACTS:-nothing at all}"
           printf '          %s\n' "$SUBJ"
@@ -1581,7 +2375,7 @@ $LIN_CF"
           # path's note below; the same ADDED read, not the completion question).
           # The lite tier's cap on the structured merge route (edition v1.14,
           # P1): the tier is a claim about the spec, not about how it landed.
-          if git -C "$INSTANCE" show "$P2:$SPEC_FILE" 2>/dev/null | awk "$SLH_OWNS_AWK" | grep -q '^!lite-oversized$'; then
+          if grep -q '^!lite-oversized$' <<< "$(git -C "$INSTANCE" show "$P2:$SPEC_FILE" 2>/dev/null | awk "$SLH_OWNS_AWK")"; then
             printf 'VIOLATION %s  [SLH-LITE-OVERSIZED] spec %s is declared Tier: lite and declares more than five files under Owns:. A lite spec is at most five files (Part 3 of the edition); the two honest exits are to drop the tier line (a full spec, judged exactly as before) or to split the work, both through /setlist:checkpoint. The tier is a claim about size, and a claim the close cannot honour is refused rather than reread.\n' "$SHORT" "$SPEC_NUM"
             printf '          %s\n' "$SUBJ"
             VIOLATIONS=$((VIOLATIONS + 1))
@@ -1589,6 +2383,16 @@ $LIN_CF"
           fi
           MRG_OWNS="$(git -C "$INSTANCE" show "$P2:$SPEC_FILE" 2>/dev/null | awk "$SLH_OWNS_AWK" | grep -v '^!' || true)" # fail-open-ok: no declarations is the blockless close, never judged by file
           if [[ -n "$MRG_OWNS" ]] && ! codeowners_arm "$C" "$P2" "$MRG_OWNS"; then
+            printf '          %s\n' "$SUBJ"
+            SEEN_BAD=1
+          fi
+          if [[ -n "$MRG_OWNS" ]] && ! audit_owns_overlap "$C" "$P1" "$BASE" "$SPEC_NUM" "$MRG_OWNS"; then
+            printf '          %s\n' "$SUBJ"
+            SEEN_BAD=1
+          fi
+          # THE CLOSE REVIEW (spec 0175), at the merge that closes the spec, read from the
+          # merge commit's own tree (audit_close_review's header says why).
+          if ! audit_close_review "$C" "$(close_review_text_at "$C" "$SPEC_FILE")" "$SPEC_NUM" "$P1"; then
             printf '          %s\n' "$SUBJ"
             SEEN_BAD=1
           fi
@@ -1622,7 +2426,7 @@ $LIN_CF"
       SPEC_TEXT="$(printf '%s\n' "$SPEC_TEXT" | awk "$TEMPLATE_FENCE_AWK")"
 
       MISSING=""
-      printf '%s\n' "$SPEC_TEXT" | grep -qE $'^ {0,3}#{1,6}[ \t]+Closing report' || MISSING="$MISSING no-closing-report"
+      grep -qE $'^ {0,3}#{1,6}[ \t]+Closing report' <<< "$SPEC_TEXT" || MISSING="$MISSING no-closing-report"
 
       # THE VERDICT IS A PASTED BLOCK, NOT A WORD IN PROSE (B6, leg 5 F15).
       # This was `grep PASS|PARTIAL|FAIL` over the WHOLE spec, so "the browser
@@ -1650,13 +2454,19 @@ $LIN_CF"
       # asks whether the verdict is a FIELD (a table cell, a bracketed verdict,
       # a labelled value, a verdict-as-label, or the first or last thing on its
       # line) rather than where on the line it happens to sit. Prose is still
-      # refused, which is the half B6 exists for; the full reasoning, and the
-      # tally boundary this deliberately does not cross, are in the framework
-      # source's private hook-rulings record, under the retired close-gate region.
+      # refused, which is the half B6 exists for; and a tally (a count of passes)
+      # is deliberately never read as a verdict, because a pattern wide enough to
+      # admit one is wide enough to admit a sentence containing one.
       [[ "$(printf '%s\n' "$SPEC_TEXT" | awk "$QA_PASS1_AWK")" == "ok" ]] \
         || MISSING="$MISSING no-qa-verdict"
 
-      row_is_closed "$STATUS_TEXT" "$SPEC_NUM" || MISSING="$MISSING no-CLOSED-row"
+      # The row, on the branch or on the merge commit itself (spec 0157): a close
+      # completed on the trunk side after pre-merge-commit refused it flips the
+      # row in the commit pre-commit accepted, and both layers now read it there.
+      if ! row_is_closed "$STATUS_TEXT" "$SPEC_NUM" \
+         && ! { merge_completion_may_read_commit && row_is_closed "$STATUS_TEXT_C" "$SPEC_NUM"; }; then
+        MISSING="$MISSING no-CLOSED-row"
+      fi
 
       # THE DIAGRAM FIELD, WHICH THIS AUDIT DID NOT READ (v1.7 claims round 6).
       #
@@ -1673,7 +2483,7 @@ $LIN_CF"
       # list bullet, FIRST match wins (KL1, ruled 2026-08-29), the ANSWER
       # anchored to the start of the value (F6-2026), and the template
       # placeholder does not count as an answer.
-      DIAG_LINE="$(printf '%s\n' "$SPEC_TEXT" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | head -n1)" # fail-open-ok: no line yields empty, which the test below reads as the missing field it is
+      DIAG_LINE="$(printf '%s\n' "$SPEC_TEXT" | awk "$SLH_LIVE_TEXT_AWK" | grep -E '^[-*+>[:space:]]*Architecture diagram:' | awk 'NR == 1')" # fail-open-ok: no line yields empty, which the test below reads as the missing field it is
       # LOCKSTEP MEANS THE SAME TEST, NOT THE SAME LINE (v1.7 final claims pass).
       #
       # The first cut of this check found the same line as the hook and then
@@ -1696,8 +2506,8 @@ $LIN_CF"
       # because the genuine unfilled template strips to nothing and stays refused.
       # Asserted across the value space rather than at a spelling: this field has
       # been corrected three times, twice by repairing only the case reported.
-      elif ! printf '%s' "$DIAG_ANSWER" | sed 's/<[^>]*>//g' | sed 's/^[[:space:]]*//' | grep -qE '^(updated in this commit|no impact)([^A-Za-z]|$)' \
-           && ! { MRG_ARMED=0; slh_diagram_switch_on "$INSTANCE" "$P1" && MRG_ARMED=1; [[ "$MRG_ARMED" == "1" ]] && printf '%s' "$DIAG_ANSWER" | sed 's/<[^>]*>//g' | sed 's/^[[:space:]]*//' | grep -qE '^updated[[:space:]]*\('; }; then
+      elif ! grep -qE '^(updated in this commit|no impact)([^A-Za-z]|$)' <<< "$(printf '%s' "$DIAG_ANSWER" | sed 's/<[^>]*>//g' | sed 's/^[[:space:]]*//')" \
+           && ! { MRG_ARMED=0; slh_diagram_switch_on "$INSTANCE" "$P1" && MRG_ARMED=1; [[ "$MRG_ARMED" == "1" ]] && grep -qE '^updated[[:space:]]*\(' <<< "$(printf '%s' "$DIAG_ANSWER" | sed 's/<[^>]*>//g' | sed 's/^[[:space:]]*//')"; }; then
         MISSING="$MISSING diagram-unanswered"
       fi
       # THE FIELD AGAINST THE DIFF, AND THE NODES AGAINST THE TREE (v1.15). The
@@ -1723,7 +2533,7 @@ $LIN_CF"
         # to the completion question F10-2026 names.
         # The lite tier's cap on the merge route too (edition v1.14, P1): the
         # tier is a claim about the spec, not about how it landed.
-        if printf '%s\n' "$SPEC_TEXT" | awk "$SLH_OWNS_AWK" | grep -q '^!lite-oversized$'; then
+        if grep -q '^!lite-oversized$' <<< "$(printf '%s\n' "$SPEC_TEXT" | awk "$SLH_OWNS_AWK")"; then
           printf 'VIOLATION %s  [SLH-LITE-OVERSIZED] spec %s is declared Tier: lite and declares more than five files under Owns:. A lite spec is at most five files (Part 3 of the edition); the two honest exits are to drop the tier line (a full spec, judged exactly as before) or to split the work, both through /setlist:checkpoint. The tier is a claim about size, and a claim the close cannot honour is refused rather than reread.\n' "$SHORT" "$SPEC_NUM"
           printf '          %s\n' "$SUBJ"
           VIOLATIONS=$((VIOLATIONS + 1))
@@ -1731,6 +2541,16 @@ $LIN_CF"
         fi
         MRG_OWNS="$(printf '%s\n' "$SPEC_TEXT" | awk "$SLH_OWNS_AWK" | grep -v '^!' || true)" # fail-open-ok: no declarations is the blockless close, which this arm never judged by file
         if [[ -n "$MRG_OWNS" ]] && ! codeowners_arm "$C" "$P2" "$MRG_OWNS"; then
+          printf '          %s\n' "$SUBJ"
+          SEEN_BAD=1
+        fi
+        if [[ -n "$MRG_OWNS" ]] && ! audit_owns_overlap "$C" "$P1" "$BASE" "$SPEC_NUM" "$MRG_OWNS"; then
+          printf '          %s\n' "$SUBJ"
+          SEEN_BAD=1
+        fi
+        # THE CLOSE REVIEW (spec 0175), at the merge that closes the spec, read from the
+        # merge commit's own tree (audit_close_review's header says why).
+        if ! audit_close_review "$C" "$(close_review_text_at "$C" "$SPEC_FILE")" "$SPEC_NUM" "$P1"; then
           printf '          %s\n' "$SUBJ"
           SEEN_BAD=1
         fi
@@ -1802,15 +2622,18 @@ EOF
   # named in Known limitations.
   if [[ "$NPAR" -ge 2 ]]; then
     INJECTED=""
-    while IFS= read -r nf; do
+    # EACH NAME WHOLE (spec 0169, fix round 1, E-k): git's -z output was turned
+    # back into newlines before it was read, so a file name holding a newline
+    # was judged and printed as fragments. NUL-delimited, as touches_role reads.
+    while IFS= read -r -d '' nf; do
       [[ -n "$nf" ]] || continue
       touches_role_file "$nf" || continue
       IN_A_PARENT=0
       for PP in $PARENTS; do
         git -C "$INSTANCE" cat-file -e "$PP:$nf" 2>/dev/null && { IN_A_PARENT=1; break; }
       done
-      [[ "$IN_A_PARENT" -eq 0 ]] && INJECTED="$INJECTED $nf"
-    done < <(git -C "$INSTANCE" diff -z --name-only --diff-filter=A "$P1" "$C" 2>/dev/null | tr '\0' '\n')
+      [[ "$IN_A_PARENT" -eq 0 ]] && INJECTED="$INJECTED $(slh_bound name "$nf")"
+    done < <(git -C "$INSTANCE" diff -z --name-only --diff-filter=A "$P1" "$C" 2>/dev/null)
     if [[ -n "$INJECTED" ]]; then
       printf 'VIOLATION %s  the merge commit itself introduced role-path files that no parent carries:%s\n' "$SHORT" "$INJECTED"
       printf '          %s\n' "$SUBJ"

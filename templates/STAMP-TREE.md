@@ -57,6 +57,7 @@ documentation, never copied into instances.
 | Template | Stamps to | Condition |
 |---|---|---|
 | `root/CLAUDE.md.tmpl` | `CLAUDE.md` | always |
+| `root/AGENTS.md` | `AGENTS.md` | always (a pointer to `CLAUDE.md` and `setlist.md` for agents that read `AGENTS.md`; spec 0176) |
 | `root/README.md.tmpl` | `README.md` | always |
 | `root/ROADMAP.md.tmpl` | `ROADMAP.md` | always |
 | `root/DECISIONS.md.tmpl` | `DECISIONS.md` | always |
@@ -67,6 +68,7 @@ documentation, never copied into instances.
 | `claude/sdd.json.tmpl` | `.claude/sdd.json` | always |
 | `claude/status.json` | `.claude/status.json` | always, byte-verbatim (the structured status record, RP1: stamped instances are structured from birth in both modes; upgrades never receive it, and opt in through checkpoint's human-confirmed transcription) |
 | `claude/agents/qa-verifier.md` | `.claude/agents/qa-verifier.md` | always |
+| `claude/agents/close-reviewer.md` | `.claude/agents/close-reviewer.md` | always (2.11.0, spec 0175: the close review's read-only agent on the `opus` alias, run by `/setlist:checkpoint` at every close; `/setlist:upgrade` adds it where missing) |
 | `claude/skills/scaffold/SKILL.md.tmpl` | `.claude/skills/scaffold/SKILL.md` | new projects (retrofits get no generated skill; the health check ships as `/setlist:validate`) |
 | `claude/skills/browser-qa/SKILL.md` | `.claude/skills/browser-qa/SKILL.md` | ui = yes |
 | `hooks/scope-hook.sh` | `.claude/hooks/scope-hook.sh` | always, byte-verbatim |
@@ -77,6 +79,7 @@ documentation, never copied into instances.
 | `git-hooks/pre-merge-commit` | `.githooks/pre-merge-commit` | always, byte-verbatim |
 | `git-hooks/pre-push` | `.githooks/pre-push` | always, byte-verbatim |
 | `git-hooks/setlist-hook-lib.sh` | `.githooks/setlist-hook-lib.sh` | always, byte-verbatim |
+| `git-hooks/setlist-chain-passthrough` | `.githooks/<name>`, once per git hook name a chained layer carries that Setlist does not stamp (`commit-msg`, most often) | only when a hook layer that is not Setlist's already runs and the stamp chains it (2.11.0, spec 0173: recorded as `hooks_chain` in `.claude/sdd.json`; byte-verbatim; it has no verdict of its own and runs the chained layer's hook of the same name) |
 | `root/.github/workflows/setlist-forge-check.yml` | `.github/workflows/setlist-forge-check.yml` | always, byte-verbatim (2.6.0: the forge check's wiring, a required status check named `setlist forge check`; carries no mechanism byte, it runs the stamped check below; ratification decision 6) |
 | `root/github/CODEOWNERS.tmpl` | `.github/CODEOWNERS` | always (2.6.0, T1: the four protected paths `/.githooks/`, `/.claude/`, `/specs/attest/` and, by ratification amendment 5 of 2026-09-07, `/.github/` under a phase-2 `@OWNER` slot, so the check's bytes, the config, the approvals, the check's own workflow, this file and the issue form are reviewed changes wherever the forge enforces the file; the audit and the forge check read the same file to refuse a close that declares another owner's files; ratification decision 6) |
 | `docs-design/INDEX.md` | `docs/design/INDEX.md` | design_surface = yes |

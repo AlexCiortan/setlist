@@ -9,6 +9,9 @@
 # Both directions, plus the refusal that matters most: a check that cannot
 # find its own tool must NOT exit 0.
 # =============================================================================
+# >>> SHARD-BEGIN prepush-suite-audits-07 cost=6
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region prepush-suite-audits-07; then
 
 PP="$ROOT/templates/git-hooks/pre-push"
 # STDIN IS CLOSED ON EVERY HAND-INVOCATION OF pre-push, and it must be.
@@ -321,3 +324,5 @@ else
     fi
   fi
 fi
+fi; shard_region_end
+# <<< SHARD-END prepush-suite-audits-07

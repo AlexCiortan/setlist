@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SDD Part extractor. Prints one Part (or Appendix) of the bundled edition by
+# Setlist Part extractor. Prints one Part (or Appendix) of the bundled edition by
 # heading range, so commands load only the protocol text they bind instead of
 # the full edition (design: the two-phase bootstrap's input reduction).
 #

@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Setlist's pass-through for a git hook name Setlist does not stamp (spec 0173, item 2;
+# the validator's E-c, option 1). git runs ONE hooks directory, so when Setlist arms
+# `.githooks` over another hook manager (husky, lefthook, pre-commit), a hook that
+# manager ran under a name Setlist has no hook for (commit-msg, most often, where
+# commit message validation lives) would stop running with nothing said. The refresh
+# and the stamp copy THIS file into `.githooks/` under each such name the displaced
+# directory carries. It has no verdict of its own: it exits 0, and the EXIT trap below
+# runs the displaced manager's hook of the same name, whose status is this file's.
+# The bytes are fixed and pinned, so the ownership test reads every copy as Setlist's.
+
+set -u
+
+# THE CHAIN RUNNER'S ENTRY (spec 0173, item 2). One EXIT trap, set before anything
+# can exit, so whatever this hook decides (a pass, a refusal, the SETLIST_SKIP_HOOKS
+# escape), a hook manager recorded as "hooks_chain" in .claude/sdd.json then runs
+# its hook of the same name with the same arguments, and the exit status carries
+# both verdicts (slh_chain_displaced in the library says how). The library is
+# sourced here when this hook exited before sourcing it. It deletes nothing: this
+# hook creates no directory (spec 0180, F11: a line copied from pre-push removed
+# whatever path the caller's environment named CFG_TMPD).
+SETLIST_HOOK_ARGS=("$@")
+setlist_chain_on_exit() {
+  local rc=$? lib top
+  trap - EXIT
+  if ! declare -F slh_chain_displaced >/dev/null; then
+    lib="$(dirname "$0")/setlist-hook-lib.sh"
+    [ -f "$lib" ] || exit "$rc"
+    # shellcheck source=/dev/null
+    . "$lib" || exit "$rc"
+  fi
+  # A library without the chain runner (a mixed generation the refresh's atomic
+  # delivery never produces) leaves the hook's own status in charge.
+  declare -F slh_chain_displaced >/dev/null || exit "$rc"
+  top="$(git rev-parse --show-toplevel 2>/dev/null)" || exit "$rc"
+  slh_chain_displaced "$top" "${0##*/}" "$rc" ${SETLIST_HOOK_ARGS[@]+"${SETLIST_HOOK_ARGS[@]}"}
+  exit $?
+}
+trap setlist_chain_on_exit EXIT
+
+# fail-open-ok: this file judges nothing; the trap above carries the chained hook's verdict.
+exit 0

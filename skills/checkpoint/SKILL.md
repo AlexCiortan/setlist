@@ -33,7 +33,7 @@ full mandate when in doubt:
 - Opening a spec: branch `spec/NNNN-<slug>` from the trunk (the `trunk` field
   in `.claude/sdd.json`; main is only the fallback). Feature code never lands
   directly on the trunk. The scope hook WARNS about it once the project is
-  scaffolded (it is advisory since 2026-08-04 and permits the write), and the
+  scaffolded (it is advisory since 2026-08-04 and does not stop the write), and the
   trunk audit at `pre-push` is what actually refuses it. `pre-commit` does NOT check for
   role-path code on the trunk: it scans staged content and pairs lifecycle changes with
   STATUS.md, and runs the close verification only for a merge or squash. So the commit
@@ -65,6 +65,9 @@ record and the tree already hold, and leave every VERDICT to the human:
   read from the spec's checklist, the verdict left blank (never PASS by
   default; a blank line is refused by the gates, correctly, until a person
   fills it);
+- the `close-review` block: NEVER drafted. It is the close-reviewer agent's
+  output pasted verbatim, or the skip block of the section below; a verdict
+  written by a tool is the claim the block exists to have a reviewer make;
 - What was built: from the branch's commit subjects since the trunk;
 - Test counts (before -> after): from the gate command's output where the
   runner prints them, otherwise the field name with the value left blank;
@@ -82,6 +85,47 @@ A drafted report is a scaffold, not a close. In a lite spec (`Tier: lite`,
 Part 5) the scaffold is one verdict line and the same fields; the tier saves
 authoring time, not evidence.
 
+## The close review (plugin 2.11.0, Part 5)
+
+After QA Pass 1 and before the gatekeeper checks, a second model reads the
+close against the spec. Two rounds at most; the gates read the block it leaves
+(Part 6, "What counts as a close review").
+
+1. **Decide the skip by the role paths, never by judgment.** List the branch's
+   files (`git diff --name-only <trunk>...HEAD`) and compare each with the
+   `roles` in `.claude/sdd.json` (a file under a role path, or equal to one).
+   None under a role: write the block as
+
+   ```close-review
+   round 1: SKIP-DOCS-ONLY
+   ```
+
+   with one line below it, "Skipped by rule: this close touches no role
+   path.", and nothing is spent. The gates re-derive this from the diff and
+   refuse a skip on a role-path close (`SLH-CLOSE-REVIEW-SKIP-REFUSED`).
+2. **Otherwise run the `close-reviewer` agent** with its four named inputs and
+   nothing else: the spec file's path, the trunk's name, the `qa-pass-1` block,
+   and the gate command's output from a fresh run; tell it the round number.
+   Never hand it your summary or the Closing report's prose: it reads the bytes.
+3. **Paste its block into the Closing report** in the field Appendix C names
+   (after QA Pass 2), verbatim, and its report below the block, verbatim, inside
+   a four-backtick fence (````text ... ````); the QA report above the block goes
+   in one the same way. A report's own `##` headings, unfenced, end the Closing
+   report section before the block, and the gate and the audit then refuse the
+   close naming the heading; inside the fence they are content.
+4. **Round 1 reads FAIL, or carries findings at MAJOR or above:** append those
+   findings to the spec under `## Close review, round 1`, above the Closing
+   report heading, one line each as the block writes them; fix them in
+   commits; re-run the gate command; run the agent again as round 2 on the new
+   diff; add its round to the SAME block beneath round 1, and its MAJOR-and-up
+   findings under `## Close review, round 2`.
+5. **Round 2 still reads FAIL: stop, and put the findings in front of the
+   human.** There is no third round under any label. The human decides: merge
+   past them, recorded as the block's last line
+   `verdict: ACCEPTED-BY-HUMAN F2 F3` (every round-2 finding at MAJOR or
+   above named, nothing round 2 does not carry), or revise the spec, or park
+   it. Write that line only on the human's word, never on your own.
+
 ## Closing a spec (the gatekeeper role)
 
 Refuse to merge until every check passes; name the missing item when refusing:
@@ -92,9 +136,12 @@ Refuse to merge until every check passes; name the missing item when refusing:
    `SLH-LITE-OVERSIZED` at every layer anyway, and saying so here is cheaper.
 1. The spec file's Closing report is complete: the fenced `qa-pass-1` verdict
    block (one `<criterion>: PASS|PARTIAL|FAIL` line each) and the QA Pass 1
-   report pasted verbatim, QA Pass 2 confirmed by the developer, and the
+   report pasted verbatim inside a four-backtick fence, QA Pass 2 confirmed by the developer, and the
    mandatory field answered: `Architecture diagram: updated in this commit` or
-   `no impact` (and the diagram edit, if any, rides THIS closing commit). On a
+   `no impact` (and the diagram edit, if any, rides THIS closing commit), and,
+   from plugin 2.11.0, the `close-review` block from the section above, its
+   last round PASS, `SKIP-DOCS-ONLY` on a close that touches no role path, or
+   the human's `ACCEPTED-BY-HUMAN` line after round 2. On a
    project with `docs/diagrams/`, `updated` NAMES ITS FILES,
    `Architecture diagram: updated (<the files this commit changed>)`, and the
    three refusals below are live.
@@ -105,9 +152,13 @@ Refuse to merge until every check passes; name the missing item when refusing:
 4. The Closing report's **Migrations** field is answered: `none`, or the ordered
    list of migration files this spec shipped (Part 6). Answering it is the
    check; nothing greps for it.
-5. Then merge `--no-ff`, delete the branch, and confirm specs/STATUS.md names
+5. **Parallel specs:** if another spec closed on the trunk after this branch
+   left it and declares a file this spec declares under `Owns:`, merge the
+   trunk into this branch first and re-run checks 1 to 4; the audit refuses
+   the close otherwise (`SLH-OWNS-OVERLAP`, plugin 2.11.0 and later).
+6. Then merge `--no-ff`, delete the branch, and confirm specs/STATUS.md names
    the next action.
-6. **If you pushed to the trunk, observe the CI run that push triggered** and
+7. **If you pushed to the trunk, observe the CI run that push triggered** and
    report the result (`gh run watch`, or `gh run list` plus a read of the
    completed run). If you cannot wait, write the one-line debt into STATUS.md
    (`CI run <id> unobserved`) before the session ends. Deferring it is allowed;

@@ -179,6 +179,28 @@ When the instance predates this plugin, also:
   rewrites and quote the clean run. This is the check that would have caught an
   instance whose own `CLAUDE.md` header still named v1.6 after it had been
   upgraded to v1.14, which is in no changelog delta and so in no rewrite list.
+  Since plugin 2.11.0 the report reads `AGENTS.md` too, and below it names, under
+  `outside this instance`, the skills and plugins this machine loads into every
+  session from the user's own directories and the account: no Setlist check
+  compares them, so say so when quoting it. Its last line (plugin 2.11.0)
+  names Claude Code's `/doctor prompt-audit`, which reads the same files for
+  prompts written for older models and for stale paths: that is the other half
+  of the question, and running it is the human's choice, not this chore's.
+- **Read the verdict delta beside the drift report, BEFORE `--apply`** (plugin
+  2.11.0, Part 8c). Run
+  `bash "${CLAUDE_PLUGIN_ROOT}/scripts/refresh-instance.sh" --delta .` (`--merges N`
+  for another count than 50) and quote its output verbatim. It runs the
+  instance's stamped trunk audit and this plugin's over the last 50 merges, each
+  under the configuration it would read at the next push (the new side with the
+  baseline the refresh would record), in a private clone, and prints both frames,
+  what the new edition would refuse that the old allowed, and the reverse. It
+  refuses nothing and writes nothing. Walk the human through each listed commit:
+  a line in the first list is a push the upgrade will refuse, so it is settled
+  (a close record completed, a chore recorded) or accepted as a known refusal in
+  the umbrella ADR before the upgrade lands; a line in the second list is history
+  the new frame stops judging, which is the purpose of the baseline and worth
+  saying. The same auto-mode fact the retrofit skill's observe step records holds
+  here: the stamped ask rules still prompt when a session starts in auto mode.
 - Refresh `specs/TEMPLATE.md` from the new edition:
   `bash "${CLAUDE_PLUGIN_ROOT}/scripts/part.sh" appendix-c` (the template body
   inside the fences). Existing specs are historical text and are not
@@ -191,6 +213,19 @@ When the instance predates this plugin, also:
   `.claude/agents/qa-verifier.md` (the stamp gives every new instance this
   agent; an upgraded instance gets the same). If a hand-edited copy exists,
   surface the diff instead of overwriting.
+- Stamp the close-reviewer agent if missing, exactly as the qa-verifier above:
+  copy `${CLAUDE_PLUGIN_ROOT}/templates/claude/agents/close-reviewer.md` to
+  `.claude/agents/close-reviewer.md` (plugin 2.11.0: `/setlist:checkpoint`
+  runs it at every close, and the gates require its block once
+  `.claude/sdd.json` records 2.11.0 or later). If a hand-edited copy exists,
+  surface the diff instead of overwriting.
+- Stamp `AGENTS.md` if missing, exactly as the two agents above: copy
+  `${CLAUDE_PLUGIN_ROOT}/templates/root/AGENTS.md` to `AGENTS.md` at the root
+  (plugin 2.11.0: a pointer to `CLAUDE.md` and `setlist.md` for agents that read
+  `AGENTS.md`, never a second copy of the golden rules). If a different
+  `AGENTS.md` exists, it is the project's: surface the diff instead of
+  overwriting, and tell the human that Claude Code reads `CLAUDE.md` where both
+  exist.
 - **Add the `release` block to `.claude/sdd.json`** (edition v1.7). Write
   `"release": {"model": "none"}` unless the project already has a release
   practice to declare, appended AFTER the `plugin` block rather than reordering
@@ -226,6 +261,15 @@ When the instance predates this plugin, also:
   which `pre-commit` still gates because the commit completing a squash reaches
   it. If the instance is not a git work tree the script warns
   and sets neither, which is the one case where a person has to act.
+- **Tell an instance with pre-boundary history that the per-push escape ends here**
+  (edition v1.18). When `.claude/sdd.json` was committed before `.githooks/`
+  arrived, the trunk audit used to judge every merge in between and refuse every
+  push; the refresh now records `audit.baseline` in the migration commit, so the
+  audit judges this history from the commit the instance was first governed at,
+  and `SETLIST_SKIP_TRUNK_AUDIT=1` stops being the price of pushing. The
+  migration commit is the one that carries the key: say which commit was
+  recorded, and that it is a declaration in a reviewed file rather than a
+  setting.
 - **Tell the human what the boundary move means.** The PreToolUse gates are now
   ADVISORY, and within the git hooks the GUARANTEE is the push-time trunk audit:
   the two per-merge hooks keep refusing at commit and merge time as early
@@ -307,14 +351,40 @@ When the instance predates this plugin, also:
   matcher, timeout 60), because that file is never machine-rewritten. Fill the
   `@OWNER` slot in `.github/CODEOWNERS` with the team that owns the enforcement
   layer (a standing slot is `/setlist:validate`'s finding), and require the
-  check named `setlist forge check` on the trunk at the forge, with one
-  approving review: until then the check reports rather than governs, and it
-  says so on every pull request. The `gates` migration is the ONE migration
+  check named `setlist forge check` on the trunk at the forge, in a ruleset,
+  with one approving review and review from Code Owners (edition v1.18: the
+  check reads that setting, and under `forge` custody refuses without it,
+  `FC-NO-CODE-OWNER-REVIEW`): until then the check reports rather than
+  governs, and it says so on every pull request. The `gates` migration is the ONE migration
   this edition makes, because it changes no verdict: `close` and `push` from
   the single `gate_command`, `commit` empty; tell the human the tiers exist
   and let them declare a cheaper `commit` tier if they want one. Under
   `forge` custody an instance that refused every commit since v1.11 stops
   refusing the day the check is in the tree (the hooks defer to it by name).
+- **The v1.18 delta (plugin 2.10.0): two things the refresh leaves to a
+  person** (Part 8c). Under `forge` custody, turn on "Require review from Code
+  Owners" in the trunk's ruleset BEFORE the upgrade lands, or the refreshed
+  check refuses the next closing pull request (`FC-NO-CODE-OWNER-REVIEW`). And
+  the stamped `.env` deny narrowed to the conventional secret-bearing names
+  (Part 3), which the refresh does not carry into an existing
+  `.claude/settings.json`: offer the one edit that replaces `Read(.env.*)`
+  with those names, so the session can read the `.env.example` it keeps
+  current; the instance loses nothing by declining.
+- **The v1.19 delta (plugin 2.11.0): new rules dated, nothing judged
+  backwards** (Part 8c). The refresh records `plugin.version` 2.11.0 in the
+  migration commit, and that record is what puts the close review, the
+  overlap refusal and the merge-edit report in force: each reads the plugin
+  version a close's own `.claude/sdd.json` records, so a close made before the
+  upgrade is never asked for them. Quote the verdict delta (above) before
+  `--apply`. Where another hook manager holds `core.hooksPath`, the refresh
+  chains it: commit `hooks_chain` in `.claude/sdd.json` and the pass-throughs
+  under `.githooks/` with the migration.
+  And offer the three golden rules v1.19 adds (Part 4: carry a spec through
+  and build nothing beyond it, a real check or no claim, ideas first when
+  ideas are asked for) as one edit to the instance's `CLAUDE.md`, in the words
+  of `${CLAUDE_PLUGIN_ROOT}/templates/root/CLAUDE.md.tmpl`, numbered after the
+  instance's own rules; the file is the project's, so the human takes the edit
+  or declines it, and a decline is recorded in the umbrella ADR.
 - Record all of this inside the umbrella ADR.
 
 ## 4. Instance skill flags (any instance stamped before plugin 1.6)

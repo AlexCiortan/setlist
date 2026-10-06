@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SDD phase-1 mechanical stamp. Copies the templates/ tree into a new framework
+# Setlist phase-1 mechanical stamp. Copies the templates/ tree into a new framework
 # instance with placeholder substitution, per the contract in
 # templates/STAMP-TREE.md. Deterministic, zero model tokens, re-runnable onto an
 # empty directory. The invoking command writes the answers file from the
@@ -29,6 +29,12 @@
 # repository's layer.
 
 set -euo pipefail
+# Answers are substituted LITERALLY (spec 0158, the 2.9.0 external review's
+# item 1). bash 5.2 turns patsub_replacement on by default, and under it an
+# unquoted & in the replacement of ${content//pat/$VAR} means the matched
+# text, so "R&D Tracker" was stamped as "R{{PROJECT_NAME}}D Tracker". Off here,
+# a no-op on bash 3.2 and 4.x, which have no such option.
+shopt -u patsub_replacement 2>/dev/null || true # fail-open-ok: bash 3.2 and 4.x have no such option and refuse the name, which is the state this line wants anyway
 
 die() { printf '%s\n' "stamp.sh: $*" >&2; exit 1; }
 
@@ -88,6 +94,71 @@ for pair in "ui=$UI" "opusplan_verified=$OPUSPLAN" "design_surface=$DESIGN_SURFA
 done
 case "$MODE" in new|retrofit) ;; *) die "answers: mode must be new or retrofit" ;; esac
 
+# THE ROLE ANSWERS ARE CLEAN RELATIVE PATHS, OR THE STAMP REFUSES BY NAME
+# (spec 0158, the 2.9.0 external review's item 2). A role is written into
+# .claude/sdd.json, which every hook reads, and becomes a directory below the
+# target. Unchecked, src_role=src","evil":"1 injected a key, src_role=src\app
+# left the file unparseable, and tests_role=../../etc created a directory two
+# levels ABOVE the target. Checked here, with the other answers, so a refusal
+# precedes every probe and every write.
+role_unclean() { # role_unclean <value> -> prints why it is not clean, or nothing
+  local v="$1" seg segs
+  [[ -n "$v" ]] || { printf 'it is empty'; return 0; }
+  [[ "$v" != /* ]] || { printf 'it begins with /'; return 0; }
+  case "$v" in *\"*|*\'*) printf 'it contains a quote'; return 0 ;; esac
+  case "$v" in *\\*) printf 'it contains a backslash'; return 0 ;; esac
+  [[ "$v" != *[[:cntrl:]]* ]] || { printf 'it contains a control character'; return 0; }
+  # A GLOB, A TRAILING SLASH AND A ./ PREFIX (spec 0164, fix round 2, F3 and F8
+  # of the 2.10.0 leg): the hooks read this value four ways, and these three
+  # spellings made the readers disagree (a glob expanded against the working
+  # directory in one layer and matched literally in another; "src/" and "./src"
+  # matched nothing in the attestation trigger). The hooks refuse a glob at read
+  # time now and normalise the other two, and this refuses them where the value
+  # is written, so an instance never carries a spelling that means two things.
+  case "$v" in *'*'*|*'?'*|*'['*) printf 'it carries a glob character (* ? [), and a role path is a directory, not a pattern'; return 0 ;; esac
+  [[ "$v" != */ ]] || { printf 'it ends with /'; return 0; }
+  [[ "$v" != ./* ]] || { printf 'it begins with ./'; return 0; }
+  case "$v" in *//*) printf 'it has an empty path segment (//)'; return 0 ;; esac
+  IFS=/ read -r -a segs <<< "$v"
+  for seg in "${segs[@]}"; do
+    [[ "$seg" != ".." ]] || { printf 'it has a .. segment'; return 0; }
+  done
+}
+for pair in "src_role=$SRC_ROLE" "tests_role=$TESTS_ROLE"; do
+  ROLE_WHY="$(role_unclean "${pair#*=}")"
+  [[ -z "$ROLE_WHY" ]] || die "answers: ${pair%%=*} must be a clean relative path (non-empty, no .. segment, no leading /, no quote, no backslash, no control character); got $(LC_ALL=C; v="${pair#*=}"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e"), and ${ROLE_WHY}. Nothing has been written."
+done
+# A RETROFIT'S ROLE PATHS ARE READ FROM THE TREE, NEVER DEFAULTED (spec 0179, the
+# owner's finding of 2026-09-29). The answers default to src and tests, and the
+# role directories used to be created in both modes, so a retrofit whose answers
+# kept the defaults on a project laid out otherwise stamped an empty src/ and
+# tests/, and every layer judged role paths that held none of the real code while
+# the boundary read armed. In retrofit mode a role path must already exist in the
+# target; the directories are created in new mode only, below.
+if [[ "$MODE" == "retrofit" ]]; then
+  for pair in "src_role=$SRC_ROLE" "tests_role=$TESTS_ROLE"; do
+    [[ -e "$TARGET/${pair#*=}" ]] \
+      || die "answers: ${pair%%=*} is $(LC_ALL=C; v="${pair#*=}"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e"), which does not exist in this repository, and a retrofit governs the code the repository already has, so its role paths come from the tree, never from the default. The retrofit skill's inventory scan (git ls-files grouped by top-level directory) names the real ones: answer with the directory or file your code lives in, and where it lives in more than one, stamp with one and list the rest in .claude/sdd.json's \"roles\", which takes a list. A repository with no tests yet creates the directory its tests will live in first. Nothing has been written."
+  done
+fi
+
+# JQ'S LINE ENDING (spec 0179). A native jq on Windows ends every line in CRLF,
+# and Git Bash drops a CR only at the very end of a command substitution, so
+# every line of a jq list but the last kept one ("src\r") and each verdict read
+# from a list failed open. jq -b (jq 1.7 and later) writes LF there. The probe
+# reads a two-line list, so a jq that ends lines in CR is found on any platform;
+# one that also refuses -b fails this file's output probe and is refused by name.
+case "$(printf '["x","y"]' | command jq -r '.[]' 2>/dev/null)" in *$'\r'*) jq() { command jq -b "$@"; } ;; esac
+# jq, PROBED BY OUTPUT (spec 0158, E-a). .claude/sdd.json is built by jq below,
+# every value entering by --arg, so a working jq is a precondition of a
+# correct stamp; the git hooks this stamp delivers refuse every commit without
+# one anyway (SLH-NO-JQ), so refusing here moves that moment to the one where
+# it can be fixed. By output, the way the hooks probe it: a jq that exists and
+# prints nothing is as absent as a missing one.
+JQ_PROBE="$(jq -n 1 2>/dev/null || true)" # fail-open-ok: a jq that fails prints nothing, which fails the comparison below and refuses
+[[ "$JQ_PROBE" == "1" ]] \
+  || die "jq is missing or not working here (jq -n 1 did not print 1). The stamp builds .claude/sdd.json with jq, and the git hooks it delivers refuse every commit without it. Install jq and re-run. Nothing has been written."
+
 # --- the file plan (mirrors templates/STAMP-TREE.md) ---------------------------
 
 # Each entry: <source-relative-to-templates>TAB<dest-relative-to-target>
@@ -96,6 +167,11 @@ PLAN=()
 add() { PLAN+=("$1	$2"); }
 
 add root/CLAUDE.md.tmpl        CLAUDE.md
+# AGENTS.md BESIDE IT (spec 0176, C-58): a POINTER for any agent that reads
+# AGENTS.md (pi, Codex, OpenCode; Claude Code where a project has no CLAUDE.md),
+# never a second copy of the golden rules, which would drift the way the upgrade's
+# drift report exists to catch. Byte-verbatim: nothing in it is per-project.
+add root/AGENTS.md             AGENTS.md
 add root/README.md.tmpl        README.md
 add root/ROADMAP.md.tmpl       ROADMAP.md
 add root/DECISIONS.md.tmpl     DECISIONS.md
@@ -112,6 +188,7 @@ add claude/sdd.json.tmpl       .claude/sdd.json
 # transcribe and therefore nothing to launder.
 add claude/status.json         .claude/status.json
 add claude/agents/qa-verifier.md .claude/agents/qa-verifier.md
+add claude/agents/close-reviewer.md .claude/agents/close-reviewer.md
 add hooks/scope-hook.sh        .claude/hooks/scope-hook.sh
 add hooks/regrounding-hook.sh  .claude/hooks/regrounding-hook.sh
 add hooks/stop-hook.sh         .claude/hooks/stop-hook.sh
@@ -219,17 +296,16 @@ while [[ ! -d "$ARM_PROBE" && "$ARM_PROBE" != "/" && -n "$ARM_PROBE" ]]; do
   ARM_PROBE="$(dirname "$ARM_PROBE")"
 done
 BOUNDARY_UNSAFE="$(setlist_boundary_dir_unsafe "$TARGET" 2>/dev/null)"
-[[ -z "$BOUNDARY_UNSAFE" ]] || die "refusing to stamp: $BOUNDARY_UNSAFE Nothing has been written."
+[[ -z "$BOUNDARY_UNSAFE" ]] || die "refusing to stamp: $(printf '%s' "$BOUNDARY_UNSAFE" | tr '\n\r\t' '   ' | tr -d '\000-\037\177') Nothing has been written."
 if git -C "$ARM_PROBE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   TARGET_TOP="$(git -C "$ARM_PROBE" rev-parse --show-toplevel 2>/dev/null || true)" # fail-open-ok: an empty top mismatches below and the arm is skipped, never performed blind
-  if [[ -d "$TARGET" ]]; then
-    TARGET_REAL="$(cd "$TARGET" 2>/dev/null && pwd -P)"
-  else
-    TARGET_REAL="$(cd "$ARM_PROBE" 2>/dev/null && pwd -P)/${TARGET#"$ARM_PROBE"/}"
-  fi
   GIT_DIR_HERE="$(git -C "$ARM_PROBE" rev-parse --git-dir 2>/dev/null || true)"       # fail-open-ok: both empty compares equal; the top test still governs
   GIT_COMMON_HERE="$(git -C "$ARM_PROBE" rev-parse --git-common-dir 2>/dev/null || true)" # fail-open-ok: same
-  if [[ -z "$TARGET_TOP" || "$TARGET_REAL" != "$TARGET_TOP" ]]; then
+  # Compared as DIRECTORIES (-ef), never as strings, for the reason the refresh's twin
+  # test gives (spec 0159, E-h): a target typed in another case on a filesystem that
+  # folds case is the same directory as git's top. A target that does not exist yet
+  # cannot be the top.
+  if [[ -z "$TARGET_TOP" ]] || ! [[ -d "$TARGET" && "$TARGET_TOP" -ef "$TARGET" ]]; then
     ARM_DECISION=skip-subdir
   elif [[ -n "$GIT_DIR_HERE" && -n "$GIT_COMMON_HERE" && "$GIT_DIR_HERE" != "$GIT_COMMON_HERE" ]]; then
     # Round 5, finding 4: a LINKED worktree shares its config with the main
@@ -240,10 +316,61 @@ if git -C "$ARM_PROBE" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     ARM_DECISION=skip-linked
   else
     ARM_DECISION=arm
+    CHAIN_MODE=0; CHAIN_VALUE=""; CHAIN_DIR=""; CHAIN_NAMES=""
     FOREIGN_HOOKSPATH="$(foreign_hookspath "$TARGET")"
+    # core.hooksPath is REPOSITORY TEXT (spec 0169's E-j, bounded in spec 0173): git stores
+    # whatever `git config` was given, a newline included, and every message below printed it whole,
+    # so a value could put a line of its own choosing on stderr. The value is printed through the
+    # stamp's own bound (the path set, 80 characters, the edit said), computed once here and used by
+    # every message; the LOGIC keeps reading FOREIGN_HOOKSPATH. The stamp and the refresh carry the same
+    # expression, moved in one commit, and 0158 stamp g2 and g3 pin the pair.
+    FOREIGN_HOOKSPATH_SHOWN="$(LC_ALL=C; v="$FOREIGN_HOOKSPATH"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e")"
     if [[ -n "$FOREIGN_HOOKSPATH" && "${SETLIST_ADOPT_HOOKSPATH:-0}" != "1" ]]; then
       FOREIGN_HOOK_NAMES="$(hooks_layer_foreign_entries "$(setlist_refusal_dir "$TARGET" "$FOREIGN_HOOKSPATH")" 2>/dev/null | tr '\n' ' ')"
-      die "refusing to arm: a hook layer that is not Setlist's already runs from, or would be switched on at, $FOREIGN_HOOKSPATH (foreign: ${FOREIGN_HOOK_NAMES:-unresolvable}), and git runs one layer: arming Setlist (core.hooksPath=.githooks) would switch it off, silently taking whatever runs from $FOREIGN_HOOKSPATH with it (gitleaks, detect-secrets and commit-msg validation are commonly wired this way, and pre-commit and lefthook wire into .git/hooks with hooksPath unset). Nothing has been written. Move those checks into .githooks/, or re-run with SETLIST_ADOPT_HOOKSPATH=1 to displace $FOREIGN_HOOKSPATH on purpose."
+      # WHICH OF THE TWO SHAPES THIS IS (spec 0158, SD2's twin, ruled into
+      # this spec by spec 0157's E-a). The ownership test decides by BYTES,
+      # deliberately, so a CUSTOMISED Setlist hook and a foreign file under a
+      # Setlist name are one thing to it, and refusing is right for both. The
+      # reason differs: when git already runs Setlist's own .githooks and every
+      # objected-to file carries a stamped hook name, the displacement story
+      # (move another tool's checks) answers a question nobody asked. The shape
+      # test and the second reason are the refresh's (scripts/refresh-instance.sh,
+      # spec 0157), with the stamp's own two words, and the suite holds them equal.
+      SD2_OURS_EDITED=0
+      if [[ "$FOREIGN_HOOKSPATH" == ".githooks" ]] \
+         && [[ "$(git -C "$TARGET" config --get core.hooksPath 2>/dev/null)" == ".githooks" ]] \
+         && [[ -n "${FOREIGN_HOOK_NAMES// /}" ]]; then
+        SD2_OURS_EDITED=1
+        for _fh in $FOREIGN_HOOK_NAMES; do
+          case "$_fh" in
+            pre-commit|pre-merge-commit|pre-push) ;;
+            *) SD2_OURS_EDITED=0 ;;
+          esac
+        done
+      fi
+      if [[ "$SD2_OURS_EDITED" -eq 1 ]]; then
+        die "refusing to arm: the hook layer git already runs from, $FOREIGN_HOOKSPATH_SHOWN, is Setlist's own directory, and these file(s) in it do not match any Setlist release byte for byte: ${FOREIGN_HOOK_NAMES% }. That is what a customised stamped hook looks like (the edition's Part 8c calls it a fork to surface), and it is also what a foreign file under a Setlist name looks like: this check decides by BYTES, deliberately, and cannot tell the two apart. Stamping would replace them either way. Nothing has been written. If you edited them, re-run with SETLIST_ADOPT_HOOKSPATH=1 to take this plugin's versions (the previous file is kept as .setlist-backup), or move your changes into a hook of your own; if they are another tool's, move those checks out of .githooks/ first."
+      fi
+      # CHAIN RATHER THAN REFUSE (spec 0173, item 2; the validator's E-c, option 1),
+      # the refresh's rule through the shared helpers: a layer this stamp can see is
+      # chained (recorded as "hooks_chain" in .claude/sdd.json, pass-throughs under the
+      # other hook names it carries); a layer it cannot see still refuses.
+      # The arming target is asked first (spec 0180, F10; the refresh says why): a
+      # .githooks holding a file that is not Setlist's is not chained, and the refusal
+      # below names it.
+      CHAIN_DIR="$(setlist_refusal_dir "$TARGET" "$FOREIGN_HOOKSPATH")"
+      if [[ -n "$(setlist_arming_target_foreign "$TARGET")" ]]; then
+        FOREIGN_HOOKSPATH_SHOWN='".githooks"'
+        FOREIGN_HOOK_NAMES="$(hooks_layer_foreign_entries "$(setlist_refusal_dir "$TARGET" .githooks)" 2>/dev/null | tr '\n' ' ')" # fail-open-ok: an empty list prints "unresolvable" in the refusal, which still refuses
+        CHAIN_DIR=""
+      fi
+      if [[ -n "$CHAIN_DIR" ]] && setlist_chainable "$TARGET" "$CHAIN_DIR"; then
+        CHAIN_MODE=1
+        CHAIN_VALUE="$(setlist_chain_value "$TARGET")"
+        CHAIN_NAMES="$(setlist_chain_passthrough_names "$CHAIN_DIR" | tr '\n' ' ')"
+      else
+        die "refusing to arm: a hook layer that is not Setlist's already runs from, or would be switched on at, $FOREIGN_HOOKSPATH_SHOWN (foreign: ${FOREIGN_HOOK_NAMES:-unresolvable}), and git runs one layer: arming Setlist (core.hooksPath=.githooks) would switch it off, silently taking whatever runs from $FOREIGN_HOOKSPATH_SHOWN with it (gitleaks, detect-secrets and commit-msg validation are commonly wired this way, and pre-commit and lefthook wire into .git/hooks with hooksPath unset). Nothing has been written. Move those checks into .githooks/, or re-run with SETLIST_ADOPT_HOOKSPATH=1 to displace $FOREIGN_HOOKSPATH_SHOWN on purpose."
+      fi
     fi
   fi
 else
@@ -307,8 +434,19 @@ DEST_REASON="$(setlist_deliver_dest_unsafe "$TARGET" ".claude/hooks/trunk-audit.
 [[ -z "$DEST_REASON" ]] || DEST_UNSAFE_LIST+=("$DEST_REASON")
 if [[ ${#DEST_UNSAFE_LIST[@]} -gt 0 ]]; then
   printf 'stamp.sh: refusing to stamp, nothing has been written:\n' >&2
-  printf '  %s\n' "${DEST_UNSAFE_LIST[@]}" >&2
+  for __u in "${DEST_UNSAFE_LIST[@]}"; do printf '  %s\n' "$(printf '%s' "$__u" | tr '\n\r\t' '   ' | tr -d '\000-\037\177')" >&2; done
   exit 1
+fi
+
+# THE FILE THIS RETROFIT SHADOWS, SAID BEFORE THE FIRST WRITE (spec 0176, C-58).
+# Claude Code reads AGENTS.md where a project has no CLAUDE.md, and CLAUDE.md
+# where both exist, so writing CLAUDE.md into a repository that governs its agents
+# through AGENTS.md alone silently demotes the project's own instructions. The
+# stamp cannot merge them (phase 2 does, by hand); it says so, and the retrofit
+# skip rule leaves AGENTS.md byte-unchanged. With a CLAUDE.md already present the
+# stamp shadows nothing new, and says nothing.
+if [[ "$MODE" == "retrofit" && -e "$TARGET/AGENTS.md" && ! -e "$TARGET/CLAUDE.md" ]]; then
+  printf 'stamp.sh: NOTICE: this repository carries AGENTS.md and no CLAUDE.md. The retrofit writes CLAUDE.md, and Claude Code reads CLAUDE.md where both exist, so your AGENTS.md will be shadowed: it stops being what Claude Code loads (agents that read only AGENTS.md still read it). AGENTS.md is left byte-unchanged (skipped below); merge what it says into CLAUDE.md in phase 2.\n'
 fi
 
 # --- stamping ------------------------------------------------------------------
@@ -335,6 +473,32 @@ stamp_tmpl() { # stamp_tmpl <abs-src> <abs-dest>
   content="${content//'{{EDITION_FILE}}'/$EDITION_FILE}"
   content="${content//'{{PLUGIN_VERSION}}'/$PLUGIN_VERSION}"
   printf '%s\n' "$content" > "$2"
+}
+
+# .claude/sdd.json IS BUILT, NOT SUBSTITUTED (spec 0158, the 2.10.0 intake
+# section 2b.2). The template parses as JSON as it stands, each placeholder
+# being a JSON string, so jq reads it and sets the four values that land in the
+# file, each by --arg: a value is data to jq and can never become syntax. The
+# template stays the one copy of the file's shape (jq -n would be a second).
+# Then read back, as the refresh reads back its own jq write: a jq that exits
+# 0 with other bytes refuses too.
+stamp_sdd_json() { # stamp_sdd_json <abs-src> <abs-dest>
+  local key want got
+  jq --arg src "$SRC_ROLE" --arg tests "$TESTS_ROLE" --arg trunk "$TRUNK" --arg version "$PLUGIN_VERSION" \
+    '.roles.src = $src | .roles.tests = $tests | .trunk = $trunk | .plugin.version = $version' \
+    "$1" > "$2" \
+    || die "could not build .claude/sdd.json from templates/claude/sdd.json.tmpl with jq; the files listed above this line may already be stamped, and this instance has no usable config."
+  for key in roles.src roles.tests trunk plugin.version; do
+    case "$key" in
+      roles.src) want="$SRC_ROLE" ;;
+      roles.tests) want="$TESTS_ROLE" ;;
+      trunk) want="$TRUNK" ;;
+      plugin.version) want="$PLUGIN_VERSION" ;;
+    esac
+    got="$(jq -r ".$key" "$2" 2>/dev/null || true)" # fail-open-ok: an unreadable file reads empty and differs, which refuses below
+    [[ "$got" == "$want" ]] \
+      || die ".claude/sdd.json was written but does not read back: .$key is $(LC_ALL=C; v="$got"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e"), the stamp wrote $(LC_ALL=C; v="$want"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e"). Every hook reads this file; do not use this instance until it is re-stamped."
+  done
 }
 
 STAMPED=0
@@ -369,10 +533,12 @@ for entry in "${PLAN[@]}"; do
         # so both guards below are false for it, and cp would RESOLVE it and
         # create our hook body at whatever path the repository chose,
         # possibly outside it entirely (round 9, finding 1). The link goes;
-        # nothing else is touched.
+        # nothing else is touched. Its target is read FIRST (spec 0169, fix
+        # round 1, E-k): read after the removal, the note always said "unknown".
+        __dl_to="$(readlink "$TARGET/$dest" 2>/dev/null || echo unknown)"
         rm -f "$TARGET/$dest" \
-          || die "could not remove the dangling symlink at $dest; stamping through it would create a file at $(readlink "$TARGET/$dest")."
-        printf 'stamp.sh: %s was a DANGLING symlink (to %s); the link was removed and a regular file takes its place. Nothing was written at the link target.\n' "$dest" "$(readlink "$TARGET/$dest" 2>/dev/null || echo unknown)"
+          || die "could not remove the dangling symlink at $dest; stamping through it would create a file at $(LC_ALL=C; v="$__dl_to"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e")."
+        printf 'stamp.sh: %s was a DANGLING symlink (to %s); the link was removed and a regular file takes its place. Nothing was written at the link target.\n' "$dest" "$(LC_ALL=C; v="$__dl_to"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e")"
       fi
       if [[ -e "$TARGET/$dest" ]] && ! cmp -s "$TPL/$src" "$TARGET/$dest"; then
         # THE BACKUP PATH IS A DESTINATION TOO (2026-08 consolidation, second
@@ -383,7 +549,7 @@ for entry in "${PLAN[@]}"; do
         # handled below, so a real backup takes its place.
         if [[ -L "$TARGET/$dest.setlist-backup" ]]; then
           rm -f "$TARGET/$dest.setlist-backup" \
-            || die "could not remove the symlink at $dest.setlist-backup; backing up through it would overwrite $(readlink "$TARGET/$dest.setlist-backup") outside .githooks/."
+            || die "could not remove the symlink at $dest.setlist-backup; backing up through it would overwrite $(LC_ALL=C; v="$(readlink "$TARGET/$dest.setlist-backup")"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e") outside .githooks/."
           printf 'stamp.sh: %s.setlist-backup was a symlink; it was removed (its target untouched) and a real backup takes its place.\n' "$dest"
         fi
         cp "$TARGET/$dest" "$TARGET/$dest.setlist-backup" \
@@ -395,7 +561,7 @@ for entry in "${PLAN[@]}"; do
           # removed so the copy below creates a regular file and the linked
           # script is untouched.
           rm -f "$TARGET/$dest" \
-            || die "could not remove the symlink at $dest; replacing through it would overwrite $(readlink "$TARGET/$dest") outside .githooks/."
+            || die "could not remove the symlink at $dest; replacing through it would overwrite $(LC_ALL=C; v="$(readlink "$TARGET/$dest")"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e") outside .githooks/."
           printf 'stamp.sh: %s was a symlink; the link was replaced by a regular file and the linked script was NOT touched.\n' "$dest"
         fi
         printf 'stamp.sh: %s differed and was replaced; the previous file is kept at %s.setlist-backup\n' "$dest" "$dest"
@@ -406,7 +572,9 @@ for entry in "${PLAN[@]}"; do
       ;;
   esac
   mkdir -p "$TARGET/$(dirname "$dest")"
-  if [[ "$src" == *.tmpl ]]; then
+  if [[ "$dest" == ".claude/sdd.json" ]]; then
+    stamp_sdd_json "$TPL/$src" "$TARGET/$dest"
+  elif [[ "$src" == *.tmpl ]]; then
     stamp_tmpl "$TPL/$src" "$TARGET/$dest"
   else
     cp "$TPL/$src" "$TARGET/$dest"
@@ -427,6 +595,27 @@ if [[ -d "$TARGET/.githooks" && "${ARM_DECISION:-}" != "skip-subdir" && "${ARM_D
   for h in pre-commit pre-merge-commit pre-push; do
     [[ -x "$TARGET/.githooks/$h" ]] || die ".githooks/$h is not executable; git would skip it silently"
   done
+  # The chain (spec 0173, item 2): the pass-through under each other hook name the
+  # displaced layer carries, and the layer's location recorded in .claude/sdd.json.
+  if [[ "${CHAIN_MODE:-0}" -eq 1 ]]; then
+    for h in $CHAIN_NAMES; do
+      if [[ -e "$TARGET/.githooks/$h" || -L "$TARGET/.githooks/$h" ]]; then
+        cmp -s "$GITHOOKS_SRC/setlist-chain-passthrough" "$TARGET/.githooks/$h" \
+          || printf 'stamp.sh: .githooks/%s already exists and is not the chain pass-through; it was left as is, so the chained layer%ss %s hook runs only if that file runs it.\n' "$h" "'" "$h"
+        continue
+      fi
+      cp "$GITHOOKS_SRC/setlist-chain-passthrough" "$TARGET/.githooks/$h" \
+        || die "could not write the chain pass-through .githooks/$h; the chained layer's $h hook would stop running in silence."
+      chmod +x "$TARGET/.githooks/$h" 2>/dev/null || true # fail-open-ok: the test on the next line dies unless the file is executable
+      [[ -x "$TARGET/.githooks/$h" ]] || die ".githooks/$h (the chain pass-through) is not executable; git would skip it silently"
+    done
+    CHAIN_TMP="$TARGET/.claude/sdd.json.stamp.$$"
+    { jq --arg hc "$CHAIN_VALUE" '.hooks_chain = $hc' "$TARGET/.claude/sdd.json" > "$CHAIN_TMP" \
+      && jq -e --arg hc "$CHAIN_VALUE" '.hooks_chain == $hc' "$CHAIN_TMP" >/dev/null 2>&1 \
+      && mv "$CHAIN_TMP" "$TARGET/.claude/sdd.json"; } \
+      || { rm -f "$CHAIN_TMP"; die "could not record \"hooks_chain\" in .claude/sdd.json, so the hook layer this stamp chains would stop running; the boundary is not armed. Nothing further was changed."; }
+    printf 'stamp.sh: CHAINED the hook layer that ran from %s (foreign: %s): recorded as "hooks_chain" in .claude/sdd.json; each Setlist git hook runs its hook of the same name after its own verdict%s.\n' "$FOREIGN_HOOKSPATH_SHOWN" "${FOREIGN_HOOK_NAMES% }" "${CHAIN_NAMES:+ (pass-throughs written for: ${CHAIN_NAMES% })}"
+  fi
   fi
 
 # trunk-audit.sh is the ADVISORY tool pre-push runs; it lives in .claude/hooks
@@ -439,8 +628,8 @@ if [[ -f "$ROOT/scripts/trunk-audit.sh" ]]; then
   # checked before the first write, and a differing existing file is backed up
   # with a named backup instead of being replaced in silence.
   TA_NOTE="$(setlist_deliver_file "$ROOT/scripts/trunk-audit.sh" "$TARGET" ".claude/hooks/trunk-audit.sh")" \
-    || die "could not install trunk-audit.sh into .claude/hooks/: ${TA_NOTE:-the copy failed} pre-push would refuse every push outside a Claude Code session"
-  [[ -z "$TA_NOTE" ]] || printf 'stamp.sh: %s' "$TA_NOTE"
+    || die "could not install trunk-audit.sh into .claude/hooks/: $(printf '%s' "${TA_NOTE:-the copy failed}" | tr '\n\r\t' '   ' | tr -d '\000-\037\177') pre-push would refuse every push outside a Claude Code session"
+  [[ -z "$TA_NOTE" ]] || printf 'stamp.sh: %s\n' "$(printf '%s' "$TA_NOTE" | tr '\n\r\t' '   ' | tr -d '\000-\037\177')"
   [[ -f "$TARGET/.claude/hooks/trunk-audit.sh" ]] || die "could not install trunk-audit.sh into .claude/hooks/; pre-push would refuse every push outside a Claude Code session"
 fi
 # THE FORGE CHECK RIDES THE SAME RULE (2.6.0, spec 0132): delivered beside the
@@ -451,8 +640,8 @@ fi
 if [[ -f "$ROOT/scripts/forge-check.sh" ]]; then
   mkdir -p "$TARGET/.claude/hooks"
   FC_NOTE="$(setlist_deliver_file "$ROOT/scripts/forge-check.sh" "$TARGET" ".claude/hooks/forge-check.sh")" \
-    || die "could not install forge-check.sh into .claude/hooks/: ${FC_NOTE:-the copy failed} the stamped workflow would refuse every pull request"
-  [[ -z "$FC_NOTE" ]] || printf 'stamp.sh: %s' "$FC_NOTE"
+    || die "could not install forge-check.sh into .claude/hooks/: $(printf '%s' "${FC_NOTE:-the copy failed}" | tr '\n\r\t' '   ' | tr -d '\000-\037\177') the stamped workflow would refuse every pull request"
+  [[ -z "$FC_NOTE" ]] || printf 'stamp.sh: %s\n' "$(printf '%s' "$FC_NOTE" | tr '\n\r\t' '   ' | tr -d '\000-\037\177')"
   [[ -f "$TARGET/.claude/hooks/forge-check.sh" ]] || die "could not install forge-check.sh into .claude/hooks/; the stamped workflow would refuse every pull request"
 fi
 
@@ -552,8 +741,12 @@ else
   STAMPED=$((STAMPED + 1))
 fi
 
-# The role directories. .gitkeep only where the directory is (still) empty.
-for d in steering journal "$SRC_ROLE" "$TESTS_ROLE"; do
+# The role directories. .gitkeep only where the directory is (still) empty. The
+# two role paths are created for a NEW project only (spec 0179): a retrofit's
+# already exist, refused above otherwise, and one may be a file.
+STAMP_DIRS=(steering journal)
+[[ "$MODE" == "new" ]] && STAMP_DIRS+=("$SRC_ROLE" "$TESTS_ROLE")
+for d in "${STAMP_DIRS[@]}"; do
   mkdir -p "$TARGET/$d"
   if [[ -z "$(ls -A "$TARGET/$d")" ]]; then touch "$TARGET/$d/.gitkeep"; fi
 done

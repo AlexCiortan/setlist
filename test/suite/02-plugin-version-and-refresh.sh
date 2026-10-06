@@ -51,6 +51,79 @@ assert_true() { # assert_true <name> <message-if-false> <cmd> [args...]
 }
 
 PLUGIN_VERSION="$(bash "$SCRIPTS/plugin-version.sh" "$ROOT" 2>/dev/null || true)"
+
+# Shared with later regions and shards (spec 0168, item 2): defined above the region.
+MARKER="# instance marker, must survive every refusal"
+instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken> [wiring]
+  # wiring: current (default) | stale-matcher | no-timeouts | missing
+  local d="$1" rec="$2" wiring="${3:-current}" h
+  rm -rf "$d"
+  mkdir -p "$d/.claude/hooks"
+  for h in scope-hook regrounding-hook stop-hook bypass-deny; do
+    cp "$HOOKS/$h.sh" "$d/.claude/hooks/$h.sh"
+  done
+  printf '%s\n' "$MARKER" >> "$d/.claude/hooks/scope-hook.sh"
+  case "$rec" in
+    broken) printf '{ "trunk": "main", \n' > "$d/.claude/sdd.json" ;;
+    none)   printf '{ "trunk": "main", "gate_command": "", "scaffolded": false }\n' > "$d/.claude/sdd.json" ;;
+    *)      printf '{ "trunk": "main", "gate_command": "", "scaffolded": false, "plugin": { "version": "%s" } }\n' \
+              "$rec" > "$d/.claude/sdd.json" ;;
+  esac
+  # The settings wiring is the OTHER half of the enforcement layer, and the
+  # refresh checks it without rewriting it (1.0.3). Fixtures default to the
+  # current wiring so the direction cases below stay about direction.
+  local matcher='Write|Edit|MultiEdit|NotebookEdit' t1='"timeout": 120,' t4='"timeout": 60,' t5='"timeout": 60,' t6='"timeout": 300,'
+  case "$wiring" in
+    stale-matcher) matcher='Write|Edit' ;;
+    no-timeouts)   t1='' ; t4='' ; t5='' ; t6='' ;;
+    missing)       return 0 ;;
+  esac
+  # The command paths must be the REAL ones. The wiring check identifies this
+  # plugin's own hook entries by their command pointing into .claude/hooks/,
+  # so a fixture using a made-up path is not an instance: it is a settings file
+  # with no Setlist hooks in it, and every check would vacuously pass. Found by
+  # the 1.0.4 rewrite, and it is the same lesson the upgrade-seam leg exists
+  # for: a fixture is only evidence to the extent it matches the real artifact.
+  #
+  # ALL FOUR hooks are wired, including the SessionStart re-grounding hook. Until
+  # 1.0.7 this fixture wired three and omitted SessionStart, so it was not an
+  # instance: it was an instance with a hook permanently disarmed, and every case
+  # built on it asserted against a shape no scaffold produces. It went unnoticed
+  # because nothing yet checked that a stamped hook was wired AT ALL, which is
+  # the same blind spot as the defect (B5) that made this check necessary. The
+  # fixture and the checker were incomplete in exactly the same place.
+  local gates=",
+      { \"matcher\": \"Bash\",
+        \"hooks\": [ { \"type\": \"command\", $t6 \"command\": \"\\\"\$CLAUDE_PROJECT_DIR\\\"/.claude/hooks/bypass-deny.sh\" } ] }"
+  cat > "$d/.claude/settings.json" <<SETTINGS
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "$matcher",
+        "hooks": [ { "type": "command", $t1 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/scope-hook.sh" } ] }$gates
+    ],
+    "SessionStart": [
+      { "hooks": [ { "type": "command", $t4 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/regrounding-hook.sh" } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", $t5 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/stop-hook.sh" } ] }
+    ]
+  }
+}
+SETTINGS
+  jq -e . "$d/.claude/settings.json" >/dev/null 2>&1 || {
+    printf 'instance_fixture: produced settings.json that does not parse (wiring=%s)\n' "$wiring" >&2
+    return 1
+  }
+}
+
+marker_intact() { # marker_intact <dir>
+  grep -q "^$MARKER\$" "$1/.claude/hooks/scope-hook.sh"
+}
+
+# >>> SHARD-BEGIN plugin-version-02 cost=7
+# A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
+if shard_region plugin-version-02; then
 if [[ -n "$PLUGIN_VERSION" ]]; then
   ok "version 0: this plugin tree declares a readable version ($PLUGIN_VERSION)"
 else
@@ -135,73 +208,7 @@ done
 # A minimal instance: the stamped session hooks plus sdd.json. scope-hook.sh
 # carries a marker line, so "did the refresh copy anything?" is decidable by
 # looking rather than by trusting the exit code.
-MARKER="# instance marker, must survive every refusal"
-instance_fixture() { # instance_fixture <dir> <recorded-version|none|broken> [wiring]
-  # wiring: current (default) | stale-matcher | no-timeouts | missing
-  local d="$1" rec="$2" wiring="${3:-current}" h
-  rm -rf "$d"
-  mkdir -p "$d/.claude/hooks"
-  for h in scope-hook regrounding-hook stop-hook bypass-deny; do
-    cp "$HOOKS/$h.sh" "$d/.claude/hooks/$h.sh"
-  done
-  printf '%s\n' "$MARKER" >> "$d/.claude/hooks/scope-hook.sh"
-  case "$rec" in
-    broken) printf '{ "trunk": "main", \n' > "$d/.claude/sdd.json" ;;
-    none)   printf '{ "trunk": "main", "gate_command": "", "scaffolded": false }\n' > "$d/.claude/sdd.json" ;;
-    *)      printf '{ "trunk": "main", "gate_command": "", "scaffolded": false, "plugin": { "version": "%s" } }\n' \
-              "$rec" > "$d/.claude/sdd.json" ;;
-  esac
-  # The settings wiring is the OTHER half of the enforcement layer, and the
-  # refresh checks it without rewriting it (1.0.3). Fixtures default to the
-  # current wiring so the direction cases below stay about direction.
-  local matcher='Write|Edit|MultiEdit|NotebookEdit' t1='"timeout": 120,' t4='"timeout": 60,' t5='"timeout": 60,' t6='"timeout": 300,'
-  case "$wiring" in
-    stale-matcher) matcher='Write|Edit' ;;
-    no-timeouts)   t1='' ; t4='' ; t5='' ; t6='' ;;
-    missing)       return 0 ;;
-  esac
-  # The command paths must be the REAL ones. The wiring check identifies this
-  # plugin's own hook entries by their command pointing into .claude/hooks/,
-  # so a fixture using a made-up path is not an instance: it is a settings file
-  # with no Setlist hooks in it, and every check would vacuously pass. Found by
-  # the 1.0.4 rewrite, and it is the same lesson the upgrade-seam leg exists
-  # for: a fixture is only evidence to the extent it matches the real artifact.
-  #
-  # ALL FOUR hooks are wired, including the SessionStart re-grounding hook. Until
-  # 1.0.7 this fixture wired three and omitted SessionStart, so it was not an
-  # instance: it was an instance with a hook permanently disarmed, and every case
-  # built on it asserted against a shape no scaffold produces. It went unnoticed
-  # because nothing yet checked that a stamped hook was wired AT ALL, which is
-  # the same blind spot as the defect (B5) that made this check necessary. The
-  # fixture and the checker were incomplete in exactly the same place.
-  local gates=",
-      { \"matcher\": \"Bash\",
-        \"hooks\": [ { \"type\": \"command\", $t6 \"command\": \"\\\"\$CLAUDE_PROJECT_DIR\\\"/.claude/hooks/bypass-deny.sh\" } ] }"
-  cat > "$d/.claude/settings.json" <<SETTINGS
-{
-  "hooks": {
-    "PreToolUse": [
-      { "matcher": "$matcher",
-        "hooks": [ { "type": "command", $t1 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/scope-hook.sh" } ] }$gates
-    ],
-    "SessionStart": [
-      { "hooks": [ { "type": "command", $t4 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/regrounding-hook.sh" } ] }
-    ],
-    "Stop": [
-      { "hooks": [ { "type": "command", $t5 "command": "\"\$CLAUDE_PROJECT_DIR\"/.claude/hooks/stop-hook.sh" } ] }
-    ]
-  }
-}
-SETTINGS
-  jq -e . "$d/.claude/settings.json" >/dev/null 2>&1 || {
-    printf 'instance_fixture: produced settings.json that does not parse (wiring=%s)\n' "$wiring" >&2
-    return 1
-  }
-}
-
-marker_intact() { # marker_intact <dir>
-  grep -q "^$MARKER\$" "$1/.claude/hooks/scope-hook.sh"
-}
+# (MARKER, instance_fixture and marker_intact are defined above region plugin-version-02.)
 
 # --- refusal: a backwards move --------------------------------------------------
 
@@ -593,9 +600,11 @@ INST="$WORK/inst-wiring-ok"
 instance_fixture "$INST" 1.0.0 current
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "wiring g: current wiring refreshes completely and exits 0" 0 "refreshed the four stamped hooks"
+fi; shard_region_end
+# <<< SHARD-END plugin-version-02
 
 # =============================================================================
-# >>> SHARD-BEGIN refresh-wiring cost=16
+# >>> SHARD-BEGIN refresh-wiring cost=30
 if shard_region refresh-wiring; then
 # 1.0.4: the wiring check reads STRUCTURE, not text. Both directions, from two
 # field reviews of the shipped 1.0.3: it must not fire on hooks the project
@@ -668,9 +677,12 @@ fi
 # The upgrade path is the one surface a user cannot check by hand, and its whole
 # purpose since 1.0.7 is to notice a disarmed instance.
 rewire() { # rewire <settings.json> <hook-name> <new-command-string>
-  jq --arg h "$2" --arg c "$3" '
+  # The spelling reaches the file as typed (spec 0179): MSYS rewrites a path-shaped argument it
+  # hands a native jq, so the value goes with the rewrite off and the file on stdin, never as a
+  # path operand the rewrite would then have to convert. No effect off MSYS.
+  MSYS2_ARG_CONV_EXCL='*' jq --arg h "$2" --arg c "$3" '
     walk(if type == "object" and has("command") and ((.command // "") | test($h))
-         then .command = $c else . end)' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+         then .command = $c else . end)' < "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
 
 # Every spelling below names a file that is NOT the one this script stamps at
@@ -717,17 +729,46 @@ do
   expect_script "armed $label: a spelling this script stamps stays WIRED" 0 "refreshed the four stamped hooks"
 done
 
-# THE ENUMERATED-SET RESTRICTION, pinned as the documented Known-limitations
-# bullet says (2.4.0 leg F11): `bash <stamped path>` genuinely runs the gate,
-# and the check still reports it NOT WIRED, because the set is the spellings
-# settings.json.tmpl ships and nothing else. Fails safe (over-reports, never
-# certifies a disarmed instance). If this pin flips, the set was widened:
-# widen the bullet in the same commit.
+# THE ENUMERATED-SET RESTRICTION IS GONE (spec 0173, item 3; KL10 taken; the Known-limitations
+# bullet "The wiring check recognises only the command spellings settings.json.tmpl ships" RETIRED
+# in the same commit). This pin read, from 2.4.0 (leg F11) until 0173, that `bash <stamped path>`,
+# which genuinely runs the gate, was reported NOT WIRED because the set was the template's
+# spellings. The predicate is now the identity of the file the command runs, so it reads WIRED;
+# and the residual the other way, a spelling that runs the file and throws its verdict away, which
+# the first-word test certified, now reads NOT WIRED. Both directions, red first on 691d2b2.
 INST="$WORK/inst-bash-prefix"
 instance_fixture "$INST" 1.0.0 current
 rewire "$INST/.claude/settings.json" "bypass-deny" 'bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/bypass-deny.sh'
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
-expect_script "wiring restriction (2.4.0 leg F11, documented): an interpreter-prefixed spelling that runs the stamped file is still reported NOT WIRED" 3 "bypass-deny.sh"
+expect_script "0173 wiring a: an interpreter-prefixed spelling that runs the stamped file is WIRED (identity, not spelling)" 0 "refreshed the four stamped hooks"
+INST="$WORK/inst-sh-prefix"
+instance_fixture "$INST" 1.0.0 current
+INST_ABS="$(cd "$INST" && pwd)"
+rewire "$INST/.claude/settings.json" "bypass-deny" "sh '$INST_ABS/.claude/hooks/bypass-deny.sh'"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "0173 wiring a2: sh with the single-quoted absolute path runs the stamped file and is WIRED" 0 "refreshed the four stamped hooks"
+INST="$WORK/inst-redirect"
+instance_fixture "$INST" 1.0.0 current
+rewire "$INST/.claude/settings.json" "bypass-deny" '"$CLAUDE_PROJECT_DIR"/.claude/hooks/bypass-deny.sh >/dev/null'
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "0173 wiring b: a spelling that runs the stamped file and discards its stdout is NOT WIRED" 3 "bypass-deny.sh"
+INST="$WORK/inst-trailing-arg"
+instance_fixture "$INST" 1.0.0 current
+rewire "$INST/.claude/settings.json" "bypass-deny" '"$CLAUDE_PROJECT_DIR"/.claude/hooks/bypass-deny.sh --quiet'
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "0173 wiring b2: an argument after the stamped file is not the hook speaking for itself, NOT WIRED" 3 "bypass-deny.sh"
+# E-e, ruled in with item 3: the comma-joined matcher the harness accepts. The coverage predicate
+# already read it (gsub "," to "|"); the wiring predicate read it as one impossible alternative and
+# reported the scope hook NOT WIRED. One normalisation, in both predicates now.
+INST="$WORK/inst-comma-matcher"
+instance_fixture "$INST" 1.0.0 current
+jq 'walk(if type == "object" and has("matcher") and (.matcher == "Write|Edit|MultiEdit|NotebookEdit")
+         then .matcher = "Write,Edit,MultiEdit,NotebookEdit" else . end)' \
+  "$INST/.claude/settings.json" > "$INST/t" && mv "$INST/t" "$INST/.claude/settings.json"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+expect_script "0173 wiring e: a comma-joined matcher covering the tools is WIRED, as the coverage predicate reads it" 0 "refreshed the four stamped hooks"
+# spec 0173: these cases remove their own fixtures (the mutation pool's tmpfs, see shard 10 region chain-0173)
+rm -rf "$WORK/inst-sh-prefix" "$WORK/inst-redirect" "$WORK/inst-trailing-arg" "$WORK/inst-comma-matcher"
 
 # The absolute path of the instance itself, which cannot be templated above
 # because it is only known at run time.
@@ -739,6 +780,33 @@ for h in scope-hook regrounding-hook stop-hook bypass-deny; do
 done
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "armed absolute: this instance's own absolute path stays WIRED" 0 "refreshed the four stamped hooks"
+# The same entries in the drive spelling settings.json carries on Windows (C:/...), where the
+# refresh must certify them too (spec 0179). Driven under MSYS or Cygwin, where the spelling exists.
+case "${OSTYPE:-}" in
+  msys*|cygwin*)
+    INST="$WORK/inst-armed-drive"
+    instance_fixture "$INST" 1.0.0 current
+    # The LONG drive spelling (-l): under the CI runner's service account, cygpath -m printed the 8.3
+    # short form (C:/WINDOWS/SERVIC~1/NETWOR~1/...; spec 0180, E-j, read from this case's diagnostic),
+    # a spelling no Setlist writer produces and the wiring reader reads as not one plain file (E-f).
+    INST_DRIVE="$(cygpath -m -l "$INST")"
+    for h in scope-hook regrounding-hook stop-hook bypass-deny; do
+      rewire "$INST/.claude/settings.json" "$h" "$INST_DRIVE/.claude/hooks/$h.sh"
+    done
+    run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
+    # What the refresh's wiring test compares, printed only when the case fails (spec 0180, 0179's
+    # E-j: red under the CI runner's service account only, and its whole report named no cause).
+    if [[ "$SCRIPT_RC" -ne 0 ]]; then
+      ad_f="$INST_DRIVE/.claude/hooks/scope-hook.sh"; ad_t="$INST/.claude/hooks/scope-hook.sh"
+      SCRIPT_OUT="$SCRIPT_OUT
+    diag: INST=[$INST] drive=[$INST_DRIVE] TMPDIR=[${TMPDIR:-}] TEMP=[${TEMP:-}] pwd -P=[$(cd "$INST" && pwd -P)] cygpath -w=[$(cygpath -w "$INST")]
+    diag: -e drive=$([[ -e "$ad_f" ]] && echo yes || echo no) -e posix=$([[ -e "$ad_t" ]] && echo yes || echo no) -ef=$([[ "$ad_f" -ef "$ad_t" ]] && echo yes || echo no) ls drive: $(ls -la "$ad_f" 2>&1 | head -n1)
+    diag: the wired command: $(jq -r '.hooks.PreToolUse[]?.hooks[]?.command' "$INST/.claude/settings.json" 2>&1 | head -n2 | tr '\n' '|')"
+    fi
+    expect_script "armed drive: this instance's own absolute path in the C:/ spelling stays WIRED" 0 "refreshed the four stamped hooks"
+    rm -rf "$INST" ;;
+  *) printf 'SKIPPED  armed drive: the C:/ spelling exists only under MSYS or Cygwin (OSTYPE=%s)\n' "${OSTYPE:-unset}" ;;
+esac
 
 # And an entry that is not a command hook does not run a command however its
 # string reads, so it cannot arm a gate.
@@ -829,12 +897,12 @@ sm_case "two entries whose UNION covers everything"         CLEAN WIRED   '"Writ
 sm_case "match-all *"                                       CLEAN WIRED   '"*"'
 sm_case "match-all empty"                                   CLEAN WIRED   '""'
 sm_case "match-all absent"                                  CLEAN WIRED   'null'
-# KL10, pinned in its documented direction: the coverage reader normalises the
-# comma and certifies coverage; the UNWIRED reader does not and reports the
-# scope hook unwired (a false negative in the safe direction, its bullet a
-# design boundary since 2.4.1). The day KL10's fix lands this reads WIRED, goes
-# red, and the expectation moves with the bullet.
-sm_case "the comma spelling"                                CLEAN UNWIRED '"Write,Edit,MultiEdit,NotebookEdit"'
+# KL10, pinned in its documented direction until spec 0173: the coverage reader
+# normalised the comma and certified coverage while the UNWIRED reader did not and
+# reported the scope hook unwired. KL10's fix landed in 0173 (item 3, E-e ruled
+# in): both readers normalise the comma, this reads WIRED, and the expectation moved
+# with the bullet, which retired in the same commit.
+sm_case "the comma spelling"                                CLEAN WIRED   '"Write,Edit,MultiEdit,NotebookEdit"'
 sm_case "control: no scope-hook entry at all is a gap"        GAP   UNWIRED
 
 # F10: the advisory backup notice ends its own line. It was printed without a
@@ -854,11 +922,285 @@ printf '{ "hooks": \n' > "$INST/.claude/settings.json"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "wiring k: settings.json that does not parse is reported, not guessed at" 3 "does not parse"
 
+# --- THE REFRESH RECORDS THE AUDIT'S BASELINE (spec 0157) ---------------------
+#
+# An instance whose .claude/sdd.json predates its .githooks/ is refused at every
+# push, forever, because the audit's default baseline is the stamp and every
+# merge between the two was made when no hook existed to record a completion.
+# The refresh is the one moment that knows both dates, so it is where the
+# baseline is recorded: in the same jq write that records the plugin version, so
+# it lands in the migration commit /setlist:upgrade makes.
+
+bl_instance() { # bl_instance <dir> <mode: delivered|fresh> [merges]
+  local d="$1" mode="$2" merges="${3:-3}" i
+  instance_fixture "$d" 1.0.9 current
+  mkdir -p "$d/src" "$d/specs"
+  git_init "$d"
+  printf '| Num | Title | Status |\n| --- | --- | --- |\n' > "$d/specs/STATUS.md"
+  git -C "$d" add -A >/dev/null 2>&1
+  git -C "$d" -c core.hooksPath=/dev/null commit -qm "stamp" >/dev/null 2>&1
+  for ((i = 1; i <= merges; i++)); do
+    git -C "$d" checkout -q -b "work/$i" 2>/dev/null
+    printf 'feature %s\n' "$i" >> "$d/src/f.js"
+    git -C "$d" add -A >/dev/null 2>&1
+    git -C "$d" -c core.hooksPath=/dev/null commit -qm "work $i" >/dev/null 2>&1
+    git -C "$d" checkout -q main 2>/dev/null
+    git -C "$d" -c core.hooksPath=/dev/null merge -q --no-ff -m "Merge work/$i" "work/$i" >/dev/null 2>&1
+  done
+  if [[ "$mode" == "delivered" ]]; then
+    mkdir -p "$d/.githooks"
+    cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" \
+       "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$d/.githooks/"
+    chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit" "$d/.githooks/pre-push"
+    git -C "$d" add -A >/dev/null 2>&1
+    git -C "$d" -c core.hooksPath=/dev/null commit -qm "deliver the git-hooks boundary" >/dev/null 2>&1
+    git -C "$d" config core.hooksPath .githooks
+    git -C "$d" config merge.ff false
+  fi
+}
+bl_key_of() { jq -r '.audit.baseline // "none"' "$1/.claude/sdd.json"; }
+bl_added_pre_push() { git -C "$1" log --root --diff-filter=A --format=%H -- .githooks/pre-push | tail -n1; }
+
+# d0 (spec 0164, fix round 2, F20 of the 2.10.0 leg): NO HEAD FALLBACK. The
+# writer used to fall back to HEAD when the recorded trunk did not resolve as a
+# local branch and call the result "this trunk's tip": run from a spec branch in
+# such a clone it wrote that branch's head, and every later push from the trunk
+# was refused by name. Red watched on the pre-fix bytes: "would be recorded as
+# <the spec branch's head>, this trunk's tip".
+BLX="$WORK/inst-baseline-notrunk"
+rm -rf "$BLX"; mkdir -p "$BLX/src" "$BLX/specs" "$BLX/.githooks"
+git_init "$BLX"; sdd_json "$BLX"
+blx_tmp="$(jq '.trunk = "trunk-renamed"' "$BLX/.claude/sdd.json")" && printf '%s\n' "$blx_tmp" > "$BLX/.claude/sdd.json"
+printf '| Num | Title | Status |\n| --- | --- | --- |\n' > "$BLX/specs/STATUS.md"
+git -C "$BLX" add -A >/dev/null 2>&1 && git -C "$BLX" commit -qm stamp >/dev/null 2>&1
+git -C "$BLX" checkout -q -b spec/0007-up
+printf 'work\n' > "$BLX/src/w.js"
+git -C "$BLX" add -A >/dev/null 2>&1 && git -C "$BLX" commit -qm work >/dev/null 2>&1
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLX"
+if [[ "$(bl_key_of "$BLX")" == "none" ]]; then
+  ok "0164 refresh d0a: with the recorded trunk absent from this clone, NO baseline is written"
+else
+  bad "0164 refresh d0a: with the recorded trunk absent from this clone, NO baseline is written" \
+      "recorded '$(bl_key_of "$BLX")' (the branch this refresh ran on), which would refuse every later push from the trunk"
+fi
+case "$SCRIPT_OUT" in
+  *"trunk-renamed"*) ok "0164 refresh d0b: the report names the branch it looked for and could not find" ;;
+  *) bad "0164 refresh d0b: the report names the branch it looked for and could not find" "no trunk name in the note: ${SCRIPT_OUT:-<empty>}" ;;
+esac
+
+# d0c (spec 0164, fix round 2, F21 of the 2.10.0 leg): THE TWO READERS ASK ONE
+# QUESTION, which is the agreement claim this file's reader states in words. The
+# audit refuses a PRESENT baseline that is not a string (SLH-BASELINE-MALFORMED,
+# pinned in shard 06 as "0164 baseline e2" over false, null, 0 and []), so this
+# reader must read that value as PRESENT and leave it alone. Red watched on the
+# pre-fix bytes, whose `// empty` read JSON false as "no key": the refresh
+# OVERWROTE the declaration with a commit id, writing a second frame beside one
+# the audit was refusing.
+BLF="$WORK/inst-baseline-nonstring"; bl_instance "$BLF" delivered
+blf_tmp="$(jq '.audit = {"baseline": false}' "$BLF/.claude/sdd.json")" && printf '%s\n' "$blf_tmp" > "$BLF/.claude/sdd.json"
+git -C "$BLF" add -A >/dev/null 2>&1
+git -C "$BLF" -c core.hooksPath=/dev/null commit -qm "declare a non-string baseline" >/dev/null 2>&1
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLF"
+if [[ "$(jq -c '.audit' "$BLF/.claude/sdd.json")" == '{"baseline":false}' ]]; then
+  ok "0164 refresh d0c: a present non-string baseline reads as PRESENT here as it does in the audit, so no second frame is written"
+else
+  bad "0164 refresh d0c: a present non-string baseline reads as PRESENT here as it does in the audit, so no second frame is written" \
+      "the audit block reads $(jq -c '.audit' "$BLF/.claude/sdd.json"), so this refresh wrote beside a declaration the audit refuses"
+fi
+
+# d1: the songbook's shape. The hooks arrived in a commit of their own, long
+# after the stamp, and no key has ever been written.
+BLI="$WORK/inst-baseline-delivered"; bl_instance "$BLI" delivered
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLI"
+if [[ "$(bl_key_of "$BLI")" == "$(bl_added_pre_push "$BLI")" ]]; then
+  ok "0157 refresh d1: the refresh records audit.baseline at the commit that ADDED .githooks/pre-push"
+else
+  bad "0157 refresh d1: the refresh records audit.baseline at the commit that ADDED .githooks/pre-push" \
+      "recorded '$(bl_key_of "$BLI")', wanted '$(bl_added_pre_push "$BLI")': ${SCRIPT_OUT:-<empty>}"
+fi
+case "$SCRIPT_OUT" in
+  *"audit.baseline"*) ok "0157 refresh d2: the boundary block REPORTS the key it wrote" ;;
+  *) bad "0157 refresh d2: the boundary block REPORTS the key it wrote" "no audit.baseline line: ${SCRIPT_OUT:-<empty>}" ;;
+esac
+# and the instance the audit refused before now reads clean, which is the whole point
+run_script bash "$SCRIPTS/trunk-audit.sh" "$BLI"
+expect_script "0157 refresh d3: after the refresh the same instance audits CLEAN, where the default refuses it" 0 "0 violations" "(declared)"
+
+# d4: NEVER OVERWRITTEN. A second refresh leaves the declaration alone, and so
+# does a value a person put there by hand.
+BL_FIRST="$(bl_key_of "$BLI")"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLI"
+if [[ "$(bl_key_of "$BLI")" == "$BL_FIRST" ]]; then
+  ok "0157 refresh d4: a second refresh does not rewrite a baseline that is already recorded"
+else
+  bad "0157 refresh d4: a second refresh does not rewrite a baseline that is already recorded" \
+      "the value moved from '$BL_FIRST' to '$(bl_key_of "$BLI")'"
+fi
+BL_HAND="$(git -C "$BLI" rev-parse main)"
+jq --arg b "$BL_HAND" '.audit.baseline = $b' "$BLI/.claude/sdd.json" > "$BLI/t" && mv "$BLI/t" "$BLI/.claude/sdd.json"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLI"
+if [[ "$(bl_key_of "$BLI")" == "$BL_HAND" ]]; then
+  ok "0157 refresh d5: a hand-recorded baseline is a declaration the refresh reports and leaves"
+else
+  bad "0157 refresh d5: a hand-recorded baseline is a declaration the refresh reports and leaves" \
+      "the refresh rewrote it to '$(bl_key_of "$BLI")'"
+fi
+
+# d6: a FIRST delivery: nothing in history added .githooks/pre-push, so the
+# baseline is the trunk's tip, which the migration commit will descend from.
+BLF="$WORK/inst-baseline-fresh"; bl_instance "$BLF" fresh
+BLF_TIP="$(git -C "$BLF" rev-parse main)"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLF"
+if [[ "$(bl_key_of "$BLF")" == "$BLF_TIP" ]]; then
+  ok "0157 refresh d6: on a FIRST delivery the baseline recorded is the trunk tip the migration commit will descend from"
+else
+  bad "0157 refresh d6: on a FIRST delivery the baseline recorded is the trunk tip the migration commit will descend from" \
+      "recorded '$(bl_key_of "$BLF")', wanted '$BLF_TIP': ${SCRIPT_OUT:-<empty>}"
+fi
+
+# d7: REPORT MODE promises exactly what apply does, and writes nothing.
+BLR2="$WORK/inst-baseline-report"; bl_instance "$BLR2" delivered
+run_script bash "$SCRIPTS/refresh-instance.sh" "$BLR2"
+case "$SCRIPT_OUT" in
+  *"audit.baseline"*) ok "0157 refresh d7: report mode names the baseline it would record" ;;
+  *) bad "0157 refresh d7: report mode names the baseline it would record" "no audit.baseline line: ${SCRIPT_OUT:-<empty>}" ;;
+esac
+if [[ "$(bl_key_of "$BLR2")" == "none" ]]; then
+  ok "0157 refresh d8: report mode writes nothing"
+else
+  bad "0157 refresh d8: report mode writes nothing" "it recorded '$(bl_key_of "$BLR2")'"
+fi
+
+# d9: a key that FAILS the audit's own tests is reported as a finding, with the
+# value the refresh would write, and is still not overwritten: a declaration is
+# the declarer's, and this script reports rather than deciding for them.
+jq '.audit.baseline = "main"' "$BLR2/.claude/sdd.json" > "$BLR2/t" && mv "$BLR2/t" "$BLR2/.claude/sdd.json"
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLR2"
+if [[ "$(bl_key_of "$BLR2")" == "main" ]] \
+   && printf '%s' "$SCRIPT_OUT" | grep -q "$(bl_added_pre_push "$BLR2")"; then
+  ok "0157 refresh d9: a malformed baseline is reported with the value this refresh would write, and left as the instance declared it"
+else
+  bad "0157 refresh d9: a malformed baseline is reported with the value this refresh would write, and left as the instance declared it" \
+      "key now '$(bl_key_of "$BLR2")': ${SCRIPT_OUT:-<empty>}"
+fi
+
+# d10: a SKIP state delivers no boundary, so it records no baseline about one.
+BLS2="$WORK/inst-baseline-skip"; rm -rf "$BLS2"; mkdir -p "$BLS2"; git_init "$BLS2"
+instance_fixture "$BLS2/sub" 1.0.9 current
+git -C "$BLS2" add -A >/dev/null 2>&1
+git -C "$BLS2" commit -qm "the instance sits below this repository's top" >/dev/null 2>&1
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLS2/sub"
+if [[ "$(bl_key_of "$BLS2/sub")" == "none" ]]; then
+  ok "0157 refresh d10: an instance below the worktree top gets no boundary and no baseline"
+else
+  bad "0157 refresh d10: an instance below the worktree top gets no boundary and no baseline" \
+      "it recorded '$(bl_key_of "$BLS2/sub")' while the boundary was skipped"
+fi
+
+# d11: the write is VALIDATED by the same read-back that validates the version.
+if grep -q 'audit.baseline' "$SCRIPTS/refresh-instance.sh" \
+   && grep -q '\.\[0\]\.audit\.baseline' "$SCRIPTS/refresh-instance.sh"; then
+  ok "0157 refresh d11: the rewritten sdd.json is read back for the baseline it claims to record, not only for the version"
+else
+  bad "0157 refresh d11: the rewritten sdd.json is read back for the baseline it claims to record, not only for the version" \
+      "the validation expression does not name .audit.baseline, so a jq that wrote something else would pass"
+fi
+
+# --- SD12: the CODEOWNERS note tests COVERAGE, not one spelling --------------
+#
+# The note said a file "does not name the fourth protected path /.github/" by
+# grepping one spelling, so a strictly BROADER rule (.github/**) was reported as
+# missing and an OWNERLESS /.github/ line silenced it. Both directions are the
+# wrong answer: the question is whether a change under .github/ requires an
+# owner's review, which is a coverage question about the LAST matching line.
+co_note_fires() { # co_note_fires <dir> <codeowners-body> -> 0 when the note fires
+  local d="$1" body="$2"
+  mkdir -p "$d/.github"
+  printf '%s' "$body" > "$d/.github/CODEOWNERS"
+  run_script bash "$SCRIPTS/refresh-instance.sh" "$d"
+  case "$SCRIPT_OUT" in *"fourth protected path"*) return 0 ;; esac
+  return 1
+}
+BLC2="$WORK/inst-codeowners-0157"; bl_instance "$BLC2" delivered
+for COV in '/.github/ @owner' '.github/ @owner' '/.github/** @owner' '.github/** @owner' '/.github @owner' '* @owner'; do
+  if co_note_fires "$BLC2" "/.githooks/ @owner
+$COV
+"; then
+    bad "0157 SD12: a CODEOWNERS line covering .github/ with an owner ($COV) suppresses the note" \
+        "the note fired on a file that covers the path: ${SCRIPT_OUT:-<empty>}"
+  else
+    ok "0157 SD12: a CODEOWNERS line covering .github/ with an owner ($COV) suppresses the note"
+  fi
+done
+for UNCOV in '/.github/' '.github/**' '/.github/workflows/ @owner' '# /.github/ @owner' '/docs/ @owner'; do
+  if co_note_fires "$BLC2" "/.githooks/ @owner
+$UNCOV
+"; then
+    ok "0157 SD12: a line that does not cover .github/ under an owner ($UNCOV) still gets the note"
+  else
+    bad "0157 SD12: a line that does not cover .github/ under an owner ($UNCOV) still gets the note" \
+        "the note was suppressed by a line that leaves the path unowned: ${SCRIPT_OUT:-<empty>}"
+  fi
+done
+# The LAST matching line wins in CODEOWNERS, so a broad owner followed by an
+# ownerless narrow line leaves the path unowned, and the note must say so.
+if co_note_fires "$BLC2" "/.githooks/ @owner
+* @owner
+/.github/
+"; then
+  ok "0157 SD12: an ownerless line AFTER a broad one leaves .github/ unowned, and the note fires"
+else
+  bad "0157 SD12: an ownerless line AFTER a broad one leaves .github/ unowned, and the note fires" \
+      "the reader took the earlier match: ${SCRIPT_OUT:-<empty>}"
+fi
+
+# --- SD2: the foreign-layer refusal names the case it is actually looking at --
+#
+# The refusal is CORRECT in both cases and only its reason was wrong: the
+# ownership test decides by BYTES, deliberately, so a CUSTOMISED Setlist hook
+# and a foreign file under a Setlist name are the same thing to it. Telling
+# someone who edited pre-push to move their gitleaks checks into .githooks/ is
+# an answer to a question they did not ask.
+BLE="$WORK/inst-ours-edited"; bl_instance "$BLE" delivered
+printf '\n# a local customisation\n' >> "$BLE/.githooks/pre-push"
+git -C "$BLE" add -A >/dev/null 2>&1
+git -C "$BLE" -c core.hooksPath=/dev/null commit -qm "customise pre-push" >/dev/null 2>&1
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLE"
+if [[ "$SCRIPT_RC" -ne 0 ]] \
+   && printf '%s' "$SCRIPT_OUT" | grep -q 'pre-push' \
+   && printf '%s' "$SCRIPT_OUT" | grep -qi 'customis' \
+   && printf '%s' "$SCRIPT_OUT" | grep -q 'Nothing has been changed'; then
+  ok "0157 SD2: an ours-but-EDITED layer is refused with the reason that fits it, naming the file"
+else
+  bad "0157 SD2: an ours-but-EDITED layer is refused with the reason that fits it, naming the file" \
+      "rc $SCRIPT_RC: ${SCRIPT_OUT:-<empty>}"
+fi
+case "$SCRIPT_OUT" in
+  *"gitleaks"*) bad "0157 SD2: the ours-edited refusal does not tell the operator to move another tool's checks" \
+      "the foreign-layer remedy was printed for a Setlist hook someone edited: ${SCRIPT_OUT:-<empty>}" ;;
+  *) ok "0157 SD2: the ours-edited refusal does not tell the operator to move another tool's checks" ;;
+esac
+# The control, and it is the case the message was written for: ANOTHER TOOL'S
+# layer, running from its own directory, which arming Setlist would switch off.
+# Today's reason is exactly right there and keeps every byte.
+# Since spec 0173 (item 2) a layer the refresh can see is chained; the displacement refusal stands
+# for one it cannot, here .husky configured and absent, which fails closed.
+BLFO="$WORK/inst-foreign-layer"; bl_instance "$BLFO" fresh
+git -C "$BLFO" config core.hooksPath .husky
+run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLFO"
+if [[ "$SCRIPT_RC" -ne 0 ]] && printf '%s' "$SCRIPT_OUT" | grep -q 'gitleaks'; then
+  ok "0157 SD2 control: a FOREIGN file in the layer still gets the displacement refusal, unchanged"
+else
+  bad "0157 SD2 control: a FOREIGN file in the layer still gets the displacement refusal, unchanged" \
+      "rc $SCRIPT_RC: ${SCRIPT_OUT:-<empty>}"
+fi
+
+
 fi; shard_region_end
 # <<< SHARD-END refresh-wiring
 
 # =============================================================================
-# >>> SHARD-BEGIN edition-drift-0153 cost=24
+# >>> SHARD-BEGIN edition-drift-0153 cost=4
 if shard_region edition-drift-0153; then
 # SKEW PART B (spec 0153): the refresh REPORTS edition and binding drift by
 # name, reading the new edition from the committed setlist.md's Edition header
@@ -922,6 +1264,11 @@ expect_script "drift e: the binding line names what Part 2 binds that tier to" 0
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "drift f: --apply reports the same drift and the drift changes no exit status" 0 \
   "[SLH-EDITION-DRIFT]" "[SLH-BINDING-DRIFT]"
+# THE MODEL-ERA HALF IS NAMED, NOT READ (spec 0178, C-67): one line points at
+# Claude Code's /doctor prompt-audit, which reads the same files for prompts
+# written for older models; this report reads them for what the edition binds.
+expect_script "drift f2: the report names /doctor prompt-audit for the model-era half, in one line" 0 \
+  "/doctor prompt-audit" "what the edition binds"
 
 # NO BYPASS HINT. Three-cause style says what, why and what to do; it never
 # says how to switch the check off. The retired-hooks report is the shape.
@@ -1155,3 +1502,84 @@ expect_script "drift o: a multi-tier sentence is named as not compared, never si
 
 fi; shard_region_end
 # <<< SHARD-END edition-drift-0153
+
+# =============================================================================
+# >>> SHARD-BEGIN model-probe-0177 cost=2
+if shard_region model-probe-0177; then
+# THE MODEL BINDING, RE-PROBED (spec 0177, C-65 of the weekly scan of
+# 2026-09-28). The bootstrap records `opusplan_verified` as a yes or a no, so a
+# managed allowlist changed after the stamp (`availableModelsMatch: "exact"`, or
+# `deniedModels`) is invisible to it, and the harness never refuses a blocked
+# planning model: it SUBSTITUTES one, the plan phase falling to an older
+# permitted Opus or staying on Sonnet. So the refusal has to be the probe's own:
+# scripts/model-probe.sh runs both phases of `opusplan` and names a phase served
+# off its tier. No case here runs a real claude; a stub first on PATH answers per
+# phase from the files below, in the result shape `claude -p --output-format json`
+# writes (usage.output_tokens and the modelUsage entries), which is the shape
+# the private probe library's E13 cases were recorded from.
+# =============================================================================
+MP_W="$WORK/model-probe"
+mkdir -p "$MP_W/bin"
+cat > "$MP_W/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+# a stub claude: the plan phase when --permission-mode plan is present, else execution
+d="$(dirname "$0")/.."
+phase=exec
+for a in "$@"; do [[ "$a" == plan ]] && phase=plan; done
+rc=0; [[ -f "$d/$phase.rc" ]] && rc="$(cat "$d/$phase.rc")"
+cat "$d/$phase.json"
+exit "$rc"
+STUB
+chmod +x "$MP_W/bin/claude"
+mp_result() { # mp_result <file> <served-id> [<aux-id-listed-first>] [is_error]
+  local aux="" err="${4:-false}"
+  [[ -n "${3:-}" ]] && aux="\"$3\":{\"outputTokens\":7,\"inputTokens\":40},"
+  printf '{"type":"result","is_error":%s,"result":"ok","usage":{"output_tokens":5},"modelUsage":{%s"%s":{"outputTokens":5,"inputTokens":9}}}\n' \
+    "$err" "$aux" "$2" > "$1"
+}
+mp_run() { rm -f "$MP_W/plan.rc" "$MP_W/exec.rc"; run_script env PATH="$MP_W/bin:$PATH" bash "$SCRIPTS/model-probe.sh" "$@"; }
+
+mp_result "$MP_W/plan.json" claude-opus-5-5; mp_result "$MP_W/exec.json" claude-sonnet-5-5
+mp_run
+expect_script "model probe a: both phases on tier read rc 0 and print the model each served" 0 \
+  "plan: claude-opus-5-5" "execution: claude-sonnet-5-5"
+
+mp_result "$MP_W/plan.json" claude-sonnet-5-5
+mp_run
+expect_script "model probe b: every Opus excluded (plan mode served Sonnet) is named, never a silent fallback" 1 \
+  "[MP-PLAN-OFF-TIER]" "claude-sonnet-5-5" "availableModels"
+
+mp_result "$MP_W/plan.json" claude-opus-5
+mp_run
+expect_script "model probe c: an older Opus an exact allowlist permits keeps the tier, and the version is printed" 0 \
+  "plan: claude-opus-5"
+
+mp_result "$MP_W/plan.json" claude-opus-5-5; mp_result "$MP_W/exec.json" claude-haiku-4-5-20251001
+mp_run
+expect_script "model probe d: the execution phase served off its tier is named" 1 \
+  "[MP-EXEC-OFF-TIER]" "claude-haiku-4-5-20251001"
+
+mp_result "$MP_W/plan.json" claude-opus-5-5 claude-haiku-4-5-20251001; mp_result "$MP_W/exec.json" claude-sonnet-5-5
+mp_run
+expect_script "model probe e: an auxiliary Haiku entry listed first is not read as the served model" 0 \
+  "plan: claude-opus-5-5"
+
+mp_result "$MP_W/plan.json" claude-opus-5-5 "" true
+mp_run
+expect_script "model probe f: a result with is_error is unavailable, never a pass" 2 "[MP-PROBE-UNAVAILABLE]"
+mp_result "$MP_W/plan.json" claude-opus-5-5
+rm -f "$MP_W/plan.rc"; printf '1\n' > "$MP_W/plan.rc"
+run_script env PATH="$MP_W/bin:$PATH" bash "$SCRIPTS/model-probe.sh"
+expect_script "model probe f: a probe that exits non-zero is unavailable, never a pass" 2 "[MP-PROBE-UNAVAILABLE]"
+
+mp_result "$MP_W/plan.json" my-team-deployment
+mp_run
+expect_script "model probe g: a served id naming no family is unreadable, never a pass" 2 \
+  "[MP-FAMILY-UNREADABLE]" "my-team-deployment"
+
+mp_run --claude "$MP_W/no-such-claude"
+expect_script "model probe h: a claude binary that is not there is unavailable and named" 2 \
+  "[MP-PROBE-UNAVAILABLE]" "no-such-claude"
+
+fi; shard_region_end
+# <<< SHARD-END model-probe-0177

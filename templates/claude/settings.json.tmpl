@@ -2,10 +2,15 @@
 {{IF:OPUSPLAN}}  "model": "opusplan",
   "fallbackModel": ["default"],
   "permissions": {
-    "_comment": "A deny list is a SPELLING list. Read(.env) and Read(.env.*) stop the Read tool; Bash(cat .env*) stops one Bash spelling and nothing else: less, head, tail, sed, a $(<.env) expansion, a source or a grep read the same file and are not listed, and the scope hook watches the file-writing tools, not Bash. This key is where the note lives because it is what the harness tolerates: measured 2026-09-07 on Claude Code 2.1.259, a _comment key here left every rule in force, and a // comment made the file unreadable and silently dropped every rule in it.",
+    "_comment": "A deny list is a SPELLING list. The Read rules stop the Read tool on the conventional secret-bearing names and on no others: .env, .env.local, .env.*.local, .env.production, .env.development, .env.staging and .env.test, so the .env.example the stamp writes stays readable and a secret file named any other way is not covered. Bash(cat .env*) stops one Bash spelling and nothing else: less, head, tail, sed, a $(<.env) expansion, a source or a grep read the same file and are not listed, and the scope hook watches the file-writing tools, not Bash. This key is where the note lives because it is what the harness tolerates: measured 2026-09-07 on Claude Code 2.1.259, a _comment key here left every rule in force, and a // comment made the file unreadable and silently dropped every rule in it. A key a newer Claude Code adds to this file can cost the whole file on an older one: 2.1.281's scalar attribution: false makes an older harness skip the file, these rules and the four session hooks with it, while its content still reads as wired. Nothing Setlist ships writes such a key, and the git hooks refuse regardless.",
     "deny": [
       "Read(.env)",
-      "Read(.env.*)",
+      "Read(.env.local)",
+      "Read(.env.*.local)",
+      "Read(.env.production)",
+      "Read(.env.development)",
+      "Read(.env.staging)",
+      "Read(.env.test)",
       "Bash(cat .env*)"
     ],
     "ask": [

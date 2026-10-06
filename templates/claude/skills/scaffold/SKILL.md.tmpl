@@ -33,13 +33,15 @@ once, after phase 2 of the bootstrap; a repo that is already scaffolded gets
    inherits whatever git or the harness happened to have on PATH, not your
    interactive shell. So a project whose toolchain lives in a virtualenv, an nvm
    or rbenv shim, or a Conda env records the activation as part of the command
-   (`. .venv/bin/activate && ...`, `poetry run ...`, `npm exec -- ...`), or
+   (`. .venv/bin/activate && ...`, `poetry run ...`, `npm exec --no -- ...`, which runs the project's installed tool and never downloads one), or
    calls the tools by their in-project paths. VERIFY it before recording it:
 
-       ( eval "$(jq -r .gate_command .claude/sdd.json)" ) >/dev/null 2>&1; echo $?
+       command -v jq >/dev/null 2>&1 || { echo "jq is not installed, so the gate command was not read: install jq first"; false; } && { ( eval "$(jq -r .gate_command .claude/sdd.json)" ) >/dev/null 2>&1; echo $?; }
 
-   A non-zero here means the gate is not runnable by the hooks even when the
-   suite itself is green. The refusal that follows is indistinguishable from a
+   It checks for jq first and says so, because without jq the command reads as
+   empty and an empty command "passes" (Git for Windows, for one, ships no jq).
+   A non-zero here means the gate is not
+   runnable by the hooks even when the suite itself is green. The refusal that follows is indistinguishable from a
    real failure, and the operator who knows their suite passes is then one step
    from disabling the boundary to get past it. Get this right at scaffold time
    and that never comes up.

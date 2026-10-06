@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
 # forge-check.sh - the forge check (KL5, spec 0132, from the ratified design
 # design-forge-check-kl5-2026-09-06.md). Stamped to .claude/hooks/forge-check.sh
 # beside the trunk audit; run by a pull request's CI as a REQUIRED status check.
@@ -29,8 +30,9 @@
 #   9. the forge questions (the trunk's protection read from BOTH endpoints,
 #      rulesets and classic protection, as the union the forge enforces;
 #      the merge method from the repository's flag AND the ruleset's
-#      allowed_merge_methods; and the CODEOWNERS bridge), asked with the
-#      job's own identity (ratification amendments 3 and 4, 2026-09-07)
+#      allowed_merge_methods; the code-owner review setting from BOTH
+#      endpoints as a union, spec 0160; and the CODEOWNERS bridge), asked with
+#      the job's own identity (ratification amendments 3 and 4, 2026-09-07)
 #  10. PASS, once, on stdout, naming the declared custody
 #
 # IT READS THE CHECKOUT'S OWN STAMPED BYTES, measured against how pre-push
@@ -41,11 +43,21 @@
 # runs, so this check verifies what pre-push verifies and nothing more. Nothing
 # is fetched: a second copy of the mechanism is the A9 shape, and a network
 # fetch is a thing a required check fails on. The suite pins this file's
-# resolution to pre-push's over the same tree.
+# resolution to pre-push's over the same tree. And on a pull_request event the
+# checkout IS the pull request's merge, so the stamped bytes read here, this
+# file among them, are the pull request's own: what makes an edit to them a
+# reviewed change is the forge's "Require review from Code Owners" setting over
+# the stamped CODEOWNERS, which is what that setting is for, why step 9 reads it
+# from both endpoints, why custody C refuses without it, and why step 3b names
+# such an edit on the pull request (spec 0160). Running the base ref's copies
+# instead was declined: the workflow definition is the pull request's too, so
+# base-ref scripts run by it move the question one file up without answering
+# it, and two copies of one mechanism is the A9 shape above.
 #
 # THERE IS NO ESCAPE. SETLIST_SKIP_HOOKS and SETLIST_SKIP_TRUNK_AUDIT are not
 # read. A workflow that wants to skip the check edits the workflow, which the
-# stamped CODEOWNERS makes a reviewed change. Nothing on stderr names an escape.
+# stamped CODEOWNERS makes a reviewed change under the forge's code-owner
+# setting. Nothing on stderr names an escape.
 #
 # NEVER A PASS ON ABSENCE (design section 6). A forge that does not answer
 # refuses under custody C; a check that died prints nothing, which the workflow
@@ -216,11 +228,15 @@ fc_resolve_ref() { # fc_resolve_ref <name> -> the full ref git resolves it to, i
   done
   return 0
 }
+# The recorded trunk is the pull request author's text until git resolves it,
+# and jq -r prints a newline in it raw into a CI log the forge parses for
+# workflow commands (a line beginning "::"), so every sentence below prints it
+# through the library's slh_bound (spec 0172, sweep I17 of spec 0169).
 HEAD_TRUNK_RAW="$(fc_recorded_trunk "$HEAD_SHA")" || HEAD_TRUNK_RAW=""
 if git -C "$REPO" cat-file -e "$BASE_SHA:.claude/sdd.json" 2>/dev/null; then
   TRUNK_RAW="$(fc_recorded_trunk "$BASE_SHA")" || TRUNK_RAW=""
   if [[ "$HEAD_TRUNK_RAW" != "$TRUNK_RAW" ]]; then
-    fc_say "[FC-NOT-AN-INSTANCE]" "the head records trunk \"$HEAD_TRUNK_RAW\" where the base records \"$TRUNK_RAW\": a pull request that REDIRECTS the instance's trunk is refused rather than judged under the config it rewrote. The trunk's own tip says which branch is protected; change it there, through a person, not through a pull request the change would exempt."
+    fc_say "[FC-NOT-AN-INSTANCE]" "the head records trunk $(slh_bound name "$HEAD_TRUNK_RAW") where the base records $(slh_bound name "$TRUNK_RAW"): a pull request that REDIRECTS the instance's trunk is refused rather than judged under the config it rewrote. The trunk's own tip says which branch is protected; change it there, through a person, not through a pull request the change would exempt."
     refuse NOT-AN-INSTANCE
   fi
 else
@@ -228,7 +244,7 @@ else
 fi
 TRUNK_FULL="$(fc_resolve_ref "$TRUNK_RAW")"
 if [[ -z "$TRUNK_FULL" ]]; then
-  fc_say "[SLH-TRUNK-NOT-A-BRANCH]" ".claude/sdd.json records trunk \"$TRUNK_RAW\", which does not resolve to a branch in this checkout, so the trunk this project protects cannot be established and this check would otherwise pass on nothing. Record the plain branch NAME (for example \"main\"); a ref path such as refs/remotes/origin/main, a case variant or stray whitespace is not a branch here."
+  fc_say "[SLH-TRUNK-NOT-A-BRANCH]" ".claude/sdd.json records trunk $(slh_bound name "$TRUNK_RAW"), which does not resolve to a branch in this checkout, so the trunk this project protects cannot be established and this check would otherwise pass on nothing. Record the plain branch NAME (for example \"main\"); a ref path such as refs/remotes/origin/main, a case variant or stray whitespace is not a branch here."
   refuse NOT-AN-INSTANCE
 fi
 case "$TRUNK_FULL" in
@@ -240,7 +256,7 @@ if [[ -n "$BASE_NAME" ]]; then
   BASE_FULL="$(fc_resolve_ref "$BASE_NAME")"
   if [[ "$BASE_FULL" != "$TRUNK_FULL" ]]; then
     if [[ "$(printf '%s' "$BASE_FULL" | tr '[:upper:]' '[:lower:]')" == "$(printf '%s' "$TRUNK_FULL" | tr '[:upper:]' '[:lower:]')" ]]; then
-      fc_say "[SLH-TRUNK-NOT-A-BRANCH]" ".claude/sdd.json records trunk \"$TRUNK_RAW\" and the pull request's base is $BASE_NAME: the two differ only in case, and this check does not guess which spelling the forge protects. Record the trunk exactly as the branch is named."
+      fc_say "[SLH-TRUNK-NOT-A-BRANCH]" ".claude/sdd.json records trunk $(slh_bound name "$TRUNK_RAW") and the pull request's base is $BASE_NAME: the two differ only in case, and this check does not guess which spelling the forge protects. Record the trunk exactly as the branch is named."
       refuse NOT-AN-INSTANCE
     fi
     # THE ONE PASS-ON-NOTHING, and it is not a pass on absence: the predicate has
@@ -278,6 +294,35 @@ fi
 # trunk is a local branch at the base and the index holds the merge.
 SLH_REFUSED=0
 
+# --- 3b. the enforcement-path report (spec 0160, the review's item 3) ----------
+#
+# The check that is running is the pull request's OWN copy (this file, the hook
+# library, the audit, the workflow), so a pull request that edits them is judged
+# by what it wrote. Nothing here can answer that from inside; the answer is the
+# forge's "Require review from Code Owners" over the stamped CODEOWNERS, which
+# step 9 reads. What this step does is SAY it, by name, before any later step
+# can refuse, under every custody: a report, never a refusal. The paths are the
+# merge's index against the base, the pull request's diff as the forge shows
+# it (a base-to-head tree diff would also list what the trunk moved). The clone
+# copies no config, so core.quotePath is at git's default and a path carrying a
+# control character reaches the log quoted, never raw.
+FC_ENF="$(git -C "$FC_CLONE" diff --cached --name-only "$BASE_SHA" 2>/dev/null | grep -E '^"?\.(githooks|claude/hooks|github/workflows)/' || true)" # fail-open-ok: an unreadable diff yields no paths and no report; this step is a report, and every predicate below still judges the merge
+if [[ -n "$FC_ENF" ]]; then
+  FC_ENF_N="$(printf '%s\n' "$FC_ENF" | wc -l | tr -d ' ')"
+  # THE PATHS ARE THE PULL REQUEST AUTHOR'S TEXT (spec 0164, fix round 2, F16 of
+  # the 2.10.0 leg): a filename shaped as prose closed this sentence and the
+  # rest read as the check speaking, in a log a reviewer reads. A path outside
+  # the character set a path needs is replaced character by character, and the
+  # replacement is said rather than hidden.
+  FC_ENF_SAFE="$(printf '%s\n' "$FC_ENF" | LC_ALL=C sed 's/[^A-Za-z0-9._/-]/?/g')"
+  FC_ENF_EDITED=0
+  [[ "$FC_ENF_SAFE" == "$FC_ENF" ]] || FC_ENF_EDITED=1
+  FC_ENF_LIST="$(printf '%s\n' "$FC_ENF_SAFE" | head -n 20 | awk '{ printf "%s%s", (NR > 1 ? ", " : ""), $0 }')"
+  [[ "$FC_ENF_EDITED" -eq 0 ]] || FC_ENF_LIST="$FC_ENF_LIST (characters outside a path set replaced with ?)"
+  [[ "$FC_ENF_N" -gt 20 ]] && FC_ENF_LIST="$FC_ENF_LIST and $((FC_ENF_N - 20)) more"
+  fc_report "[FC-ENFORCEMENT-PATH-TOUCHED]" "this pull request changes the enforcement layer ($FC_ENF_LIST). The check that judged it is the pull request's own copy of the check, the hooks and the workflow, so what makes this edit a reviewed change is the forge's \"Require review from Code Owners\" setting over the stamped CODEOWNERS, not this check. Review these paths as the code that judges the pull request."
+fi
+
 # --- 5's arm, registered before 4 runs: custody C answered here ---------------
 #
 # The library's DEFERRED-TO-FORGE arm calls this when it is registered (it is
@@ -286,7 +331,7 @@ SLH_REFUSED=0
 # is cached for step 9's reports.
 FC_RULES_STATE=""     # "", ok, unreachable, forbidden, plan-limited, rate-limited, no-forge
 FC_RULES_DETAIL=""
-FC_PROTECTED=0; FC_REVIEWS=0; FC_CHECK_REQUIRED=0; FC_REBASE=""; FC_RULESET_REBASE=""; FC_STRICT=0
+FC_PROTECTED=0; FC_REVIEWS=0; FC_CHECK_REQUIRED=0; FC_REBASE=""; FC_RULESET_REBASE=""; FC_STRICT=0; FC_CODEOWNER=0
 FC_HTTP=""; FC_BODY=""
 
 fc_forge_get() { # fc_forge_get <api-path> -> FC_HTTP and FC_BODY set; 1 when the forge did not answer at all
@@ -354,7 +399,7 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
   # classic endpoint ALWAYS; the trunk is protected when either carries a
   # rule, the review requirement is the higher of the two, the check is
   # required when either requires it, and neither present is UNPROTECTED.
-  local rules_n rs_prot=0 rs_reviews=0 rs_checks=0 rs_strict=0 cl_prot=0 cl_reviews=0 cl_checks=0 cl_strict=0 rs_enough=0
+  local rules_n rs_prot=0 rs_reviews=0 rs_checks=0 rs_strict=0 rs_co=0 cl_prot=0 cl_reviews=0 cl_checks=0 cl_strict=0 cl_co=0 rs_enough=0
   if ! fc_forge_get "repos/$FC_REPO/rules/branches/$TRUNK_NAME"; then FC_RULES_STATE="unreachable"; FC_RULES_DETAIL="no answer to the rules query"; return 0; fi
   case "$FC_HTTP" in
     200) ;;
@@ -375,6 +420,13 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
     # as protection is (amendment 4), and 0 is the refusing value here too, so an
     # unreadable rule can only refuse.
     rs_strict="$(printf '%s' "$FC_BODY" | jq -r '[.[] | select(.type == "required_status_checks") | .parameters.strict_required_status_checks_policy] | if length == 0 then "0" elif any(. == true) then "1" else "0" end' 2>/dev/null || printf 0)" # fail-open-ok: 0 is the REFUSING value (not strict), so an unreadable rule refuses under forge custody rather than passing
+    # THE CODE-OWNER REVIEW SETTING (spec 0160, the 2.9.0 external review's
+    # item 3): "Require review from Code Owners". On a ruleset it is the
+    # pull_request rule's require_code_owner_review; on the classic endpoint it
+    # is required_pull_request_reviews.require_code_owner_reviews. Read from
+    # BOTH and taken as a union, as the review count is, and 0 is the refusing
+    # value, so an unreadable rule can only refuse under forge custody.
+    rs_co="$(printf '%s' "$FC_BODY" | jq -r '[.[] | select(.type == "pull_request") | .parameters.require_code_owner_review] | if any(. == true) then "1" else "0" end' 2>/dev/null || printf 0)" # fail-open-ok: 0 is the REFUSING value (not required), so an unreadable rule refuses under forge custody rather than passing
     rs_prot=1
     # THE RULESET'S OWN MERGE METHODS (ratification amendment 3, 2026-09-07).
     # A pull_request rule may carry allowed_merge_methods, which the forge
@@ -385,7 +437,14 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
     # forbids it, which SILENCES decision 3's report; report, never refuse.
     FC_RULESET_REBASE="$(printf '%s' "$FC_BODY" | jq -r '[.[] | select(.type == "pull_request") | .parameters.allowed_merge_methods? | select(. != null)] | if length == 0 then "" elif all(index("rebase") != null) then "1" else "0" end' 2>/dev/null || true)" # fail-open-ok: an unreadable rule leaves the ruleset fact unknown, and the repository flag then decides the REPORT line alone, which is the pre-amendment reading and never a verdict
   fi
-  rs_enough=0; [[ "$rs_prot" -eq 1 && "${rs_reviews:-0}" -ge 1 && "$rs_checks" == "1" ]] && rs_enough=1
+  # rs_enough: the ruleset ALONE carries every requirement a verdict below reads
+  # (a review, this check, branches up to date, review from Code Owners), so a
+  # classic answer that could not be read changes no verdict. Spec 0172 (L2 F7):
+  # it named only the first two, so an unread classic answer beside a ruleset
+  # without strict or code-owner review was recorded as "nothing depends on it"
+  # and those two facts were then read as ABSENT, a verdict on an answer the
+  # forge refused.
+  rs_enough=0; [[ "$rs_prot" -eq 1 && "${rs_reviews:-0}" -ge 1 && "$rs_checks" == "1" && "$rs_strict" == "1" && "$rs_co" == "1" ]] && rs_enough=1
   # The classic branch protection, always. It needs a permission the default
   # token may lack (measured 2026-09-06 on the owner's repositories: a public
   # one answers 404 "Branch not protected" when there is none; a private one
@@ -394,11 +453,11 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
   # absence. "Branch not protected" IS absence, and is read as such by its
   # documented message. An answer that cannot be read decides the state ONLY
   # where the verdict depends on it: the classic layer can add a requirement
-  # and never remove one, so a ruleset that already requires both is not undone
-  # by a 403 beside it, while a ruleset that lacks one cannot be read as
+  # and never remove one, so a ruleset that already requires all four is not
+  # undone by a 403 beside it, while a ruleset that lacks one cannot be read as
   # lacking it when the other layer's answer was refused.
   if ! fc_forge_get "repos/$FC_REPO/branches/$TRUNK_NAME/protection"; then
-    if [[ "$rs_enough" -eq 1 ]]; then FC_RULES_DETAIL="no answer to the protection query; the ruleset already requires both, so nothing depends on it"
+    if [[ "$rs_enough" -eq 1 ]]; then FC_RULES_DETAIL="no answer to the protection query; the ruleset already requires all four, so nothing depends on it"
     else FC_RULES_STATE="unreachable"; FC_RULES_DETAIL="no answer to the protection query"; return 0; fi
   else
     case "$FC_HTTP" in
@@ -407,20 +466,21 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
         cl_reviews="$(printf '%s' "$FC_BODY" | jq -r '.required_pull_request_reviews.required_approving_review_count // 0' 2>/dev/null || printf 0)"
         cl_checks="$(printf '%s' "$FC_BODY" | jq -r '((.required_status_checks.contexts // []) + [(.required_status_checks.checks // [])[] | .context]) | index("setlist forge check") | if . == null then "0" else "1" end' 2>/dev/null || printf 0)"
         cl_strict="$(printf '%s' "$FC_BODY" | jq -r 'if .required_status_checks.strict == true then "1" else "0" end' 2>/dev/null || printf 0)" # fail-open-ok: as above, 0 is the refusing value
+        cl_co="$(printf '%s' "$FC_BODY" | jq -r 'if .required_pull_request_reviews.require_code_owner_reviews == true then "1" else "0" end' 2>/dev/null || printf 0)" # fail-open-ok: as above, 0 is the refusing value
         cl_prot=1 ;;
       404)
         if ! printf '%s' "$FC_BODY" | jq -e '.message == "Branch not protected"' >/dev/null 2>&1; then
-          if [[ "$rs_enough" -eq 1 ]]; then FC_RULES_DETAIL="the protection query answered 404 without the documented absence message; the ruleset already requires both, so nothing depends on it"
+          if [[ "$rs_enough" -eq 1 ]]; then FC_RULES_DETAIL="the protection query answered 404 without the documented absence message; the ruleset already requires all four, so nothing depends on it"
           else FC_RULES_STATE="forbidden"; FC_RULES_DETAIL="the protection query answered 404: $(printf '%s' "$FC_BODY" | jq -r '.message // ""' 2>/dev/null | head -c 160)"; return 0; fi
         fi ;;
       429)
-        if [[ "$rs_enough" -eq 1 ]]; then FC_RULES_DETAIL="the protection query was rate limited; the ruleset already requires both, so nothing depends on it"
+        if [[ "$rs_enough" -eq 1 ]]; then FC_RULES_DETAIL="the protection query was rate limited; the ruleset already requires all four, so nothing depends on it"
         else FC_RULES_STATE="rate-limited"; return 0; fi ;;
       401|403)
-        if [[ "$rs_enough" -eq 1 ]]; then FC_RULES_DETAIL="the protection query answered $FC_HTTP; the ruleset already requires both, so nothing depends on it"
+        if [[ "$rs_enough" -eq 1 ]]; then FC_RULES_DETAIL="the protection query answered $FC_HTTP; the ruleset already requires all four, so nothing depends on it"
         else fc_forbidden_or_plan "the protection query"; return 0; fi ;;
       *)
-        if [[ "$rs_enough" -eq 1 ]]; then FC_RULES_DETAIL="the protection query answered $FC_HTTP; the ruleset already requires both, so nothing depends on it"
+        if [[ "$rs_enough" -eq 1 ]]; then FC_RULES_DETAIL="the protection query answered $FC_HTTP; the ruleset already requires all four, so nothing depends on it"
         else FC_RULES_STATE="unreachable"; FC_RULES_DETAIL="the protection query answered $FC_HTTP"; return 0; fi ;;
     esac
   fi
@@ -430,6 +490,7 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
     FC_REVIEWS="${rs_reviews:-0}"; [[ "${cl_reviews:-0}" -gt "$FC_REVIEWS" ]] && FC_REVIEWS="$cl_reviews"
     FC_CHECK_REQUIRED=0; [[ "$rs_checks" == "1" || "$cl_checks" == "1" ]] && FC_CHECK_REQUIRED=1
     FC_STRICT=0; [[ "$rs_strict" == "1" || "$cl_strict" == "1" ]] && FC_STRICT=1
+    FC_CODEOWNER=0; [[ "$rs_co" == "1" || "$cl_co" == "1" ]] && FC_CODEOWNER=1
   else
     FC_PROTECTED=0
   fi
@@ -441,7 +502,18 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
 fc_forge_state_sentence() { # fc_forge_state_sentence -> prints "<code>|<sentence>" for a non-ok state, or "" when ok
   case "$FC_RULES_STATE" in
     unreachable)  printf '[FC-FORGE-UNREACHABLE]|the forge did not answer whether %s is protected (%s), so this check cannot establish that the approval reached the trunk through a review. A check that could not run has not passed. Re-run the check when the forge answers; nothing about this pull request is wrong.' "$TRUNK_NAME" "${FC_RULES_DETAIL:-no answer}" ;;
-    forbidden)    printf '[FC-FORGE-FORBIDDEN]|the job'"'"'s identity may not read %s'"'"'s protection rules (%s), so the approval cannot be verified here. Grant the workflow contents: read (the template'"'"'s permissions block), or run the check from a job that can read them.' "$TRUNK_NAME" "${FC_RULES_DETAIL:-the forge answered forbidden}" ;;
+    forbidden)
+      # SPEC 0160, the review's item 5: the CLASSIC protection endpoint needs
+      # repository administration read, which no workflow permissions key
+      # grants (the forge's own documentation), so a refusal there has a cause
+      # "contents: read" cannot cure. Named when the protection query is the one
+      # refused; a refused repository or rules query keeps the design's readings.
+      case "${FC_RULES_DETAIL:-}" in
+        "the protection query"*)
+          printf '[FC-FORGE-FORBIDDEN]|the job'"'"'s identity may not read %s'"'"'s classic branch protection (%s): that endpoint needs repository administration, which a workflow'"'"'s permissions block cannot grant, so the approval cannot be verified from it here. Express the trunk'"'"'s protection as a ruleset (Settings, Rules: a pull request with one approving review and review from Code Owners, the required check "setlist forge check", branches up to date), which this check reads with contents: read, or run the check from a job whose token may read branch protection.' "$TRUNK_NAME" "$FC_RULES_DETAIL" ;;
+        *)
+          printf '[FC-FORGE-FORBIDDEN]|the job'"'"'s identity may not read %s'"'"'s protection rules (%s), so the approval cannot be verified here. Grant the workflow contents: read (the template'"'"'s permissions block), or run the check from a job that can read them.' "$TRUNK_NAME" "${FC_RULES_DETAIL:-the forge answered forbidden}" ;;
+      esac ;;
     plan-limited) printf '[FC-FORGE-PLAN-LIMITED]|the forge does not offer protection rules for %s on this repository'"'"'s plan (%s), so no review and no check can be required to land on it, and under forge custody there is no notary. Move the repository to a plan that offers branch protection, or make the repository public, or declare a custody this layer can verify without a forge.' "$TRUNK_NAME" "${FC_RULES_DETAIL:-the forge answered with a plan limit}" ;;
     rate-limited) printf '[FC-FORGE-RATE-LIMITED]|the forge refused the query for rate limiting; re-run after the window named in its answer. Never retried inside the check: a retry loop inside a required check is a hang with a timer.' ;;
     no-forge)     printf '[FC-NO-FORGE]|this instance declares forge custody and the check was run with no forge to ask (%s); a forge the check cannot query cannot be the notary.' "${FC_RULES_DETAIL:-run with --forge none}" ;;
@@ -502,6 +574,19 @@ fc_verify_custody_forge() { # fc_verify_custody_forge <proj> <spec-path> <num> <
     fc_say "[FC-STRICT-NOT-REQUIRED]" "$TRUNK_NAME requires this check but does not require branches to be up to date before merging (the setting is \"Require branches to be up to date before merging\", beside the required status checks; on a ruleset it is the required_status_checks rule's strict policy). Without it two pull requests can both be green against a stale base and the second lands on a trunk this check never read, so under forge custody the notary is not one. Turn the setting on."
     fc_set_token STRICT-NOT-REQUIRED
     printf 'STRICT-NOT-REQUIRED'; return 0
+  fi
+  # SPEC 0160: THE TRUNK MUST REQUIRE REVIEW FROM CODE OWNERS. The check the
+  # forge runs is the pull request's own copy of this file, of the hook library
+  # and of the workflow; the stamped CODEOWNERS makes an edit to them a reviewed
+  # change only where the trunk requires review from Code Owners. Under custody
+  # C this check is the notary, so a trunk without that setting lets the pull
+  # request rewrite the notary it is judged by. Last in the order, below strict,
+  # by the S3 rule: a trunk that does not require this check has nothing whose
+  # edits need reviewing, and one root cause is reported at a time.
+  if [[ "$FC_CODEOWNER" != "1" ]]; then
+    fc_say "[FC-NO-CODE-OWNER-REVIEW]" "$TRUNK_NAME requires this check but not review from Code Owners (the setting is \"Require review from Code Owners\", beside the required approving review; on a ruleset it is the pull_request rule's require_code_owner_review). The check this forge runs is the pull request's own copy, and the stamped CODEOWNERS makes an edit to it, to the hooks or to the workflow a reviewed change only under that setting, so under forge custody the notary could be rewritten by the pull request it judges. Turn the setting on."
+    fc_set_token FORGE-UNPROTECTED
+    printf 'FORGE-UNPROTECTED'; return 0
   fi
   # THE SENTENCE, VERBATIM FROM THE RATIFIED DESIGN (section 5, decision 4).
   printf 'setlist forge check [FC-CUSTODY-VERIFIED] spec %s is covered by an approval under "forge" custody: the trunk %s is protected on this forge (a pull request with at least one approving review and the required check "setlist forge check" are required to land on it), the ACTIVE flip that wrote specs/attest/%s.json is an ancestor of that trunk, and the attestation'"'"'s hash covers the spec'"'"'s bytes in this merge. This establishes that the approval reached the trunk through the forge'"'"'s review, not that any particular person decided; the forge'"'"'s account security is the custody.\n' "$num" "$TRUNK_NAME" "$num" >&2
@@ -605,7 +690,10 @@ else
         fcout="$(mmdc -i "$fctmp" -o "$fctmp.svg" 2>&1)" && fcok=1
       fi
       if [[ "$fcok" -ne 1 ]]; then
-        fc_say "[FC-DIAGRAM-RENDER]" "$fcd: Mermaid block $fcn does not parse under the pinned version, so the diagram this repository claims to draw cannot be drawn. The renderer said: $(printf '%s' "$fcout" | tr '\n' ' ' | head -c 300)"
+        # The file is a name and the renderer's words are free text: the parser
+        # quotes the author's block, so its control bytes and newlines go and its
+        # words and the 300 cap stay (spec 0172, sweep I17 of spec 0169).
+        fc_say "[FC-DIAGRAM-RENDER]" "$(slh_bound name "$fcd"): Mermaid block $fcn does not parse under the pinned version, so the diagram this repository claims to draw cannot be drawn. The renderer said: $(slh_bound text "$fcout" | head -c 300)"
         FC_DIAG_BAD=1
       fi
       fcn=$((fcn + 1))
@@ -697,6 +785,13 @@ if [[ "$FC_FORGE" == "github" ]]; then
         # the refusing arm (S3): silent while the check is not required at all.
         [[ "$FC_CHECK_REQUIRED" != "1" || "$FC_STRICT" == "1" ]] || fc_report "[FC-STRICT-NOT-REQUIRED]" "$TRUNK_NAME requires this check but does not require branches to be up to date before merging, so two pull requests can both be green against a stale base. Under custody \"$FC_CUSTODY\" the verdict above stands; turn the setting on where this check is the notary."
       fi
+    fi
+    # Spec 0160's report half, under EVERY custody (under custody C it is reached
+    # only where no forge verifier ran, because the verifier refuses first). Same
+    # root-cause rule as the refusing arm (S3): silent while the check is not
+    # required at all.
+    if [[ "$FC_PROTECTED" == "1" && "$FC_CHECK_REQUIRED" == "1" && "$FC_CODEOWNER" != "1" ]]; then
+      fc_report "[FC-NO-CODE-OWNER-REVIEW]" "$TRUNK_NAME requires this check but not review from Code Owners (\"Require review from Code Owners\"), so the stamped CODEOWNERS names reviewers without requiring them and a pull request can edit the check it is judged by. Under custody \"$FC_CUSTODY\" the verdict above stands; turn the setting on where this check is the notary."
     fi
     # Amendment 3: the report fires only where a rebase merge is POSSIBLE on
     # the trunk, the repository's flag AND the ruleset's allowed_merge_methods.

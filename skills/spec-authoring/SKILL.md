@@ -24,7 +24,8 @@ specs/TEMPLATE.md, which is the same text, stamped at bootstrap.
   criterion (plus the human-acceptance item where the work is
   experience-critical), the v1.7 clauses deleted, the Gates block unchanged,
   the Closing report kept whole where the gates read it (the one-line QA
-  verdict block, QA Pass 2, the mandatory diagram field). A lite spec owns at
+  verdict block, QA Pass 2, the close-review block, the mandatory diagram
+  field). A lite spec owns at
   most five files (checkpoint writes the `Owns:` lines and refuses a sixth;
   the close refuses `SLH-LITE-OVERSIZED`). A change that will touch more is a
   full spec from the start; a lite spec that outgrows its cap drops the line
@@ -74,9 +75,17 @@ verifies it mechanically:
   `<criterion>: PASS|PARTIAL|FAIL` line each; checkpoint drafts the lines from
   the criteria at the close with the verdicts blank, edition v1.14, and the
   verdicts are the human's), which is what the gates read, and
-  below it the full report pasted verbatim, which is what people read. A QA pass that is
+  below it the full report pasted verbatim inside a four-backtick fence, which is what people
+  read (unfenced, a report's own headings end the Closing report section). A QA pass that is
   not in the repo did not happen. Honest PARTIALs, never claimed PASSes.
 - QA Pass 2: confirmed by the developer, with the spot-checked criterion named.
+- The close-review block (plugin 2.11.0 and later): the `close-reviewer`
+  agent's fenced `close-review` block, pasted verbatim by checkpoint with the
+  agent's report below it inside a four-backtick fence, whose last round reads PASS; or
+  `round 1: SKIP-DOCS-ONLY` alone, for a close that touches no role path; or,
+  after two rounds, the human's `verdict: ACCEPTED-BY-HUMAN` line naming the
+  findings accepted. A verdict per criterion and findings with a file and a
+  line, never a grade; the gates read it (Part 6).
 - Design QA: punch list state, or "n/a (functional)".
 - The mandatory diagram field, answered `updated` or `no impact`, with any
   diagram edit riding the closing commit. **On a project that has opted in to
