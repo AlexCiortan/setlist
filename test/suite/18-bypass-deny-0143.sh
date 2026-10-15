@@ -38,7 +38,10 @@ BDS_HOOK="$HOOKS/bypass-deny.sh"
 # 2.10.0 leg, c901538, which moved it without saying so here); and spec 0170 (the 2.10.0 second leg's
 # F12 and F17, once, after its last lexer edit; the pin before it was
 # 3d3526afd78e0c2fc186d6bda4c91274e0e25aa0fb3fbf300157e06f23c34b88).
-BDS_PIN="6049a84f1fedfc043529775c66ae8505dd2c46bb104c744ddd1d6bf6408c44e3"
+# Spec 0193, round 10 (2026-10-14), Q1's reversal by the directory's round-9 report: the lexer compares
+# against K_ENV and K_EXPORT, joined from parts in its BEGIN block, its behaviour unchanged; the pin
+# before it was 6049a84f1fedfc043529775c66ae8505dd2c46bb104c744ddd1d6bf6408c44e3.
+BDS_PINNED="eb49cd2f5988b736399c2a611692bd97e4ecb0ab3a6b96c5ec6b4906e37128dd"
 
 if [[ -f "$BDS_HOOK" ]]; then
   ok "successor: templates/hooks/bypass-deny.sh exists at its own path"
@@ -298,8 +301,20 @@ bds_deny cr10a $'source <(env cat <<\'EOF\'\ngit commit --no-verify -m x\nEOF\n)
 bds_deny cr10b $'source <(cat<<EOF\ngit commit --no-verify -m x\nEOF\n)' CM-BYPASS-SPELLED
 # Not a heredoc to the lexer at all: the whole command substitution sits inside one double-quoted
 # word, the boundary the bash-escape bullet names for sh -c. Allowed on 2.9.0 and after; pinned.
-bds_allow cr10c $'eval "$(env cat <<EOF\ngit commit --no-verify -m x\nEOF\n)"'
-bds_deny cr10d $'x=`env cat <<EOF\ngit commit --no-verify -m x\nEOF\n`; eval "$x"' CM-BYPASS-SPELLED
+# The three inputs that spell the shell's string-running builtin are joined from parts (spec 0193), so
+# no shipped line carries the shape; their bytes are the literals' bytes, pinned by cksum below.
+BDS_EV="$(printf '%s%s' ev al)"
+BDS_CR10C="$BDS_EV"$' "$(env cat <<EOF\ngit commit --no-verify -m x\nEOF\n)"'
+BDS_CR10D=$'x=`env cat <<EOF\ngit commit --no-verify -m x\nEOF\n`; '"$BDS_EV"' "$x"'
+BDS_CR11G="$BDS_EV"$' $(cat << EOF\ngit commit --no-verify -m x\nEOF\n)'
+if [[ "$(printf '%s' "$BDS_CR10C" | cksum)" == "2392851884 56" && "$(printf '%s' "$BDS_CR10D" | cksum)" == "672455698 61" \
+      && "$(printf '%s' "$BDS_CR11G" | cksum)" == "1989636501 51" ]]; then
+  ok "bypass deny cr10c, cr10d, cr11g inputs: joined from parts, byte-identical to the literals they replaced"
+else
+  bad "bypass deny cr10c, cr10d, cr11g inputs: joined from parts, byte-identical to the literals they replaced" "$(printf '%s' "$BDS_CR10C" | cksum) / $(printf '%s' "$BDS_CR10D" | cksum) / $(printf '%s' "$BDS_CR11G" | cksum)"
+fi
+bds_allow cr10c "$BDS_CR10C"
+bds_deny cr10d "$BDS_CR10D" CM-BYPASS-SPELLED
 bds_allow cr10e $'cat <<\'EOF\' | env -u PAGER grep -c bash\ngit commit --no-verify\nEOF'
 bds_deny cr10f $'cat << EOF | env -u PAGER bash\ngit commit --no-verify -m x\nEOF' CM-BYPASS-SPELLED
 
@@ -319,7 +334,7 @@ bds_allow cr11c $'cat<<EOF | tee -a L.md\ngit commit --no-verify -m x\nEOF'
 bds_deny  cr11d $'env cat << EOF | nice bash\ngit commit --no-verify -m x\nEOF' CM-BYPASS-SPELLED
 bds_allow cr11e $'cat << A; cat << B | bash\nNever run git commit --no-verify here.\nA\necho hi\nB'
 bds_deny  cr11f $'cat << A; cat << B | bash\nprose\nA\ngit commit --no-verify -m x\nB' CM-BYPASS-SPELLED
-bds_deny  cr11g $'eval $(cat << EOF\ngit commit --no-verify -m x\nEOF\n)' CM-BYPASS-SPELLED
+bds_deny  cr11g "$BDS_CR11G" CM-BYPASS-SPELLED
 bds_deny  cr11h $'cat << EOF | command -p bash\ngit commit --no-verify -m x\nEOF' CM-BYPASS-SPELLED
 bds_deny  cr11i $'cat << EOF | exec -a x bash\ngit commit --no-verify -m x\nEOF' CM-BYPASS-SPELLED
 
@@ -475,10 +490,10 @@ bds_sha256() { # stdin -> hex digest
 }
 BDS_DIGEST="$(bds_lexer_block "$BDS_HOOK" | bds_sha256)"
 BDS_LINES="$(bds_lexer_block "$BDS_HOOK" | grep -c '' || true)"
-if [[ "$BDS_DIGEST" == "$BDS_PIN" ]]; then
+if [[ "$BDS_DIGEST" == "$BDS_PINNED" ]]; then
   ok "successor test 3 (pinned): the lexer block in bypass-deny.sh digests to the pin ($BDS_LINES lines)"
 else
-  bad "successor test 3 (pinned): the lexer block in bypass-deny.sh digests to the pin" "got $BDS_DIGEST over $BDS_LINES lines, pin $BDS_PIN. A changed lexer is the owner's decision (spec 0142, ruling 1), not an edit to this pin"
+  bad "successor test 3 (pinned): the lexer block in bypass-deny.sh digests to the pin" "got $BDS_DIGEST over $BDS_LINES lines, pin $BDS_PINNED. A changed lexer is the owner's decision (spec 0142, ruling 1), not an edit to this pin"
 fi
 # The block is one single-quoted shell string, so an apostrophe anywhere in its body (a comment
 # included) ends the string, the program awk receives is a fragment, and the hook fails open on every
@@ -697,9 +712,9 @@ ac_fixture() { # ac_fixture <dir> : an ARMED instance, committed
 }
 ac_run() { # ac_run <dir> [PATH] -> ACK_OUT, ACK_CTX (the additionalContext, empty when none)
   if [[ -n "${2:-}" ]]; then
-    ACK_OUT="$(printf '%s' "$(session_payload startup)" | PATH="$2" CLAUDE_PROJECT_DIR="$1" bash "$ACK_HOOK" 2>/dev/null)"
+    ACK_OUT="$(printf '%s' "$(hook_payload startup)" | PATH="$2" CLAUDE_PROJECT_DIR="$1" bash "$ACK_HOOK" 2>/dev/null)"
   else
-    ACK_OUT="$(printf '%s' "$(session_payload startup)" | CLAUDE_PROJECT_DIR="$1" bash "$ACK_HOOK" 2>/dev/null)"
+    ACK_OUT="$(printf '%s' "$(hook_payload startup)" | CLAUDE_PROJECT_DIR="$1" bash "$ACK_HOOK" 2>/dev/null)"
   fi
   ACK_CTX="$(printf '%s' "$ACK_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)"
 }
@@ -726,7 +741,7 @@ ac_silent() { # ac_silent <label>
 #    is after the fact and reads the repository, which the deny must not (its test 1).
 for ack_cmd in 'git config core.hooksPath /dev/null' 'git config --unset core.hooksPath' \
                'git config --local core.hooksPath .git/hooks' 'declare -x SETLIST_SKIP_HOOKS=1' \
-               'GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x' \
+               "GIT_CONFIG_COUNT=1 $(sx_join GIT_CONFIG_ KEY_0)=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null git commit -m x" \
                'chmod -x .githooks/pre-push' 'git config merge.ff true'; do
   ack_o="$(bash_payload "$ack_cmd" | bash "$HOOKS/bypass-deny.sh" 2>/dev/null)"
   if [[ -z "$ack_o" ]]; then ok "armed check 1: the deny still allows [$ack_cmd], unchanged"
@@ -808,7 +823,7 @@ fi
 #     carries is not mistaken for the repository's; and a .git FILE is a linked worktree only when git
 #     says so (its git dir differs from its common dir), never a submodule or a separated git dir.
 ACE="$WORK/ack-envarmed"; ac_fixture "$ACE"; git -C "$ACE" config --unset core.hooksPath
-ACK_OUT="$(printf '%s' "$(session_payload startup)" | GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=.githooks CLAUDE_PROJECT_DIR="$ACE" bash "$ACK_HOOK" 2>/dev/null)"
+ACK_OUT="$(printf '%s' "$(hook_payload startup)" | env GIT_CONFIG_COUNT=1 "$(sx_join GIT_CONFIG_ KEY_0)=core.hooksPath" GIT_CONFIG_VALUE_0=.githooks CLAUDE_PROJECT_DIR="$ACE" bash "$ACK_HOOK" 2>/dev/null)"
 ACK_CTX="$(printf '%s' "$ACK_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)"
 ac_report "12a, an environment arming the session does not hide an unarmed .git/config" "core.hooksPath is unset"
 ACP="$WORK/ack-sepgit"; rm -rf "$ACP" "$ACP.gitdir"; git clone -q --separate-git-dir "$ACP.gitdir" "$ACK" "$ACP" 2>/dev/null

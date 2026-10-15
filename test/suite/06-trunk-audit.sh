@@ -229,7 +229,7 @@ baseline_fixture() { # baseline_fixture <dir> <mode: bare|after-clean|after-dirt
 
 # The key as a person or the refresh writes it: one value in .claude/sdd.json,
 # never a ref, never a position (the `trunk` key's own rule, one file over).
-baseline_key() { # baseline_key <dir> <value>
+baseline_id() { # baseline_id <dir> <value>
   local d="$1" v="$2"
   jq --arg b "$v" '.audit = ((.audit // {}) + {baseline: $b})' "$d/.claude/sdd.json" > "$d/.claude/sdd.json.new"
   mv "$d/.claude/sdd.json.new" "$d/.claude/sdd.json"
@@ -454,7 +454,7 @@ case "$SCRIPT_OUT" in
 esac
 
 BL_HOOK="$(baseline_hook_commit "$BLD")"
-baseline_key "$BLD" "$BL_HOOK"
+baseline_id "$BLD" "$BL_HOOK"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLD"
 expect_script "0157 baseline a3: with the key at the hook boundary the same instance reads CLEAN" 0 \
   "0 violations" "(declared)"
@@ -467,12 +467,12 @@ esac
 # no pre-rule exemption: if the exemption's baseline were later than the walk
 # start, this merge would be excused and the report would read clean.
 BLA="$WORK/audit-baseline-after-dirty"; baseline_fixture "$BLA" after-dirty
-baseline_key "$BLA" "$(baseline_hook_commit "$BLA")"
+baseline_id "$BLA" "$(baseline_hook_commit "$BLA")"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLA"
 expect_script "0157 baseline a5: a merge with no completion made AFTER the declared baseline is still a violation" 1 \
   "1 violation" "Merge chore/after"
 BLC="$WORK/audit-baseline-after-clean"; baseline_fixture "$BLC" after-clean
-baseline_key "$BLC" "$(baseline_hook_commit "$BLC")"
+baseline_id "$BLC" "$(baseline_hook_commit "$BLC")"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLC"
 expect_script "0157 baseline a6: a merge that RECORDS its completion after the baseline is clean" 0 "0 violations"
 
@@ -497,16 +497,16 @@ baseline_refused() { # baseline_refused <name> <dir> <code>
 }
 BLR="$WORK/audit-baseline-refusals"; baseline_fixture "$BLR" bare
 BLR_HOOK="$(baseline_hook_commit "$BLR")"
-baseline_key "$BLR" "main"
+baseline_id "$BLR" "main"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLR"
 baseline_refused "0157 baseline b1: a REF name as the baseline is refused by name" "$BLR" "[SLH-BASELINE-MALFORMED]"
-baseline_key "$BLR" "${BLR_HOOK:0:12}"
+baseline_id "$BLR" "${BLR_HOOK:0:12}"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLR"
 baseline_refused "0157 baseline b2: an ABBREVIATED commit id is refused, because the key is an identity" "$BLR" "[SLH-BASELINE-MALFORMED]"
-baseline_key "$BLR" "$(printf '%s' "$BLR_HOOK" | tr 'a-f' 'A-F')"
+baseline_id "$BLR" "$(printf '%s' "$BLR_HOOK" | tr 'a-f' 'A-F')"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLR"
 baseline_refused "0157 baseline b3: an uppercase-hex spelling is refused rather than silently accepted" "$BLR" "[SLH-BASELINE-MALFORMED]"
-baseline_key "$BLR" "0000000000000000000000000000000000000000"
+baseline_id "$BLR" "0000000000000000000000000000000000000000"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLR"
 baseline_refused "0157 baseline b4: a well-formed id that names no commit here is refused" "$BLR" "[SLH-BASELINE-UNRESOLVED]"
 git -C "$BLR" checkout -q -b sideways
@@ -514,10 +514,10 @@ printf 'elsewhere\n' >> "$BLR/src/f.js"
 git -C "$BLR" add -A >/dev/null 2>&1 && git -C "$BLR" commit -qm "a commit on another branch"
 BLR_SIDE="$(git -C "$BLR" rev-parse HEAD)"
 git -C "$BLR" checkout -q main
-baseline_key "$BLR" "$BLR_SIDE"
+baseline_id "$BLR" "$BLR_SIDE"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLR"
 baseline_refused "0157 baseline b5: a baseline that is not an ancestor of the audited tip is refused, not walked from" "$BLR" "[SLH-BASELINE-NOT-ANCESTOR]"
-baseline_key "$BLR" "$(git -C "$BLR" rev-parse main)"
+baseline_id "$BLR" "$(git -C "$BLR" rev-parse main)"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLR"
 expect_script "0157 baseline b6: a baseline equal to the tip is an EMPTY walk and reports clean, a declaration and not a refusal" 0 "audited 0"
 jq '.audit = "yes"' "$BLR/.claude/sdd.json" > "$BLR/.claude/sdd.json.new" && mv "$BLR/.claude/sdd.json.new" "$BLR/.claude/sdd.json"
@@ -530,7 +530,7 @@ baseline_refused "0157 baseline b7: an \"audit\" value that is not an object is 
 # checkout moving the forge's exemption with it.
 BLS="$WORK/audit-baseline-since"; baseline_fixture "$BLS" bare
 BLS_HOOK="$(baseline_hook_commit "$BLS")"
-baseline_key "$BLS" "main"
+baseline_id "$BLS" "main"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLS" --since "$BLS_HOOK"
 expect_script "0157 baseline c1: --since overrides a present key, malformed or not, and the key is never read" 0 "0 violations"
 case "$SCRIPT_OUT" in
@@ -545,7 +545,7 @@ expect_script "0157 baseline c3: the --since=<ref> spelling overrides the key to
 # the declared baseline, so the audit refuses to run rather than walking a tip
 # under a frame nobody declared. Still refused at push, by the fail-CLOSED arm.
 BLO="$WORK/audit-baseline-orphan"; audit_orphan_fixture "$BLO" code
-baseline_key "$BLO" "$(git -C "$BLO" log --root --diff-filter=A --format=%H -- .claude/sdd.json | tail -n1)"
+baseline_id "$BLO" "$(git -C "$BLO" log --root --diff-filter=A --format=%H -- .claude/sdd.json | tail -n1)"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLO" --until wholesale
 baseline_refused "0157 baseline d1: an orphan tip audited under a declared baseline is refused, never reported clean" "$BLO" "[SLH-BASELINE-NOT-ANCESTOR]"
 
@@ -692,7 +692,8 @@ frame_norm_fn() { # frame_norm_fn <script> <dir> : the function as it stands in 
   local f="$1" d="$2" body v
   body="$(awk '/^# --- THE BASELINE FRAME \(spec 0167\)/{p=1} p{print} /^# --- END THE BASELINE FRAME/{p=0}' "$f")"
   [[ -n "$body" ]] || { printf 'unreadable\n'; return; }
-  v="$( eval "$body"; slh_baseline_frame "$d" "$d/.claude/sdd.json" main 2>/dev/null )"
+  printf '%s\n' "$body" > "$WORK/frame-norm-fn.sh"   # sourced from a file, never run as a string (spec 0193)
+  v="$( . "$WORK/frame-norm-fn.sh"; slh_baseline_frame "$d" "$d/.claude/sdd.json" main 2>/dev/null )"
   case "$v" in
     absent) printf 'absent\n' ;;
     "refuse "*) printf 'refuse %s\n' "$(printf '%s' "$v" | awk '{print $2}')" ;;
@@ -708,7 +709,7 @@ FR_MERGE_S="$(git -C "$FRD" rev-parse --short "$FR_MERGE")"
 
 # (a) F1: the refresh's own choice on the merged-branch shape. Red on the
 # folded bytes: [SLH-BASELINE-NOT-ANCESTOR] at exit 2, every push refused.
-baseline_key "$FRD" "$FR_ADDED"
+baseline_id "$FRD" "$FR_ADDED"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$FRD"
 expect_script "0167 frame a1: the commit that added .githooks/pre-push on a MERGED branch is a valid baseline, framed at the merge" 0 \
   "0 violations" "since: $FR_MERGE_S" "declared $(git -C "$FRD" rev-parse --short "$FR_ADDED")"
@@ -735,7 +736,7 @@ git -C "$FRD" reset -q --hard HEAD~1
 # commit on a branch never merged is refused by BOTH, with the same code.
 # Red on the folded bytes: the refresh read "already recorded ..., left as
 # declared" for the first while the audit refused it.
-baseline_key "$FRD" "$(git -C "$FRD" rev-parse chore/hooks)"
+baseline_id "$FRD" "$(git -C "$FRD" rev-parse chore/hooks)"
 FR_A="$(frame_norm_audit "$FRD")"; FR_R="$(frame_norm_refresh "$FRD")"
 if [[ "$FR_A" == "frame $FR_MERGE_S" && "$FR_R" == "$FR_A" ]]; then
   ok "0167 frame b1: a hand-edited ancestor off the first-parent line: the refresh and the audit both frame it at the merge"
@@ -743,7 +744,7 @@ else
   bad "0167 frame b1: a hand-edited ancestor off the first-parent line: the refresh and the audit both frame it at the merge" \
       "audit '$FR_A', refresh '$FR_R', wanted 'frame $FR_MERGE_S' from both"
 fi
-baseline_key "$FRD" "$(frame_side_of "$FRD")"
+baseline_id "$FRD" "$(frame_side_of "$FRD")"
 FR_A="$(frame_norm_audit "$FRD")"; FR_R="$(frame_norm_refresh "$FRD")"
 if [[ "$FR_A" == "refuse SLH-BASELINE-NOT-ANCESTOR" && "$FR_R" == "$FR_A" ]]; then
   ok "0167 frame b2: a hand-edited commit that is no ancestor: the refresh names the audit's own refusal"
@@ -778,16 +779,16 @@ FR_LINEAR="$(git -C "$FRD" rev-parse "$FR_MERGE^1")"
 FR_WANT=""; FR_GOT=""
 for fr_shape in linear merged hand-edited non-ancestor side-branch false null abbreviation absent tip; do
   case "$fr_shape" in
-    linear)       baseline_key "$FRD" "$FR_LINEAR";        fr_want="frame $(git -C "$FRD" rev-parse --short "$FR_LINEAR")" ;;
-    merged)       baseline_key "$FRD" "$FR_ADDED";         fr_want="frame $FR_MERGE_S" ;;
-    hand-edited)  baseline_key "$FRD" "$(git -C "$FRD" rev-parse chore/hooks)"; fr_want="frame $FR_MERGE_S" ;;
-    non-ancestor) baseline_key "$FRD" "$(frame_orphan_of "$FRD")"; fr_want="refuse SLH-BASELINE-NOT-ANCESTOR" ;;
-    side-branch)  baseline_key "$FRD" "$(frame_side_of "$FRD")";   fr_want="refuse SLH-BASELINE-NOT-ANCESTOR" ;;
+    linear)       baseline_id "$FRD" "$FR_LINEAR";        fr_want="frame $(git -C "$FRD" rev-parse --short "$FR_LINEAR")" ;;
+    merged)       baseline_id "$FRD" "$FR_ADDED";         fr_want="frame $FR_MERGE_S" ;;
+    hand-edited)  baseline_id "$FRD" "$(git -C "$FRD" rev-parse chore/hooks)"; fr_want="frame $FR_MERGE_S" ;;
+    non-ancestor) baseline_id "$FRD" "$(frame_orphan_of "$FRD")"; fr_want="refuse SLH-BASELINE-NOT-ANCESTOR" ;;
+    side-branch)  baseline_id "$FRD" "$(frame_side_of "$FRD")";   fr_want="refuse SLH-BASELINE-NOT-ANCESTOR" ;;
     false)        frame_value "$FRD" false;                fr_want="refuse SLH-BASELINE-MALFORMED" ;;
     null)         frame_value "$FRD" null;                 fr_want="refuse SLH-BASELINE-MALFORMED" ;;
-    abbreviation) baseline_key "$FRD" "${FR_ADDED:0:12}";  fr_want="refuse SLH-BASELINE-MALFORMED" ;;
+    abbreviation) baseline_id "$FRD" "${FR_ADDED:0:12}";  fr_want="refuse SLH-BASELINE-MALFORMED" ;;
     absent)       frame_absent "$FRD";                     fr_want="absent" ;;
-    tip)          baseline_key "$FRD" "$FR_TIP";           fr_want="frame $(git -C "$FRD" rev-parse --short "$FR_TIP")" ;;
+    tip)          baseline_id "$FRD" "$FR_TIP";           fr_want="frame $(git -C "$FRD" rev-parse --short "$FR_TIP")" ;;
   esac
   FR_WANT="$FR_WANT$fr_shape $fr_want"$'\n'
   FR_GOT="$FR_GOT$fr_shape audit $(frame_norm_audit "$FRD") | refresh $(frame_norm_refresh "$FRD") | fn-audit $(frame_norm_fn "$SCRIPTS/trunk-audit.sh" "$FRD") | fn-refresh $(frame_norm_fn "$SCRIPTS/refresh-instance.sh" "$FRD")"$'\n'
@@ -807,7 +808,7 @@ else
 fi
 # E-a's guard: for a declaration older than the tip the frame is NEVER the tip,
 # which would walk nothing and attest every trunk clean.
-baseline_key "$FRD" "$FR_ADDED"
+baseline_id "$FRD" "$FR_ADDED"
 if [[ "$(frame_norm_audit "$FRD")" == "frame $(git -C "$FRD" rev-parse --short "$FR_TIP")" ]]; then
   bad "0167 frame d2: the frame of an older declaration is never the tip" "the audit framed at the tip, so it walked nothing"
 elif [[ "$(frame_norm_fn "$SCRIPTS/trunk-audit.sh" "$FRD")" == "frame $FR_MERGE_S" ]]; then
@@ -879,7 +880,7 @@ done
 blg_tmp="$(jq '.roles.src = "src"' "$BLG/.claude/sdd.json")" && printf '%s\n' "$blg_tmp" > "$BLG/.claude/sdd.json"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLG"
 case "$SCRIPT_RC" in
-  2) bad "0164 roles g control: an ordinary role path still audits" "refused: ${SCRIPT_OUT:-<empty>}" ;;
+  2) bad "0164 roles g control: an ordinary role path still audits" "refused (rc $SCRIPT_RC): ${SCRIPT_OUT:-<empty>}" ;;
   *) ok "0164 roles g control: an ordinary role path still audits" ;;
 esac
 
@@ -934,12 +935,12 @@ expect_script "0164 baseline f1: with no key the chore-shaped merge is a violati
 # before it is walked or excused. Here nothing follows it, so the walk is
 # empty, which is the key moved forward walking less, disclosed and reviewed
 # like the rest of .claude/.
-baseline_key "$BLS" "$bls_side"
+baseline_id "$BLS" "$bls_side"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLS"
 expect_script "0164 baseline f2 (flipped by 0167): a baseline off the first-parent line is framed at the merge that brought it in" 0 \
   "audited 0" "since: $(git -C "$BLS" rev-parse --short HEAD)" "declared $(git -C "$BLS" rev-parse --short "$bls_side")"
 # and the on-line control still audits, so f2 is about the line and not about keys
-baseline_key "$BLS" "$(git -C "$BLS" rev-list --first-parent HEAD | sed -n 2p)"
+baseline_id "$BLS" "$(git -C "$BLS" rev-list --first-parent HEAD | sed -n 2p)"
 run_script bash "$SCRIPTS/trunk-audit.sh" "$BLS"
 expect_script "0164 baseline f3: a baseline ON the first-parent line is honoured, declared" 0 "(declared)"
 
@@ -1569,3 +1570,281 @@ else
 fi
 fi; shard_region_end
 # <<< SHARD-END owns-overlap-0174
+
+# --- THE AUDIT'S OWN GIT CALLS (spec 0184, item 1) ----------------------------
+# A git call whose output decides a verdict is read for its exit status, and a
+# failure refuses by name: SLH-AUDIT-GIT-FAILED, the command and its status
+# named, "audited nothing", no tally line, exit 2. Measured at 0184's cut: a
+# walked commit's object gone read "audited 0 commits" at rc 0, a walked commit's
+# tree gone or unreadable read "2 clean, 0 violations" at rc 0, and a merge whose
+# second parent cannot be read was refused as "parentless", a false reason. The
+# classes the physical faults cannot isolate (an earlier walk meets the damage
+# first) are injected with a git wrapper on PATH that exits 139 for one call, the
+# emulated guest's crash class (0181's attempt 1, `trunk audit e`). Every class
+# runs on a record-carrying and a record-less instance (DE15's standing question),
+# and each fixture's no-fault control reads its old verdict.
+# >>> SHARD-BEGIN audit-git-0184 cost=3
+if shard_region audit-git-0184; then
+AG_REALGIT="$(command -v git)"
+AG_BIN="$WORK/ag-bin"; mkdir -p "$AG_BIN"
+printf '#!/usr/bin/env bash\ncase "$*" in $AG_FAULT) exit 139 ;; esac\nexec "$AG_REALGIT" "$@"\n' > "$AG_BIN/git"
+chmod +x "$AG_BIN/git"
+ag_obj() { printf '%s/.git/objects/%s/%s' "$1" "${2:0:2}" "${2:2}"; }
+ag_base() { # ag_base <dir> <record|page>: the stamp, then a direct feature commit V, then a docs commit D
+  local d="$1" kind="$2"
+  rm -rf "$d"; git_init "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$d/.claude/sdd.json"
+  printf '| Num | Title | Status |\n| --- | --- | --- |\n' > "$d/specs/STATUS.md"
+  [[ "$kind" == record ]] && printf '{"setlist_status":1,"specs":{},"chores":{}}\n' > "$d/.claude/status.json"
+  git -C "$d" add -A && git -C "$d" commit -qm stamp
+  git -C "$d" rev-parse HEAD > "$d.since"
+  printf 'code\n' > "$d/src/a.js"; git -C "$d" add -A && git -C "$d" commit -qm "V: feature code direct"
+  printf 'n\n' > "$d/NOTES.md"; git -C "$d" add -A && git -C "$d" commit -qm "D: docs"
+}
+ag_merge() { # ag_merge <dir> <record|page>: ag_base, then an unspecced chore-shaped merge M of a side branch carrying feature code
+  local d="$1"
+  ag_base "$d" "$2"
+  git -C "$d" checkout -qb side; printf 'x\n' > "$d/src/b.js"; git -C "$d" add -A && git -C "$d" commit -qm side
+  git -C "$d" checkout -q main; git -C "$d" -c core.hooksPath=/dev/null merge -q --no-ff -m "M: unspecced merge" side
+  git -C "$d" branch -qD side
+}
+ag_audit() { # ag_audit <dir> [fault-pattern]: the audit from the stamp, the fault injected when a pattern is named
+  if [[ -n "${2:-}" ]]; then
+    run_script env PATH="$AG_BIN:$PATH" AG_REALGIT="$AG_REALGIT" AG_FAULT="$2" bash "$SCRIPTS/trunk-audit.sh" "$1" --since "$(cat "$1.since")"
+  else
+    run_script bash "$SCRIPTS/trunk-audit.sh" "$1" --since "$(cat "$1.since")"
+  fi
+}
+ag_refused() { # ag_refused <name> <command-word>: refused by name, audited nothing, no tally, rc 2
+  if [[ "$SCRIPT_RC" -eq 2 ]] && grep -q '\[SLH-AUDIT-GIT-FAILED\]' <<< "$SCRIPT_OUT" && grep -q 'audited nothing' <<< "$SCRIPT_OUT" \
+     && grep -qF -- "$2" <<< "$SCRIPT_OUT" && ! grep -q '^audited ' <<< "$SCRIPT_OUT"; then
+    ok "$1"
+  else
+    bad "$1" "rc=$SCRIPT_RC: $(grep -E 'SLH-|VIOLATION|^audited|trunk-audit' <<< "$SCRIPT_OUT" | head -4 | tr '\n' ' ' | cut -c1-300)"
+  fi
+}
+for AG_K in record page; do
+  # control: no fault, the direct commit is a violation
+  AGD="$WORK/ag-ctl-$AG_K"; ag_base "$AGD" "$AG_K"; ag_audit "$AGD"
+  expect_script "0184 git a0 [$AG_K] (control): with no fault the direct feature commit is a violation" 1 "1 violations"
+  # a1: the commit list, a walked commit's object gone
+  AGD="$WORK/ag-a1-$AG_K"; ag_base "$AGD" "$AG_K"; rm -f "$(ag_obj "$AGD" "$(git -C "$AGD" rev-parse HEAD~1)")"; ag_audit "$AGD"
+  ag_refused "0184 git a1 [$AG_K]: a walked commit's object gone refuses by name rather than auditing 0 commits clean" "exited 128"
+  # a2: the commit list, the walk's git killed (exit 139)
+  AGD="$WORK/ag-a2-$AG_K"; ag_base "$AGD" "$AG_K"; ag_audit "$AGD" '*rev-list --first-parent*'
+  ag_refused "0184 git a2 [$AG_K]: the walk's git killed (exit 139) refuses by name rather than reading an empty list as clean" "exited 139"
+  # b: the merge parents, the merged parent's commit object gone
+  AGD="$WORK/ag-b-$AG_K"; ag_merge "$AGD" "$AG_K"; ag_audit "$AGD"
+  expect_script "0184 git b0 [$AG_K] (control): with no fault the unspecced merge is a violation" 1 "chore-shaped merge"
+  rm -f "$(ag_obj "$AGD" "$(git -C "$AGD" rev-parse HEAD^2)")"; ag_audit "$AGD"
+  ag_refused "0184 git b [$AG_K]: a merged parent that cannot be read refuses by name, not as a parentless commit" "rev-list --parents"
+  if grep -q 'parentless' <<< "$SCRIPT_OUT"; then bad "0184 git b2 [$AG_K]: no parentless sentence for a merge" "$(grep parentless <<< "$SCRIPT_OUT" | head -1)"; else ok "0184 git b2 [$AG_K]: no parentless sentence for a merge"; fi
+  # c1: a tree read, the walked commit's tree object gone
+  AGD="$WORK/ag-c1-$AG_K"; ag_base "$AGD" "$AG_K"; rm -f "$(ag_obj "$AGD" "$(git -C "$AGD" rev-parse 'HEAD~1^{tree}')")"; ag_audit "$AGD"
+  ag_refused "0184 git c1 [$AG_K]: a walked commit's tree object gone refuses by name rather than reading the commit clean" "SLH-AUDIT-GIT-FAILED"
+  # c2: a tree read, the walked commit's tree object unreadable (skipped by name where the owner can still read it)
+  AGD="$WORK/ag-c2-$AG_K"; ag_base "$AGD" "$AG_K"; AG_T="$(ag_obj "$AGD" "$(git -C "$AGD" rev-parse 'HEAD~1^{tree}')")"; chmod 000 "$AG_T"
+  if [[ -r "$AG_T" ]]; then
+    ok "0184 git c2 [$AG_K]: SKIPPED by name: this platform lets the owner read a mode-000 file, so an unreadable object cannot be made here"
+  else
+    ag_audit "$AGD"
+    ag_refused "0184 git c2 [$AG_K]: a walked commit's tree object unreadable refuses by name rather than reading the commit clean" "SLH-AUDIT-GIT-FAILED"
+  fi
+  chmod 644 "$AG_T"
+  # d: the record or page read at a walked commit, its git killed
+  AGD="$WORK/ag-d-$AG_K"; ag_base "$AGD" "$AG_K"
+  if [[ "$AG_K" == record ]]; then ag_audit "$AGD" '*show *:.claude/status.json*'; else ag_audit "$AGD" '*show *:specs/STATUS.md*'; fi
+  ag_refused "0184 git d [$AG_K]: the $AG_K read at a walked commit killed refuses by name, never read as an empty or malformed one" "exited 139"
+  # e: the ancestry test (post_baseline) on the unspecced merge, its git killed
+  AGD="$WORK/ag-e-$AG_K"; ag_merge "$AGD" "$AG_K"; ag_audit "$AGD" '*merge-base --is-ancestor*'
+  ag_refused "0184 git e [$AG_K]: the ancestry test killed refuses by name rather than excusing the merge as pre-rule history" "merge-base --is-ancestor"
+done
+# f: the shared diagram reader (the switch) at a close, its listing killed, on both close paths
+AGD="$WORK/ag-f-page"; audit_fixture "$AGD" clean
+run_script bash "$SCRIPTS/trunk-audit.sh" "$AGD"
+expect_script "0184 git f0 [page] (control): with no fault the compliant merge close audits clean" 0 "0 violations"
+run_script env PATH="$AG_BIN:$PATH" AG_REALGIT="$AG_REALGIT" AG_FAULT='*ls-tree*docs/diagrams/*' bash "$SCRIPTS/trunk-audit.sh" "$AGD"
+ag_refused "0184 git f [page]: the diagram switch's listing killed at a merge close refuses by name rather than reading the half unarmed" "docs/diagrams/"
+AGD="$WORK/ag-f-record"; rm -rf "$AGD"; git_init "$AGD"; mkdir -p "$AGD/src" "$AGD/specs" "$AGD/.claude"
+printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$AGD/.claude/sdd.json"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{}}\n' > "$AGD/.claude/status.json"
+printf '# Spec 0001\n\nStatus: ACTIVE\n' > "$AGD/specs/0001-thing.md"
+git -C "$AGD" add -A && git -C "$AGD" commit -qm stamp; git -C "$AGD" rev-parse HEAD > "$AGD.since"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$AGD/.claude/status.json"
+printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\n- Architecture diagram: no impact\n' > "$AGD/specs/0001-thing.md"
+printf 'code\n' > "$AGD/src/a.js"; git -C "$AGD" add -A && git -C "$AGD" commit -qm "close 0001 (squash shape)"
+ag_audit "$AGD"
+expect_script "0184 git f0 [record] (control): with no fault the record-path close audits clean" 0 "0 violations"
+ag_audit "$AGD" '*ls-tree*docs/diagrams/*'
+ag_refused "0184 git f [record]: the diagram switch's listing killed at a record-path close refuses by name rather than reading the half unarmed" "docs/diagrams/"
+# the push: pre-push reads the audit's exit 2 as "the audit could not run" and refuses
+AGD="$WORK/ag-push"; audit_fixture "$AGD" clean
+run_script env -u CLAUDE_PLUGIN_ROOT PATH="$AG_BIN:$PATH" AG_REALGIT="$AG_REALGIT" AG_FAULT='*rev-list --first-parent*' bash -c "cd '$AGD' && CLAUDE_PLUGIN_ROOT='$ROOT' bash '$ROOT/templates/git-hooks/pre-push' </dev/null"
+expect_script "0184 git push: the walk's git killed under pre-push refuses the push, the audit named as unable to run" 1 "SLH-AUDIT-GIT-FAILED" "the audit could not run"
+# g, h, i (spec 0189 fix round 1, the 2.12.0 leg's R10 and E-c, F18, F8).
+# g: the commit list answered rc 0 and NOTHING for a range the baseline does not reach
+# (a child whose status was lost): an empty list is checked against ancestry, never read as
+# "nothing to audit yet".
+AG_BIN0="$WORK/ag-bin0"; mkdir -p "$AG_BIN0"
+printf '#!/usr/bin/env bash\ncase "$*" in $AG_FAULT) exit 0 ;; esac\nexec "$AG_REALGIT" "$@"\n' > "$AG_BIN0/git"
+chmod +x "$AG_BIN0/git"
+AGD="$WORK/ag-g"; ag_base "$AGD" page
+run_script env PATH="$AG_BIN0:$PATH" AG_REALGIT="$AG_REALGIT" AG_FAULT='*rev-list --first-parent*..*' bash "$SCRIPTS/trunk-audit.sh" "$AGD" --since "$(cat "$AGD.since")"
+ag_refused "0189 git g: the commit list answering rc 0 and nothing for a range the baseline does not reach refuses by name, never 'nothing to audit yet'" "answered no commits"
+# g0 (control): a trunk at its baseline has an empty range, and that is still clean
+AGD="$WORK/ag-g0"; rm -rf "$AGD"; git_init "$AGD"; mkdir -p "$AGD/.claude"
+printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$AGD/.claude/sdd.json"
+git -C "$AGD" add -A && git -C "$AGD" commit -qm stamp
+run_script bash "$SCRIPTS/trunk-audit.sh" "$AGD"
+expect_script "0189 git g0 (control): a trunk with no commit after its baseline still reads 'nothing to audit yet', rc 0" 0 "nothing to audit yet"
+# h: the shallow-clone question killed (exit 139) refuses by name rather than reading "not shallow"
+AGD="$WORK/ag-h"; ag_base "$AGD" page; ag_audit "$AGD" '*is-shallow-repository*'
+ag_refused "0189 git h: the shallow-clone question killed refuses by name rather than reading 'not shallow'" "is-shallow-repository"
+# i: a tag named like the trunk is not the trunk: the audit walks refs/heads, so the direct commit is still a violation
+AGD="$WORK/ag-i"; ag_base "$AGD" page; git -C "$AGD" tag main "$(cat "$AGD.since")"
+ag_audit "$AGD"
+expect_script "0189 git i: a tag named like the trunk does not turn the audit onto the tag's history; the direct commit is a violation" 1 "1 violations"
+fi; shard_region_end
+# <<< SHARD-END audit-git-0184
+
+# --- EVERY AUDIT REFUSAL CARRIES A CODE (spec 0184, item 2; O-11) ---------------
+# The nine messages that printed a sentence and no code take one each, one code
+# per message shared by both routes that print it, the gate's code where the gate
+# asks the same question; the sentence after each code is the cut's, unchanged,
+# except the adoption clause, which says "made after this instance adopted the
+# rules" only where an adoption point exists (the observe rule, both sites).
+# >>> SHARD-BEGIN audit-codes-0184 cost=3
+if shard_region audit-codes-0184; then
+ac_inst() { # ac_inst <dir> <record|page> [armed]: stamp with spec 0001 ACTIVE; armed adds a diagram file carrying the marker
+  local d="$1" kind="$2"
+  rm -rf "$d"; git_init "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$d/.claude/sdd.json"
+  printf '| Num | Title | Status |\n| --- | --- | --- |\n| 0001 | Thing | ACTIVE |\n' > "$d/specs/STATUS.md"
+  printf '# Spec 0001\n\nStatus: ACTIVE\n' > "$d/specs/0001-thing.md"
+  [[ "$kind" == record ]] && printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{}}\n' > "$d/.claude/status.json"
+  if [[ "${3:-}" == armed ]]; then mkdir -p "$d/docs/diagrams"; printf 'Shows: x\nAltitude: L1\nSynced by: chore\nEncodes: y\n' > "$d/docs/diagrams/a.md"; fi
+  git -C "$d" add -A && git -C "$d" commit -qm stamp
+}
+ac_close() { # ac_close <dir> <record|page> <spec-body>: flip 0001 to CLOSED (row, and record with its facts) beside the given spec text
+  local d="$1" kind="$2"
+  printf '%b' "$3" > "$d/specs/0001-thing.md"
+  printf '| Num | Title | Status |\n| --- | --- | --- |\n| 0001 | Thing | CLOSED |\n' > "$d/specs/STATUS.md"
+  [[ "$kind" == record ]] && printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$d/.claude/status.json"
+  return 0
+}
+AC_OK='# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\n- Architecture diagram: no impact\n\n```qa-pass-1\n1: PASS\n```\n'
+AC_UNBACKED='# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\n- Architecture diagram: updated (docs/diagrams/a.md)\n\n```qa-pass-1\n1: PASS\n```\n'
+ac_has() { # ac_has <name> <fixed line text>
+  if grep -qF -- "$2" <<< "$SCRIPT_OUT"; then ok "$1"; else bad "$1" "rc=$SCRIPT_RC: $(grep -E 'VIOLATION|^audited' <<< "$SCRIPT_OUT" | head -4 | tr '\n' ' ' | cut -c1-300)"; fi
+}
+for AC_K in record page; do
+  # 1. parentless: an orphan offered as the trunk's tip
+  ACD="$WORK/ac-1-$AC_K"; ac_inst "$ACD" "$AC_K"
+  git -C "$ACD" checkout -q --orphan wholesale; git -C "$ACD" rm -rq --cached . >/dev/null 2>&1
+  ( cd "$ACD" && rm -rf src specs seed.txt && mkdir src && printf 'e\n' > src/evil.js ) && git -C "$ACD" add src && git -C "$ACD" commit -qm wholesale
+  git -C "$ACD" checkout -q -f main; git -C "$ACD" checkout -q -- . 2>/dev/null
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD" --until wholesale
+  ac_has "0184 code 1 [$AC_K]: a parentless commit carrying feature code is refused [SLH-PARENTLESS-COMMIT], the sentence kept" "[SLH-PARENTLESS-COMMIT] parentless commit carrying feature code offered as main"
+  # 2. direct
+  ACD="$WORK/ac-2-$AC_K"; ac_inst "$ACD" "$AC_K"; printf 'c\n' > "$ACD/src/a.js"; git -C "$ACD" add -A && git -C "$ACD" commit -qm direct
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD"
+  ac_has "0184 code 2 [$AC_K]: feature code committed directly is refused [SLH-DIRECT-COMMIT], the sentence kept" "[SLH-DIRECT-COMMIT] feature code committed directly to main"
+  # 3. unspecced merge, after adoption
+  ACD="$WORK/ac-3-$AC_K"; ac_inst "$ACD" "$AC_K"; git -C "$ACD" checkout -qb side; printf 'b\n' > "$ACD/src/b.js"; git -C "$ACD" add -A && git -C "$ACD" commit -qm side
+  git -C "$ACD" checkout -q main; git -C "$ACD" merge -q --no-ff -m "unspecced merge" side
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD"
+  ac_has "0184 code 3 [$AC_K]: an unspecced merge is refused [SLH-UNSPECCED-MERGE], made after adoption where the history has an adoption point" "[SLH-UNSPECCED-MERGE] chore-shaped merge with no recorded completion, made after this instance adopted the rules; it reached the trunk without firing pre-merge-commit"
+  # 4. several spec files
+  ACD="$WORK/ac-4-$AC_K"; ac_inst "$ACD" "$AC_K"; ac_close "$ACD" "$AC_K" "$AC_OK"; printf '# companion\n' > "$ACD/specs/0001-other.md"; git -C "$ACD" add -A && git -C "$ACD" commit -qm close
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD"
+  ac_has "0184 code 4 [$AC_K]: a close with several spec files is refused [SLH-SPEC-DUPLICATE], the gate's code, the sentence kept" "[SLH-SPEC-DUPLICATE] spec 0001 has several files matching specs/0001-*.md, so its close cannot be verified:"
+  # 4m (spec 0189 fix round 1, the 2.12.0 leg's F9): the same duplicate on the MERGE route is refused by the same code
+  ACD="$WORK/ac-4m-$AC_K"; ac_inst "$ACD" "$AC_K"; git -C "$ACD" checkout -qb spec/0001
+  ac_close "$ACD" "$AC_K" "$AC_OK"; printf '# companion\n' > "$ACD/specs/0001-other.md"; printf 'f\n' > "$ACD/src/f.js"; git -C "$ACD" add -A && git -C "$ACD" commit -qm close
+  git -C "$ACD" checkout -q main; git -C "$ACD" merge -q --no-ff -m "merge spec 0001" spec/0001
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD"
+  ac_has "0189 code 4m [$AC_K]: a merge close with several spec files for one number is refused [SLH-SPEC-DUPLICATE], as the linear route is" "[SLH-SPEC-DUPLICATE] spec 0001 has several files matching specs/0001-*.md, so its close cannot be verified:"
+  if [[ "$(grep -c 'SLH-SPEC-DUPLICATE' <<< "$SCRIPT_OUT")" -eq 1 ]]; then ok "0189 code 4m2 [$AC_K]: the duplicate is reported once, not once per file"; else bad "0189 code 4m2 [$AC_K]: the duplicate is reported once, not once per file" "$(grep -c 'SLH-SPEC-DUPLICATE' <<< "$SCRIPT_OUT") lines"; fi
+  # 4t (the 2.12.0 leg's F10): one commit closing a bad spec and a good one is counted in one bucket, the violation's
+  ACD="$WORK/ac-4t-$AC_K"; ac_inst "$ACD" "$AC_K"
+  printf '# Spec 0002\n\nStatus: ACTIVE\n' > "$ACD/specs/0002-good.md"
+  printf '| Num | Title | Status |\n| --- | --- | --- |\n| 0001 | Thing | ACTIVE |\n| 0002 | Good | ACTIVE |\n' > "$ACD/specs/STATUS.md"
+  [[ "$AC_K" == record ]] && printf '{"setlist_status":1,"specs":{"0001":{"status":"active"},"0002":{"status":"active"}},"chores":{}}\n' > "$ACD/.claude/status.json"
+  git -C "$ACD" add -A && git -C "$ACD" commit -qm "open 0002"; git -C "$ACD" rev-parse HEAD > "$ACD.since"
+  printf '%b' "$AC_OK" > "$ACD/specs/0001-thing.md"; printf '# companion\n' > "$ACD/specs/0001-other.md"
+  printf '%b' "${AC_OK//0001/0002}" > "$ACD/specs/0002-good.md"
+  printf '| Num | Title | Status |\n| --- | --- | --- |\n| 0001 | Thing | CLOSED |\n| 0002 | Good | CLOSED |\n' > "$ACD/specs/STATUS.md"
+  [[ "$AC_K" == record ]] && printf '{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"},"0002":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact"}},"chores":{}}\n' > "$ACD/.claude/status.json"
+  printf 'c\n' > "$ACD/src/a.js"; git -C "$ACD" add -A && git -C "$ACD" commit -qm "close 0001 and 0002"
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD" --since "$(cat "$ACD.since")"
+  if [[ "$SCRIPT_RC" -eq 1 ]] && grep -q '^audited 1 commits on main: 0 clean, 0 chore merges (unverifiable), 1 violations' <<< "$SCRIPT_OUT"; then
+    ok "0189 code 4t [$AC_K]: a commit with a violation is never also counted clean (1 commit: 0 clean, 1 violations)"
+  else bad "0189 code 4t [$AC_K]: a commit with a violation is never also counted clean (1 commit: 0 clean, 1 violations)" "rc=$SCRIPT_RC: $(grep -E 'VIOLATION|^audited' <<< "$SCRIPT_OUT" | head -3 | tr '\n' ' ' | cut -c1-300)"; fi
+  # 5. no spec file
+  ACD="$WORK/ac-5-$AC_K"; ac_inst "$ACD" "$AC_K"; ac_close "$ACD" "$AC_K" "$AC_OK"; rm -f "$ACD/specs/0001-thing.md"; git -C "$ACD" add -A && git -C "$ACD" commit -qm close
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD"
+  ac_has "0184 code 5 [$AC_K]: a close with no spec file is refused [SLH-CLOSES-NO-SPEC-FILE], the gate's code, the sentence kept" "[SLH-CLOSES-NO-SPEC-FILE] spec 0001 marked CLOSED with no specs/0001-*.md to verify"
+  # 6. a linear close missing its facts (the record path: an armed claim the diff does not back; the page path: no Closing report)
+  ACD="$WORK/ac-6-$AC_K"; ac_inst "$ACD" "$AC_K" armed
+  if [[ "$AC_K" == record ]]; then ac_close "$ACD" "$AC_K" "$AC_UNBACKED"; else ac_close "$ACD" "$AC_K" '# Spec 0001\n\nStatus: CLOSED\n'; fi
+  git -C "$ACD" add -A && git -C "$ACD" commit -qm close
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD"
+  ac_has "0184 code 6 [$AC_K]: a linear close without its facts is refused [SLH-CLOSE-INCOMPLETE], the sentence kept" "[SLH-CLOSE-INCOMPLETE] spec 0001 was marked CLOSED without:"
+  # 7. a merge close missing its facts
+  ACD="$WORK/ac-7-$AC_K"; ac_inst "$ACD" "$AC_K" armed; git -C "$ACD" checkout -qb spec/0001
+  if [[ "$AC_K" == record ]]; then ac_close "$ACD" "$AC_K" "$AC_UNBACKED"; else ac_close "$ACD" "$AC_K" '# Spec 0001\n\nStatus: CLOSED\n'; fi
+  printf 'f\n' > "$ACD/src/f.js"; git -C "$ACD" add -A && git -C "$ACD" commit -qm close
+  git -C "$ACD" checkout -q main; git -C "$ACD" merge -q --no-ff -m "merge spec 0001" spec/0001
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD"
+  ac_has "0184 code 7 [$AC_K]: a merge close without its facts is refused [SLH-MERGE-INCOMPLETE], the sentence kept" "[SLH-MERGE-INCOMPLETE] spec 0001 reached main without:"
+  # 8. code under a spec already closed
+  ACD="$WORK/ac-8-$AC_K"; ac_inst "$ACD" "$AC_K"; ac_close "$ACD" "$AC_K" "$AC_OK"; git -C "$ACD" add -A && git -C "$ACD" commit -qm "close 0001"
+  git -C "$ACD" checkout -qb amend; printf '%b\nOne more line.\n' "$AC_OK" > "$ACD/specs/0001-thing.md"; printf 'g\n' > "$ACD/src/g.js"; git -C "$ACD" add -A && git -C "$ACD" commit -qm amend
+  git -C "$ACD" checkout -q main; git -C "$ACD" merge -q --no-ff -m "merge amend" amend
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD"
+  ac_has "0184 code 8 [$AC_K]: code merged under a spec already closed is refused [SLH-CLOSES-NO-SPEC], the gate's code, the sentence kept" "[SLH-CLOSES-NO-SPEC] role-path code reached main under specs that were already CLOSED before it: closes-no-spec"
+  # 9. a merge commit amended to add a file no parent carries
+  ACD="$WORK/ac-9-$AC_K"; ac_inst "$ACD" "$AC_K"; git -C "$ACD" checkout -qb docs; printf 'd\n' > "$ACD/D.md"; git -C "$ACD" add -A && git -C "$ACD" commit -qm docs
+  git -C "$ACD" checkout -q main; git -C "$ACD" merge -q --no-ff -m "merge docs" docs; printf 'i\n' > "$ACD/src/injected.js"; git -C "$ACD" add -A && git -C "$ACD" commit -q --amend --no-edit
+  run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD"
+  ac_has "0184 code 9 [$AC_K]: a merge that introduced a file no parent carries is refused [SLH-MERGE-INJECTED-FILE], the sentence kept" "[SLH-MERGE-INJECTED-FILE] the merge commit itself introduced role-path files that no parent carries: \"src/injected.js\""
+done
+# The observe rule: a history with NO adoption point (its .claude/sdd.json never committed) does not say "adopted".
+ACD="$WORK/ac-obs"; rm -rf "$ACD"; git_init "$ACD"; mkdir -p "$ACD/src" "$ACD/.claude"; git -C "$ACD" rev-parse HEAD > "$ACD.since"
+git -C "$ACD" checkout -qb side; printf 'b\n' > "$ACD/src/b.js"; git -C "$ACD" add src && git -C "$ACD" commit -qm side
+git -C "$ACD" checkout -q main; printf 'n\n' > "$ACD/N.md"; git -C "$ACD" add N.md && git -C "$ACD" commit -qm n; git -C "$ACD" merge -q --no-ff -m "merge side" side
+printf '{"trunk":"main","roles":{"src":"src"}}\n' > "$ACD/.claude/sdd.json"
+run_script bash "$SCRIPTS/trunk-audit.sh" "$ACD" --since "$(cat "$ACD.since")"
+ac_has "0184 observe a: with no adoption point the unspecced merge is refused by its code with a clause true of that history" "[SLH-UNSPECCED-MERGE] chore-shaped merge with no recorded completion, in a history that records no adoption point, so it is read as made under the rules; it reached the trunk without firing pre-merge-commit"
+if grep -q 'adopted the rules' <<< "$SCRIPT_OUT"; then bad "0184 observe b: no refusal says the history adopted the rules" "$(grep 'adopted' <<< "$SCRIPT_OUT" | head -1)"; else ok "0184 observe b: no refusal says the history adopted the rules"; fi
+run_script bash "$ROOT/scripts/refresh-instance.sh" --observe --role src "$ACD"
+if [[ "$SCRIPT_RC" -eq 0 ]] && grep -qF '[SLH-UNSPECCED-MERGE]' <<< "$SCRIPT_OUT" && ! grep -q 'adopted the rules' <<< "$SCRIPT_OUT"; then
+  ok "0184 observe c: observe mode prints the merge by its code and no sentence about adopting"
+else
+  bad "0184 observe c: observe mode prints the merge by its code and no sentence about adopting" "rc=$SCRIPT_RC: $(grep -E 'SLH-|chore-shaped|adopted' <<< "$SCRIPT_OUT" | head -3 | tr '\n' ' ' | cut -c1-300)"
+fi
+fi; shard_region_end
+# <<< SHARD-END audit-codes-0184
+
+# --- THE OCTOPUS REFUSAL NAMES THE HAND REMEDY (spec 0184, item 3; E-b) --------
+# Merging each branch on its own cannot apply to an octopus already pushed; the
+# refusal names the decision that can (audit.baseline set to the merge's own id),
+# and the remedy, followed, clears the refusal.
+# >>> SHARD-BEGIN octopus-remedy-0184 cost=1
+if shard_region octopus-remedy-0184; then
+ORD="$WORK/or-octopus"; rm -rf "$ORD"; git_init "$ORD"; mkdir -p "$ORD/src" "$ORD/.claude"
+printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"},"plugin":{"version":"2.11.0"}}\n' > "$ORD/.claude/sdd.json"
+git -C "$ORD" add -A && git -C "$ORD" commit -qm stamp
+for OR_B in a b; do
+  git -C "$ORD" checkout -q -b "docs/$OR_B" main; printf '%s\n' "$OR_B" > "$ORD/$OR_B.md"; git -C "$ORD" add -A && git -C "$ORD" commit -qm "docs $OR_B"
+done
+git -C "$ORD" checkout -q main; git -C "$ORD" merge -q --no-ff -m "an octopus" docs/a docs/b
+OR_ID="$(git -C "$ORD" rev-parse HEAD)"
+run_script bash "$SCRIPTS/trunk-audit.sh" "$ORD"
+expect_script "0184 octopus remedy a: the octopus refusal names the hand remedy for a pushed octopus, with the merge's full id" 1 \
+  "[SLH-OCTOPUS-MERGE] a merge of 2 branches reached main at once, made after this instance adopted the rules; a close merges ONE spec branch, so merge each branch on its own. If this merge is already pushed, that cannot apply to it, and the remedy is a recorded decision to start the audit after it: set audit.baseline in .claude/sdd.json to its full commit id, $OR_ID, which also stops the audit reading every commit before it"
+jq --arg b "$OR_ID" '.audit = {baseline: $b}' "$ORD/.claude/sdd.json" > "$ORD/.claude/sdd.json.new" && mv "$ORD/.claude/sdd.json.new" "$ORD/.claude/sdd.json"
+run_script bash "$SCRIPTS/trunk-audit.sh" "$ORD"
+expect_script "0184 octopus remedy b: the remedy followed (audit.baseline at the octopus) clears the refusal" 0 "0 violations"
+fi; shard_region_end
+# <<< SHARD-END octopus-remedy-0184

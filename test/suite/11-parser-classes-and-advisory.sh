@@ -601,8 +601,8 @@ fi
 #
 # This block is PLATFORM-CONDITIONAL and the skip announces itself, because the
 # defect does not exist where the filesystem distinguishes the two names. On
-# Linux CI the alias cannot be created, so asserting the refusal there would
-# pass for the wrong reason.
+# Linux CI the alias cannot be created, so asserting the refusal there
+# would pass for the wrong reason.
 CI_PROBE="$WORK/case-probe"; rm -rf "$CI_PROBE"; mkdir -p "$CI_PROBE"; : > "$CI_PROBE/aa"
 if [[ -e "$CI_PROBE/AA" ]]; then
   GHC="$WORK/gh-casealias"; gh_fixture "$GHC" no

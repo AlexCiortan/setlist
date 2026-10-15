@@ -7,9 +7,12 @@
 #
 # Usage: stamp.sh <answers-file> <target-dir>
 #
-# Answers file: KEY=VALUE lines (blank lines and # comments ignored).
+# Answers file: NAME=VALUE lines (blank lines and # comments ignored).
 #   Required: project_name, stack, working_mode,
-#             ui=yes|no, opusplan_verified=yes|no, design_surface=yes|no
+#             ui=yes|no, design_surface=yes|no, and the served models:
+#             planning_model=<id or empty>, execution_model=<id or empty>
+#             (scripts/model-probe.sh's "served" lines; since 2.12.0), or,
+#             read for 2.12.0 only, the legacy opusplan_verified=yes|no
 #   Optional: src_role (default src), tests_role (default tests),
 #             mode=new|retrofit (default new)
 #
@@ -50,9 +53,16 @@ TPL="$ROOT/templates"
 
 # The bundled edition: the stable setlist.md at the plugin root (same rule as
 # part.sh). The edition version lives inside the file, never in the filename.
-EDITION="$ROOT/setlist.md"
-[[ -f "$EDITION" ]] || die "setlist.md not found at the plugin root ($ROOT)"
+# Since spec 0191 the edition is three files, read in this order: setlist.md
+# (the core, Parts 1 to 6), setlist-operations.md (Parts 7 to 10 and Appendices
+# A to C, so the spec template) and setlist-changelog.md (the Changelog). All
+# three are copied into the instance; a missing one is fatal before any write.
+# EDITION_FILE stays the opening file, the name templates substitute.
 EDITION_FILE="setlist.md"
+EDITION_FILES=(setlist.md setlist-operations.md setlist-changelog.md)
+for __ef in "${EDITION_FILES[@]}"; do
+  [[ -f "$ROOT/$__ef" ]] || die "$__ef not found at the plugin root ($ROOT); the edition is three files"
+done
 
 # The stamping plugin version, read live from this tree's manifest and recorded
 # in the instance's sdd.json. Never a hardcoded string: a stamp that names the
@@ -76,7 +86,32 @@ PROJECT_NAME="$(get project_name)"
 STACK="$(get stack)"
 WORKING_MODE="$(get working_mode)"
 UI="$(get ui)"
-OPUSPLAN="$(get opusplan_verified)"
+# THE SERVED MODEL PER PHASE (2.12.0, spec 0185, item 2). The bootstrap's probe
+# (scripts/model-probe.sh) reads the model each phase of opusplan served, and the
+# answers carry those ids as planning_model and execution_model, recorded in
+# .claude/sdd.json as "models", so /setlist:validate's re-probe can name a change
+# against what was served at the stamp. Before 2.12.0 the answers carried a yes or
+# a no (opusplan_verified), which names no version; it is still read for ONE
+# release when neither new key is present, and the summary line says so.
+PLANNING_MODEL="$(get planning_model)"
+EXECUTION_MODEL="$(get execution_model)"
+MODELS_LEGACY=0
+if grep -qE '^(planning_model|execution_model)=' "$ANSWERS"; then
+  MODEL_ID_RE='^[][A-Za-z0-9._:@/-]*$'
+  for pair in "planning_model=$PLANNING_MODEL" "execution_model=$EXECUTION_MODEL"; do
+    [[ "${pair#*=}" =~ $MODEL_ID_RE ]] \
+      || die "answers: ${pair%%=*} is not a model id (letters, digits and . _ : @ / [ ] - only); write the id the probe printed, or leave it empty when the probe could not read that phase"
+  done
+  model_family() { case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in *opus*) printf opus ;; *sonnet*) printf sonnet ;; esac; }
+  if [[ "$(model_family "$PLANNING_MODEL")" == "opus" && "$(model_family "$EXECUTION_MODEL")" == "sonnet" ]]; then
+    OPUSPLAN="yes"
+  else
+    OPUSPLAN="no"
+  fi
+else
+  OPUSPLAN="$(get opusplan_verified)"
+  MODELS_LEGACY=1
+fi
 DESIGN_SURFACE="$(get design_surface)"
 SRC_ROLE="$(get src_role src)"
 TESTS_ROLE="$(get tests_role tests)"
@@ -86,7 +121,7 @@ STAMP_DATE="$(date +%F)"
 [[ -n "$PROJECT_NAME" ]] || die "answers: project_name is required"
 [[ -n "$STACK" ]] || die "answers: stack is required"
 [[ -n "$WORKING_MODE" ]] || die "answers: working_mode is required"
-for pair in "ui=$UI" "opusplan_verified=$OPUSPLAN" "design_surface=$DESIGN_SURFACE"; do
+for pair in "ui=$UI" "$([[ "$MODELS_LEGACY" -eq 1 ]] && printf 'opusplan_verified' || printf 'the probe answer')=$OPUSPLAN" "design_surface=$DESIGN_SURFACE"; do
   case "${pair#*=}" in
     yes|no) ;;
     *) die "answers: ${pair%%=*} must be yes or no (got '${pair#*=}')" ;;
@@ -189,6 +224,13 @@ add claude/sdd.json.tmpl       .claude/sdd.json
 add claude/status.json         .claude/status.json
 add claude/agents/qa-verifier.md .claude/agents/qa-verifier.md
 add claude/agents/close-reviewer.md .claude/agents/close-reviewer.md
+# THE SPEC READER (2.13.0, spec 0194, C-80): the pre-build reading at spec
+# approval, a read-only agent on the delegated tier. Advisory: no gate reads it.
+add claude/agents/spec-reader.md .claude/agents/spec-reader.md
+# THE VERIFY SKILL (2.12.0, spec 0185, C-71): Claude Code asks for a skill named
+# verify before a commit, so every instance carries one that runs gate_command
+# and reports. It persuades; the git hooks refuse. Byte-verbatim, both modes.
+add claude/skills/verify/SKILL.md .claude/skills/verify/SKILL.md
 add hooks/scope-hook.sh        .claude/hooks/scope-hook.sh
 add hooks/regrounding-hook.sh  .claude/hooks/regrounding-hook.sh
 add hooks/stop-hook.sh         .claude/hooks/stop-hook.sh
@@ -386,7 +428,9 @@ for entry in "${PLAN[@]}"; do
   [[ -e "$TARGET/$dest" ]] && COLLISIONS+=("$dest")
 done
 [[ -e "$TARGET/specs/TEMPLATE.md" ]] && COLLISIONS+=("specs/TEMPLATE.md")
-[[ -e "$TARGET/$EDITION_FILE" ]] && COLLISIONS+=("$EDITION_FILE")
+for __ef in "${EDITION_FILES[@]}"; do
+  [[ -e "$TARGET/$__ef" ]] && COLLISIONS+=("$__ef")
+done
 
 if [[ "$MODE" == "new" && ${#COLLISIONS[@]} -gt 0 ]]; then
   printf 'stamp.sh: refusing to overwrite existing files (mode=new stamps onto an empty directory):\n' >&2
@@ -421,7 +465,7 @@ for entry in "${PLAN[@]}"; do
   DEST_REASON="$(setlist_deliver_dest_unsafe "$TARGET" "$dest" 2>/dev/null)"
   [[ -z "$DEST_REASON" ]] || DEST_UNSAFE_LIST+=("$DEST_REASON")
 done
-for dest in "specs/TEMPLATE.md" "$EDITION_FILE"; do
+for dest in "specs/TEMPLATE.md" "${EDITION_FILES[@]}"; do
   skip "$dest" && continue
   DEST_REASON="$(setlist_deliver_dest_unsafe "$TARGET" "$dest" 2>/dev/null)"
   [[ -z "$DEST_REASON" ]] || DEST_UNSAFE_LIST+=("$DEST_REASON")
@@ -483,21 +527,24 @@ stamp_tmpl() { # stamp_tmpl <abs-src> <abs-dest>
 # Then read back, as the refresh reads back its own jq write: a jq that exits
 # 0 with other bytes refuses too.
 stamp_sdd_json() { # stamp_sdd_json <abs-src> <abs-dest>
-  local key want got
+  local field want got
   jq --arg src "$SRC_ROLE" --arg tests "$TESTS_ROLE" --arg trunk "$TRUNK" --arg version "$PLUGIN_VERSION" \
-    '.roles.src = $src | .roles.tests = $tests | .trunk = $trunk | .plugin.version = $version' \
+    --arg pm "$PLANNING_MODEL" --arg em "$EXECUTION_MODEL" \
+    '.roles.src = $src | .roles.tests = $tests | .trunk = $trunk | .plugin.version = $version
+     | ({planning: $pm, execution: $em} | with_entries(select(.value != ""))) as $m
+     | if ($m | length) > 0 then .models = $m else . end' \
     "$1" > "$2" \
     || die "could not build .claude/sdd.json from templates/claude/sdd.json.tmpl with jq; the files listed above this line may already be stamped, and this instance has no usable config."
-  for key in roles.src roles.tests trunk plugin.version; do
-    case "$key" in
+  for field in roles.src roles.tests trunk plugin.version; do
+    case "$field" in
       roles.src) want="$SRC_ROLE" ;;
       roles.tests) want="$TESTS_ROLE" ;;
       trunk) want="$TRUNK" ;;
       plugin.version) want="$PLUGIN_VERSION" ;;
     esac
-    got="$(jq -r ".$key" "$2" 2>/dev/null || true)" # fail-open-ok: an unreadable file reads empty and differs, which refuses below
+    got="$(jq -r ".$field" "$2" 2>/dev/null || true)" # fail-open-ok: an unreadable file reads empty and differs, which refuses below
     [[ "$got" == "$want" ]] \
-      || die ".claude/sdd.json was written but does not read back: .$key is $(LC_ALL=C; v="$got"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e"), the stamp wrote $(LC_ALL=C; v="$want"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e"). Every hook reads this file; do not use this instance until it is re-stamped."
+      || die ".claude/sdd.json was written but does not read back: .$field is $(LC_ALL=C; v="$got"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e"), the stamp wrote $(LC_ALL=C; v="$want"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 80 ] || { b="${b:0:80}"; e="$e (cut at 80 characters)"; }; printf '"%s"%s' "$b" "$e"). Every hook reads this file; do not use this instance until it is re-stamped."
   done
 }
 
@@ -726,20 +773,22 @@ if skip "specs/TEMPLATE.md"; then
   SKIPPED+=("specs/TEMPLATE.md")
 else
   mkdir -p "$TARGET/specs"
-  "$SCRIPT_DIR/part.sh" appendix-c "$EDITION" \
+  "$SCRIPT_DIR/part.sh" appendix-c "$ROOT/setlist-operations.md" \
     | awk '/^````/ { infence = !infence; next } infence { print }' \
     > "$TARGET/specs/TEMPLATE.md"
   [[ -s "$TARGET/specs/TEMPLATE.md" ]] || die "Appendix C extraction produced an empty specs/TEMPLATE.md"
   STAMPED=$((STAMPED + 1))
 fi
 
-# The edition copy: the audit-trail rule (Part 8 Step 3).
-if skip "$EDITION_FILE"; then
-  SKIPPED+=("$EDITION_FILE")
-else
-  cp "$EDITION" "$TARGET/$EDITION_FILE"
-  STAMPED=$((STAMPED + 1))
-fi
+# The edition copy: the audit-trail rule (Part 8 Step 3), all three files.
+for __ef in "${EDITION_FILES[@]}"; do
+  if skip "$__ef"; then
+    SKIPPED+=("$__ef")
+  else
+    cp "$ROOT/$__ef" "$TARGET/$__ef"
+    STAMPED=$((STAMPED + 1))
+  fi
+done
 
 # The role directories. .gitkeep only where the directory is (still) empty. The
 # two role paths are created for a NEW project only (spec 0179): a retrofit's
@@ -754,6 +803,11 @@ done
 # --- report --------------------------------------------------------------------
 
 echo "stamp.sh: stamped $STAMPED files into $TARGET (mode=$MODE, ui=$UI, opusplan=$OPUSPLAN, design_surface=$DESIGN_SURFACE, trunk=$TRUNK, plugin=$PLUGIN_VERSION)"
+if [[ "$MODELS_LEGACY" -eq 1 ]]; then
+  echo "stamp.sh: NOTICE: the answers carry opusplan_verified, a yes or a no that names no model; it is read for this release only. Record the probe's ids as planning_model and execution_model (scripts/model-probe.sh prints them), so .claude/sdd.json records what each phase served."
+else
+  echo "stamp.sh: recorded the served models in .claude/sdd.json: planning=${PLANNING_MODEL:-not read}, execution=${EXECUTION_MODEL:-not read}"
+fi
 if [[ ${#SKIPPED[@]} -gt 0 ]]; then
   echo "stamp.sh: skipped existing files (retrofit; phase 2 merges by hand):"
   printf '  %s\n' "${SKIPPED[@]}"
@@ -768,7 +822,7 @@ else
   if [[ "${ARM_DECISION:-}" == "skip-subdir" || "${ARM_DECISION:-}" == "skip-linked" ]]; then
     echo "stamp.sh: git-hook boundary NOT ARMED: the target sits below its worktree top or is a linked worktree, so arming would be inert or would displace the parent repository's layer (see the note above). Exit 4 states this for callers."
   else
-    echo "stamp.sh: git-hook boundary NOT ARMED (no repository yet). The hooks are INERT until core.hooksPath and merge.ff are set; /scaffold does this when it creates the repository."
+    echo "stamp.sh: git-hook boundary NOT ARMED (no repository yet). The hooks are INERT until core.hooksPath and merge.ff are configured; /scaffold does this when it creates the repository."
   fi
 if [[ "${ARM_DECISION:-}" == "skip-subdir" || "${ARM_DECISION:-}" == "skip-linked" ]]; then
   exit 4

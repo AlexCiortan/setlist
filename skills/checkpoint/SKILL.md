@@ -28,6 +28,16 @@ full mandate when in doubt:
    it (the section below; the record and the page always travel together).
 5. Never push without being asked; destructive operations always ask first.
 
+The mechanical half of this list is delegated (Part 2, "Delegate the mechanical,
+never the deciding", edition v1.21): steps 1 and 2 and every gate command a
+checkpoint runs go to a subagent on the delegated tier (the Agent tool with
+`model: haiku`), which reports what it found and what each command printed,
+with its exit status. What to commit, the message, and every close decision stay
+with you. Give each delegated phase one journal line: the phase, the model the
+subagent resolved to (the Agent tool's result names it), its tokens, and its
+cost in dollars where the harness reports one (a headless result's
+`total_cost_usd`), else "not reported".
+
 ## Branch lifecycle
 
 - Opening a spec: branch `spec/NNNN-<slug>` from the trunk (the `trunk` field
@@ -81,9 +91,9 @@ record and the tree already hold, and leave every VERDICT to the human:
   person to accept or correct. The answer stays theirs; the list is evidence you
   gathered, and naming it saves them a refusal at the merge.
 
-A drafted report is a scaffold, not a close. In a lite spec (`Tier: lite`,
+A drafted report is a scaffold; the close comes after it. In a lite spec (`Tier: lite`,
 Part 5) the scaffold is one verdict line and the same fields; the tier saves
-authoring time, not evidence.
+authoring time and keeps all the evidence.
 
 ## The close review (plugin 2.11.0, Part 5)
 
@@ -105,7 +115,14 @@ close against the spec. Two rounds at most; the gates read the block it leaves
    refuse a skip on a role-path close (`SLH-CLOSE-REVIEW-SKIP-REFUSED`).
 2. **Otherwise run the `close-reviewer` agent** with its four named inputs and
    nothing else: the spec file's path, the trunk's name, the `qa-pass-1` block,
-   and the gate command's output from a fresh run; tell it the round number.
+   and the gate command's output from a fresh run; tell it the round number
+   and the effort level it runs at. Ask for a level with the Agent tool's
+   `effort` parameter, or leave the agent's frontmatter default (`medium`) in
+   force and tell it that; where `CLAUDE_CODE_EFFORT_LEVEL` is set, that level
+   overrides both, so tell it that one. It writes the level as the block's
+   `effort:` line below the round header, the record of what the review was
+   asked to run at. The close review is never delegated: the agent stays on
+   `model: opus`.
    Never hand it your summary or the Closing report's prose: it reads the bytes.
 3. **Paste its block into the Closing report** in the field Appendix C names
    (after QA Pass 2), verbatim, and its report below the block, verbatim, inside
@@ -174,7 +191,7 @@ Where it does exist, before you merge:
   `## Design sketch` if it has one, name the living diagrams it touches
   (`docs/diagrams/context.md`, the L2 block in its home, usually
   `steering/structure.md`, the L3
-  file for each role path in the spec's `Owns:` set), draft the edit for each,
+  file for each role path in the spec's `Owns:` list), draft the edit for each,
   and let the human approve. The edit rides THIS closing commit; a diagram
   synced in a separate commit on the trunk both breaks the Git rules and opens a
   window where the trunk lies about itself.
@@ -195,7 +212,7 @@ saying so here is cheaper than a refused merge:
   `steering/structure.md`.
 - `SLH-DIAGRAM-STALE-NODE`: a node whose drawn path does not exist in the tree
   under review AND whose `%% spec NNNN` names a spec this commit closes. The
-  same node from an EARLIER spec is reported, not refused, with two honest
+  same node from an EARLIER spec is reported, not refused, with two legitimate
   exits: redraw it in this close and name the file in the field, or retire it
   with a note. Node names that are not path-shaped (no slash, or containing
   whitespace) are printed as unverified rather than skipped in silence
@@ -218,11 +235,11 @@ the Closing report's field text, which is where the hooks read it.
 Read `release.model` from `.claude/sdd.json` before answering any question about
 what users are running or about cutting a release (Part 6, the release rail).
 
-**An ABSENT `release` block reads as `model: none`, and you say so rather than
-inferring anything.** An instance stamped before v1.7 has no block, and "no
+An ABSENT `release` block reads as `model: none`, and you say so rather than
+inferring anything. An instance stamped before v1.7 has no block, and "no
 block" is a real answer (nothing is released; users run the trunk), not missing
 information to be filled in by guessing. If a session needs a model that is not
-declared, the fix is for someone to declare one, not for this skill to pick.
+declared, the fix is for someone to declare one; this skill never picks.
 
 - `none`: there is no release ceremony. Say that plainly when asked, and stop.
 - `tags`: an annotated tag on the trunk is the release. See the cut-release
@@ -247,7 +264,7 @@ this command skips is a fact the machine never learns:
   enumerate is an exemption wearing a declaration, and the audit reads exactly
   that grammar. In a spec whose header reads `Tier: lite`, REFUSE to write a
   sixth line: the cap is the tier's (Part 3), and the close would refuse it as
-  `SLH-LITE-OVERSIZED`; the honest moves are dropping the tier line or
+  `SLH-LITE-OVERSIZED`; the legitimate moves are dropping the tier line or
   splitting. Under declared attestation custody these appends drift the
   hash; that is the mechanism working, and the re-attestation happens at your
   next invocation, where the human already is.
@@ -282,16 +299,16 @@ Status change:
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/spec-hash.sh" specs/NNNN-slug.md
 ```
 
-Put the digest in the header's `Spec-hash:` field. The script is the recipe: do
+Put the digest in the header's `Spec-hash:` field. The script is the recipe. Do
 not hand-roll a sha256 over the file, because the hash deliberately excludes the
 Closing report and the `Spec-hash:` line itself, and a hand-rolled digest that
-gets either wrong makes the re-grounding hook warn on every honest build.
+gets either wrong makes the re-grounding hook warn on every legitimate build.
 
 Writing it is idempotent: recomputing after the value is in place yields the
 same value.
 
-**Never recompute a hash to silence a drift warning.** That inverts the
-mechanism into a rubber stamp. A spec that genuinely needs to change goes to
+Never recompute a hash to silence a drift warning. That inverts the
+mechanism into a rubber stamp. A spec that truly needs to change goes to
 REVISED with Planner sign-off and comes back to ACTIVE, and the rewrite happens
 on that return.
 
@@ -308,8 +325,8 @@ That writes `specs/attest/NNNN.json` and `specs/attest/NNNN.sig`. Stage both
 with the Status change and the `Spec-hash:` field; the git hooks refuse a build
 commit whose ACTIVE spec has no valid attestation over its current bytes.
 
-**Under `forge` custody (edition v1.14) the same command writes the document
-and SIGNS NOTHING**, and says so: there is no key. The approval is that flip
+Under `forge` custody (edition v1.14) the same command writes the document
+and SIGNS NOTHING, and says so: there is no key. The approval is that flip
 landing on the protected trunk through a pull request with a required review,
 verified by the stamped forge check; a document introduced on a branch and
 never landed through review is refused at the check (`FC-FLIP-NOT-ON-TRUNK`).
@@ -318,14 +335,15 @@ Locally the hooks defer to the check by name while it is in the tree
 So the flip goes to the trunk through the pull request BEFORE the build starts
 on the branch, and the close's re-attestation is verified at the check again.
 
-**This step belongs to a session where a HUMAN IS PRESENT, and that is the whole
-of what it is for.** A signature proves a key was used, not that a person
-decided. If a headless run can reach the signing key it can produce this
+This step belongs to a session where a HUMAN IS PRESENT, and that is the whole
+of what it is for. A signature proves only that a key was used; whether a
+person decided is a separate fact. If a headless run can reach the signing
+key it can produce this
 document over a spec edited after approval, and every check will pass while
 proving only that the run had the key. So: sign at the moment of approval, in an
 interactive session, and never as a step in an automated build.
 
-**Never re-sign to clear a refusal.** `SLH-ATTEST-STALE` means the spec changed
+Never re-sign to clear a refusal. `SLH-ATTEST-STALE` means the spec changed
 after it was approved, which is the thing the mechanism exists to make visible.
 The route back is the lifecycle: REVISED with Planner sign-off, then ACTIVE
 again, and the new attestation is written on that return like the hash is.
@@ -335,7 +353,7 @@ changes: undeclared means off, and off behaves exactly as it always has.
 
 If the script exits 3 (no sha256 tool on this machine), say so and leave the
 field blank rather than inventing a value; the hook will report the check as
-UNVERIFIED, which is the honest state.
+UNVERIFIED, which is the truthful state.
 
 ## BUILT and PARKED transitions (Part 5)
 
@@ -348,8 +366,8 @@ like every other transition.
   AND its revisit trigger.** A parked row with neither is not a decision, it is
   an abandoned branch wearing a label; refuse to write one without both.
 
-**Resuming a PARKED spec re-validates the branch against the trunk as it exists
-NOW, before it may continue toward close.** Rebase it, or re-run the gate
+Resuming a PARKED spec re-validates the branch against the trunk as it exists
+NOW, before it may continue toward close. Rebase it, or re-run the gate
 command against it and say so. The trunk moved while the branch slept, and the
 close checklist below is about to assert a green full suite that was last true
 against a different trunk.
@@ -364,7 +382,7 @@ Only when `release.model` is `tags`. Under `version-file` the bump rides the
 close commit as ordinary work above; under `none` there is no ceremony and you
 say so.
 
-1. **The trunk is green.** Verify it now, not from memory. A cut is not the
+1. **The trunk is green.** Verify it now, against the files. A cut is not the
    place to discover a red trunk.
 2. **State what the release CONTAINS and what it EXCLUDES.** The exclusion half
    is the one that gets skipped and the one that matters. Read the STATUS
@@ -374,7 +392,7 @@ say so.
 4. **Create the annotated tag.**
 5. **Push only with human approval.** Ask, and wait.
 
-**Approval binds to OUTWARDNESS, not to versioning.** Creating a tag or bumping
+Approval binds to OUTWARDNESS, not to versioning. Creating a tag or bumping
 a file is bookkeeping and needs no ceremony. A push that triggers a deploy or a
 publish is outward-facing and effectively irreversible, so it asks first. That
 is why `version-file` bumps need no approval and a `tags` push does: one
@@ -388,7 +406,7 @@ The pre-merge-commit git hook independently verifies the same conditions on any
 merge, reading the spec file and STATUS.md from the branch being merged, so
 the Closing report and the CLOSED row count only once COMMITTED on the branch;
 working-tree edits do not satisfy it. Passing this checklist is what satisfies
-it. A hook denial is a finding, not an obstacle to argue with: fix the named
+it. A hook denial is a finding to act on: fix the named
 item and retry.
 
 ## Gotchas (field-observed)
@@ -413,7 +431,7 @@ item and retry.
   you three branches that drift and a production whose contents are knowable
   only by diffing. The deployment is gated by the TRIGGER (a tag, a dispatch,
   an approval), not by which branch the code sits on. Part 6 names and rejects
-  the pattern; if an instance genuinely needs it, that is an ADR, not a habit.
+  the pattern; if an instance really needs it, that is a decision for an ADR.
 - If this repository EXPORTS its own `.github/` (a template, plugin, or
   starter repo copies its workflows into a published tree), a `runs-on:` change
   is not a local edit. It must go through whatever repository-conditional

@@ -6,11 +6,13 @@ Setlist is licensed in two parts.
     is in PART 1 below. The plugin manifest (.claude-plugin/plugin.json) names
     both licences.
 
-  - The framework document, setlist.md, and the prose documents published beside
-    it (README.md, LIMITATIONS.md, CHANGELOG.md, SECURITY.md, CONTRIBUTING.md), are
-    licensed under the Creative Commons Attribution 4.0 International License
-    (CC BY 4.0). The full text is in PART 2 below. Suggested attribution: "Setlist,
-    a spec-driven development framework by Alex Ciortan, licensed under CC BY 4.0."
+  - The framework document, setlist.md with setlist-operations.md and
+    setlist-changelog.md (the edition in three files), and the prose documents
+    published beside it (README.md, LIMITATIONS.md, CHANGELOG.md, SECURITY.md,
+    CONTRIBUTING.md), are licensed under the Creative Commons Attribution 4.0
+    International License (CC BY 4.0). The full text is in PART 2 below.
+    Suggested attribution: "Setlist, a spec-driven development framework by
+    Alex Ciortan, licensed under CC BY 4.0."
 
 Copyright 2026 Alex Ciortan.
 
@@ -222,7 +224,7 @@ PART 1: Apache License, Version 2.0 (the code)
    limitations under the License.
 
 =======================================================================
-PART 2: Creative Commons Attribution 4.0 International (setlist.md)
+PART 2: Creative Commons Attribution 4.0 International (the edition's three files)
 =======================================================================
 
 Attribution 4.0 International

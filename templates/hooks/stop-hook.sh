@@ -104,7 +104,7 @@ if [[ -z "$PROJ" ]]; then
   # The payload's cwd, read by jq when jq works and by a substring when it does
   # not; an unreadable cwd falls back to the working directory this hook runs in.
   PROJ="$(printf '%s' "$INPUT" | jq -r '.cwd // empty' 2>/dev/null || true)"
-  [[ -n "$PROJ" ]] || PROJ="$PWD"
+  [[ -n "$PROJ" ]] || PROJ="$(pwd -P)"
 fi
 # Not an instance: nothing here is this hook's business. The same guard every
 # stamped hook opens with, and the boundary it draws is its own documented

@@ -29,7 +29,7 @@ sequenceDiagram
   a path (`.githooks/pre-merge-commit`), a command where there is a command
   (`gate_command`), a role where the actor is a person (`developer`). The node
   check does not read this type, so nothing verifies these names for you: that
-  makes the discipline more important here, not less.
+  makes the discipline more important here.
 - **Every message is the real call.** `slh_verify_close(merge index)` is
   greppable; "validates the merge" is a paraphrase, and a paraphrase is how a
   diagram starts lying without anyone editing it.
@@ -73,7 +73,7 @@ system as it is. A reader compares the two later, which only works if you did no
 overwrite one with the other.
 
 Notes (`Note over a,b: ...`) carry a constraint the arrows cannot: a timeout, a
-lock held, an idempotency key. Use them for facts, not for commentary.
+lock held, an idempotency key. Use them for facts only.
 
 ## What goes wrong
 

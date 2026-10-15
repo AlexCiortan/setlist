@@ -33,8 +33,8 @@ nothing and writes nothing." A no, or no answer, goes straight to section 1.
    the clone; nothing in the repository changes. On a long history it takes
    minutes (measured: 160 commits in about 100 seconds).
 3. Quote its output to the user verbatim: the range it read, then every commit
-   the audit WOULD have refused, by its code where the audit gives one and by
-   the audit's own sentence where it does not. Say what it is: a reading of
+   the audit WOULD have refused, by its code and the audit's own sentence
+   (every verdict the audit prints carries a code since plugin 2.12.0). Say what it is: a reading of
    their history as if they had adopted Setlist at the range's start, not a
    verdict on them, and exit 0 means the read completed.
 4. If the user asks what adopting changes inside a session, one measured fact
@@ -64,7 +64,7 @@ coverage reality, secrets handling, the riskiest areas, and the de-facto src
 and tests locations (paths are roles; they may not exist by those names). Show
 the inventory report to the user BEFORE any interview question.
 
-**The role paths come from one mechanical scan, never from the defaults.** Run
+The role paths come from one mechanical scan, never from the defaults. Run
 the inventory scan from the repository root and show its output in the report:
 
 ```sh
@@ -82,7 +82,7 @@ strings). The stamp refuses a role path the repository does not have, by name.
 ## 3. Interview (Part 8b Step 2)
 
 Same structured-round rules as Part 8 Step 1, plus the sacred-vs-disposable
-question. One round, genuine forks only, recommendations inline, and the same
+question. One round, real forks only, recommendations inline, and the same
 opener: "what has changed since this framework edition was written" comes
 first.
 
@@ -93,7 +93,10 @@ graph, a schema dump)? A yes is recorded in `.claude/sdd.json` beside
 then equal what it prints at every close; a no records nothing, which is the
 right default.
 
-Verify the environment in this round too: the `opusplan` live probe, and
+Verify the environment in this round too: the `opusplan` live probe
+(`bash "${CLAUDE_PLUGIN_ROOT}/scripts/model-probe.sh"`, two short headless
+sessions of the user's quota, said before it runs; keep its `served planning`
+and `served execution` ids for the answers file), and
 `command -v jq`. The stamp refuses before it writes anything when `jq` is
 missing or not working (it builds `.claude/sdd.json` with `jq`, and
 the GIT hooks fail closed without it; the session hooks report, or stay
@@ -110,7 +113,8 @@ project_name=<name>
 stack=<short stack id>
 working_mode=<review-only | developer-writes>
 ui=<yes|no>
-opusplan_verified=<yes|no>
+planning_model=<the id on the probe's "served planning" line, or empty>
+execution_model=<the id on the probe's "served execution" line, or empty>
 design_surface=<yes|no>
 src_role=<the scan's first candidate>
 tests_role=<the scan's first (tests) candidate>
@@ -141,7 +145,7 @@ the gates bind. Verify that it runs the way the hooks will run it (it checks for
 jq first, because without jq the command reads as empty and an empty command
 "passes"):
 
-    command -v jq >/dev/null 2>&1 || { echo "jq is not installed, so the gate command was not read: install jq first"; false; } && { ( eval "$(jq -r .gate_command .claude/sdd.json)" ) >/dev/null 2>&1; echo $?; }
+    command -v jq >/dev/null 2>&1 || { echo "jq is not installed, so the gate command was not read: install jq first"; false; } && { bash -c "$(jq -r .gate_command .claude/sdd.json)" >/dev/null 2>&1; echo $?; }
 
 The stamp takes one path per role; after it runs, edit `.claude/sdd.json` when
 the inventory found more. Role paths accept a list (Part 6): spread layouts
@@ -171,7 +175,7 @@ opening with the four-line header from
 `Synced by: retrofit`. Node names are the de-facto role paths the inventory
 found, so they resolve against the tree from the first close. This is the ONE
 scan-and-draw-fresh a retrofit gets, and it is bounded by the same read you
-already showed the user: it draws what exists, not what should exist, and a box
+already showed the user. It draws what exists, and a box
 you cannot point at a path for does not go in.
 
 Say plainly what creating the directory does: its presence ARMS the close's

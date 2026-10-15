@@ -108,7 +108,7 @@ gh_landed() { git -C "$1" cat-file -e main:src/FEATURE.txt 2>/dev/null; }
 
 # Shared with later regions and shards (spec 0168, item 2): defined above the region, so a
 # shard that does not own it still has them.
-SECRET_LINE='const api_key = "EXAMPLE_NOT_A_REAL_SECRET_0123456789";'
+SHAPED_LINE="const api_key = \"$(sx_join EXAMPLE_NOT_A_REAL _SEC RET_ 0123456789)\";"   # joined from parts (spec 0193)
 scan_ref_fixture() { # scan_ref_fixture <dir>
   local d="$1"; rm -rf "$d" "$d-rem.git"
   mkdir -p "$d/src" "$d/specs" "$d/.claude/hooks" "$d/.githooks"
@@ -142,11 +142,13 @@ scan_ref_fixture() { # scan_ref_fixture <dir>
   git -C "$d-rem.git" symbolic-ref HEAD refs/heads/main >/dev/null 2>&1
   git -C "$d" fetch -q origin >/dev/null 2>&1
 }
-SCAN_SECRET='const token = "ghp_abcdefghijklmnop1234"'
+SCAN_SHAPED="const token = \"$(sx_join gh p_ abcdefghijklmnop1234)\""   # joined from parts (spec 0193)
 
 # >>> SHARD-BEGIN git-hooks-early-08 cost=9
 # A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
 if shard_region git-hooks-early-08; then
+sx_pinned SHAPED_LINE "$SHAPED_LINE" 3316957785/55
+sx_pinned SCAN_SHAPED "$SCAN_SHAPED" 3099409514/40
 
 # ===========================================================================
 # THE AUDIT'S EXCUSE IS ABOUT AGE, SO IT ASKS ABOUT AGE (F2/F7, 2026-08-05).
@@ -412,12 +414,12 @@ fi
 #
 # Both directions, because a scan that refuses everything is not a scan.
 # ===========================================================================
-# (SECRET_LINE is defined above region git-hooks-early-08.)
+# (SHAPED_LINE is defined above region git-hooks-early-08.)
 
 # CONTROL, and it is the one that makes the rest mean anything: the ordinary
 # commit path still refuses these bytes.
 GHS="$WORK/gh-scan-ctl"; gh_fixture "$GHS" yes
-printf '%s\n' "$SECRET_LINE" > "$GHS/src/leak.js"
+printf '%s\n' "$SHAPED_LINE" > "$GHS/src/leak.js"
 git -C "$GHS" add src/leak.js >/dev/null 2>&1
 if git -C "$GHS" commit -qm "leak" >/dev/null 2>&1; then
   bad "scan control: git commit still refuses a secret-shaped string" "the commit was allowed, so no result below is interpretable"
@@ -427,7 +429,7 @@ else ok "scan control: git commit still refuses a secret-shaped string"; fi
 # framework's own close path carried unscanned content.
 GHM="$WORK/gh-scan-merge"; gh_fixture "$GHM" yes
 git -C "$GHM" checkout -q spec/0001-thing
-printf '%s\n' "$SECRET_LINE" > "$GHM/src/leak.js"
+printf '%s\n' "$SHAPED_LINE" > "$GHM/src/leak.js"
 git -C "$GHM" add -A >/dev/null 2>&1
 git -C "$GHM" -c core.hooksPath=/dev/null commit -qm "leak on the branch" >/dev/null 2>&1
 git -C "$GHM" checkout -q main
@@ -447,7 +449,7 @@ GHMC="$WORK/gh-scan-merge-ok"; gh_fixture "$GHMC" yes
 # the entire reason the first is acceptable.
 GHC="$WORK/gh-scan-cherry"; gh_fixture "$GHC" yes
 git -C "$GHC" checkout -q -b leaky
-printf '%s\n' "$SECRET_LINE" > "$GHC/src/leak.js"
+printf '%s\n' "$SHAPED_LINE" > "$GHC/src/leak.js"
 git -C "$GHC" add -A >/dev/null 2>&1
 git -C "$GHC" -c core.hooksPath=/dev/null commit -qm "leak" >/dev/null 2>&1
 GHC_SHA="$(git -C "$GHC" rev-parse HEAD)"
@@ -480,20 +482,20 @@ else ok "scan cherry b: the push-time range scan refuses a cherry-picked secret"
 # So the corpus is the ref name as its own axis, across all three routes git
 # gives no commit-time hook for, with a clean spec branch as the control that
 # stops this being satisfied by a hook that refuses every push.
-# (scan_ref_fixture and SCAN_SECRET are defined above region git-hooks-early-08.)
+# (scan_ref_fixture and SCAN_SHAPED are defined above region git-hooks-early-08.)
 SCAN_REF_BAD=""
 SCAND="$WORK/scan-refs"; scan_ref_fixture "$SCAND"
 
 # donor commits, each made without firing pre-commit, then carried onto a spec
 # branch by a route git gives no hook for.
 git -C "$SCAND" checkout -q -b donor1 main
-printf '%s\n' "$SCAN_SECRET" > "$SCAND/src/leak1.js"
+printf '%s\n' "$SCAN_SHAPED" > "$SCAND/src/leak1.js"
 git -C "$SCAND" add -A >/dev/null 2>&1; git -C "$SCAND" -c core.hooksPath=/dev/null commit -qm d1 >/dev/null 2>&1
 git -C "$SCAND" checkout -q -b spec/0001-cherry main
 git -C "$SCAND" cherry-pick donor1 >/dev/null 2>&1
 
 git -C "$SCAND" checkout -q -b donor2 main
-printf '%s\n' "$SCAN_SECRET" > "$SCAND/src/leak2.js"
+printf '%s\n' "$SCAN_SHAPED" > "$SCAND/src/leak2.js"
 git -C "$SCAND" add -A >/dev/null 2>&1; git -C "$SCAND" -c core.hooksPath=/dev/null commit -qm d2 >/dev/null 2>&1
 git -C "$SCAND" format-patch -1 donor2 -o "$WORK/scan-patches" >/dev/null 2>&1
 git -C "$SCAND" checkout -q -b spec/0002-am main
@@ -633,7 +635,7 @@ else ok "git hooks d: merge.ff=false stops the fast-forward path (no hook fires 
 for gh_spell in \
   '{ nice -n 5 git merge --no-ff -m x spec/0001-thing; }' \
   '>/dev/null 2>&1 git merge --no-ff -m x refs/heads/spec/0001-thing' \
-  'M=merge; git $M --no-ff -m x spec/0001-thing'; do
+  "$(sx_join 'M=merge; git ' '$' 'M --no-ff -m x spec/0001-thing')"; do   # the variable spelling joined from parts (spec 0193, round 9)
   GH="$WORK/gh-spell"; gh_fixture "$GH" no
   ( cd "$GH" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true bash -c "$gh_spell" ) >/dev/null 2>&1
   if gh_landed "$GH"; then
@@ -886,7 +888,7 @@ else ok "git hooks j: a hook that cannot find its library REFUSES rather than pa
 SKIPE="$WORK/skip-escape"; rm -rf "$SKIPE" "$SKIPE-rem.git"
 scan_ref_fixture "$SKIPE"
 git -C "$SKIPE" checkout -q -b spec/0007-esc main
-printf '%s\n' "$SCAN_SECRET" > "$SKIPE/src/leak.js"
+printf '%s\n' "$SCAN_SHAPED" > "$SKIPE/src/leak.js"
 git -C "$SKIPE" add -A >/dev/null 2>&1
 git -C "$SKIPE" -c core.hooksPath=/dev/null commit -qm leak >/dev/null 2>&1
 if git -C "$SKIPE" push -q origin spec/0007-esc >/dev/null 2>&1; then
@@ -1158,7 +1160,7 @@ else
 fi
 
 SBS="$WORK/sb-secret"; gh_fixture "$SBS" yes
-{ printf '%s\n' "$SB_LATIN"; printf '%s\n' "$SECRET_LINE"; } > "$SBS/src/notes.txt"
+{ printf '%s\n' "$SB_LATIN"; printf '%s\n' "$SHAPED_LINE"; } > "$SBS/src/notes.txt"
 git -C "$SBS" add src/notes.txt >/dev/null 2>&1
 if LC_ALL="$SB_U8" LANG="$SB_U8" git -C "$SBS" commit -qm "latin-1 and a secret" >"$WORK/sb-secret.out" 2>&1; then
   bad "scan bytes b: a secret in the same file as the byte is still refused" "the commit landed a secret-shaped line"
@@ -1170,7 +1172,7 @@ else
 fi
 
 SBL="$WORK/sb-sameline"; gh_fixture "$SBL" yes
-printf 'caf\351 const api_key = "EXAMPLE_NOT_A_REAL_SECRET_0123456789";\n' > "$SBL/src/notes.txt"
+printf 'caf\351 %s\n' "$SHAPED_LINE" > "$SBL/src/notes.txt"
 git -C "$SBL" add src/notes.txt >/dev/null 2>&1
 if LC_ALL="$SB_U8" LANG="$SB_U8" git -C "$SBL" commit -qm "same line" >"$WORK/sb-sameline.out" 2>&1; then
   bad "scan bytes c: a secret on the same line as the byte is still refused" "the commit landed a secret-shaped line"
@@ -1236,7 +1238,7 @@ else
   bad "scan bytes f: pre-push scans the byte and the history reaches the remote" \
       "refused: $(LC_ALL=C tr -d '\200-\377' < "$WORK/sb-push.out" | tr '\n' ' ' | cut -c1-240)"
 fi
-SBQ="$WORK/sb-push-secret"; sb_push_fixture "$SBQ" 'caf\351\nconst api_key = "EXAMPLE_NOT_A_REAL_SECRET_0123456789";\n'
+SBQ="$WORK/sb-push-secret"; sb_push_fixture "$SBQ" "caf\\351\\n$SHAPED_LINE\\n"
 if LC_ALL="$SB_U8" LANG="$SB_U8" git -C "$SBQ" push -q origin main >"$WORK/sb-push-secret.out" 2>&1; then
   bad "scan bytes g: a pushed secret beside the byte is still refused, and the refusal says the content is the reason" "the push landed a secret-shaped line"
 elif grep -q 'SLH-SECRET' "$WORK/sb-push-secret.out" && grep -q 'carries content' "$WORK/sb-push-secret.out"; then
@@ -1279,8 +1281,9 @@ fi; shard_region_end
 RB_U8="$(locale -a 2>/dev/null | grep -iE '^(en_US\.utf-?8|C\.utf-?8)$' | head -n1)"
 RB_LIB="$ROOT/templates/git-hooks/setlist-hook-lib.sh"
 RB_SPEC_OK='# Spec %s\n\nStatus: CLOSED\n\n## Closing report\n\n- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n\n- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n'
-rb_lib() { # rb_lib <script>: the library sourced by a shell under the host's UTF-8 locale, then <script>
-  LC_ALL="$RB_U8" LANG="$RB_U8" bash -c '. "$1"; eval "$2"' _ "$RB_LIB" "$1" 2>/dev/null
+rb_lib() { # rb_lib <script>: the library sourced by a shell under the host's UTF-8 locale, then <script> (sourced from a file, spec 0193)
+  printf '%s\n' "$1" > "$WORK/rb-script.sh"
+  LC_ALL="$RB_U8" LANG="$RB_U8" bash -c '. "$1"; . "$2"' _ "$RB_LIB" "$WORK/rb-script.sh" 2>/dev/null
 }
 rb_out() { # the lines that say why, else the head of the output
   local w; w="$(LC_ALL=C tr -d '\200-\377' < "$1" | grep -E 'SLH-|VIOLATION|awk:|sed:|refus' | tr '\n' ' ' | cut -c1-300)"
@@ -1440,7 +1443,7 @@ for rb_case in merge-row merge-spec squash; do
     git -C "$RBP" -c core.hooksPath=/dev/null merge -q --no-ff -m "Merge spec/0001-thing" spec/0001-thing >/dev/null 2>&1
   fi
   if rb_push "$RBP"; then ok "record bytes p$rb_j (F2 at push, $rb_case): the audit reads the record whole past the byte and the push lands"
-  else bad "record bytes p$rb_j (F2 at push, $rb_case): the audit reads the record whole past the byte and the push lands" "refused: $(rb_out "$RBP.push")"; fi
+  else bad "record bytes p$rb_j (F2 at push, $rb_case): the audit reads the record whole past the byte and the push lands" "refused (rc $?): $(rb_out "$RBP.push")"; fi
 done
 fi
 fi; shard_region_end
@@ -1595,7 +1598,7 @@ cr_judge() { # cr_judge <dir> [squash] -> "<gate> <audit>"
   printf '%s %s' "$g" "$a"
 }
 CR_ROUND1_FAIL=$'round 1: FAIL\n1: PASS\n2: FAIL\nF1 | 2 | MAJOR | src/a.txt:1 | the file says A where criterion 2 wants B | write B'
-CR_ROUND2_PASS=$'round 2: PASS\n1: PASS\n2: PASS'
+CR_ROUND2_PASSED=$'round 2: PASS\n1: PASS\n2: PASS'
 
 # >>> SHARD-BEGIN close-review-0175 cost=8
 if shard_region close-review-0175; then
@@ -1613,7 +1616,7 @@ while IFS='|' read -r CR_NAME CR_FILE CR_WANT; do
     malformed-pre) CR_BLK=$'1: PASS\nround 1: PASS\n1: PASS' ;;
     malformed-pm) CR_BLK=$'round 1: PASS\n1: PASS\n2: PASS\nF1 | 2 | MAJOR | src/a.txt:1 | w | f' ;;
     pass)         CR_BLK=$'round 1: PASS\n1: PASS\n2: PASS\nF1 | - | MINOR | src/a.txt:1 | a nit | optional' ;;
-    two-rounds)   CR_BLK="$CR_ROUND1_FAIL"$'\n'"$CR_ROUND2_PASS" ;;
+    two-rounds)   CR_BLK="$CR_ROUND1_FAIL"$'\n'"$CR_ROUND2_PASSED" ;;
     skip)         CR_BLK='round 1: SKIP-DOCS-ONLY' ;;
     skip-role)    CR_BLK='round 1: SKIP-DOCS-ONLY' ;;
     accepted)     CR_BLK="$CR_ROUND1_FAIL"$'\nround 2: FAIL\n1: PASS\n2: FAIL\nF2 | 2 | MAJOR | src/a.txt:1 | still A | write B\nverdict: ACCEPTED-BY-HUMAN F2' ;;
@@ -1778,3 +1781,47 @@ else
 fi
 fi; shard_region_end
 # <<< SHARD-END close-review-0175
+
+# THE EFFORT LINE (spec 0194, C-78). The close review records the effort it was asked to run at
+# as one optional line per reviewed round, `effort: low|medium|high|xhigh|max`, because the
+# agent's frontmatter line is a default the per-call parameter and the environment override.
+# Accepted where a round carries it (a, b); a level outside the five, a second line in a round,
+# and a line in a SKIP-DOCS-ONLY round refuse as any malformed line does (c, d, e); a criterion
+# named effort keeps the criterion grammar (f). Through the gate and the audit, both kinds. Row e
+# is a docs-only close, which the gate reads and the audit does not (the audit reads a close
+# review only where the close touches a role path, spec 0175), so its two answers differ.
+# >>> SHARD-BEGIN close-review-effort-0194 cost=3
+if shard_region close-review-effort-0194; then
+CE_BAD=""; CE_ROWS=0
+while IFS='|' read -r CE_NAME CE_FILE CE_WANT; do
+  [[ "$CE_WANT" == *" "* ]] || CE_WANT="$CE_WANT $CE_WANT"
+  [[ -n "$CE_NAME" ]] || continue
+  case "$CE_NAME" in
+    a-one)    CE_BLK=$'round 1: PASS\neffort: high\n1: PASS\n2: PASS' ;;
+    b-two)    CE_BLK=$'round 1: FAIL\neffort: medium\n1: PASS\n2: FAIL\nF1 | 2 | MAJOR | src/a.txt:1 | w | f\nround 2: PASS\neffort: xhigh\n1: PASS\n2: PASS' ;;
+    c-level)  CE_BLK=$'round 1: PASS\neffort: loud\n1: PASS\n2: PASS' ;;
+    d-twice)  CE_BLK=$'round 1: PASS\neffort: high\neffort: low\n1: PASS\n2: PASS' ;;
+    e-skip)   CE_BLK=$'round 1: SKIP-DOCS-ONLY\neffort: high' ;;
+    f-crit)   CE_BLK=$'round 1: PASS\n1: PASS\neffort: PASS' ;;
+  esac
+  for CE_KIND in record page; do
+    CE_D="$WORK/ce-$CE_NAME-$CE_KIND"
+    cr_fixture "$CE_D" "$CE_KIND" "$CE_BLK" "$CE_FILE"
+    CE_GOT="$(cr_judge "$CE_D")"; CE_ROWS=$((CE_ROWS + 1))
+    [[ "$CE_GOT" == "$CE_WANT" ]] || CE_BAD="$CE_BAD $CE_NAME/$CE_KIND: gate,audit=$CE_GOT want $CE_WANT;"
+  done
+done <<'CETABLE'
+a-one|src/a.txt|ok
+b-two|src/a.txt|ok
+c-level|src/a.txt|[SLH-NO-CLOSE-REVIEW]
+d-twice|src/a.txt|[SLH-NO-CLOSE-REVIEW]
+e-skip|docs/x.md|[SLH-NO-CLOSE-REVIEW] ok
+f-crit|src/a.txt|ok
+CETABLE
+if [[ -z "$CE_BAD" && "$CE_ROWS" -eq 12 ]]; then
+  ok "0194 cr effort: an effort line per round is read, a bad level, a second line and a line in a docs-only skip refuse, a criterion named effort stays a criterion; gate and audit, record and page"
+else
+  bad "0194 cr effort: an effort line per round is read, a bad level, a second line and a line in a docs-only skip refuse, a criterion named effort stays a criterion; gate and audit, record and page" "rows=$CE_ROWS:$CE_BAD"
+fi
+fi; shard_region_end
+# <<< SHARD-END close-review-effort-0194

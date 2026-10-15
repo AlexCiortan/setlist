@@ -14,7 +14,7 @@ a design surface at bootstrap (design_surface=yes) or adopted one later.
   first-run flow); functional when its risk is plumbing (a service worker, a
   migration, a parser). Design-heavy entries route through a design intake
   BEFORE they are specced; functional entries skip straight to the spec.
-- **A mock is a decision, not a picture.** The design surface returns locked
+- **A mock records a decision.** The design surface returns locked
   deliverables: redlines and mocks carrying exact values (hex, px,
   breakpoints, copy), numbered as decisions. The spec is written against the
   locked redline and cites it in its header (`Design contract:`); the
@@ -31,7 +31,7 @@ a design surface at bootstrap (design_surface=yes) or adopted one later.
   is not committed does not exist.
 - **Design QA on the branch.** Screenshots of the running build go back to
   the design surface during the build; findings return as a concrete punch
-  list (values, not vibes) and are fixed in place. The spec does not close
+  list of exact values and are fixed in place. The spec does not close
   until the final punch list is empty or each remaining item is explicitly
   accepted or deferred by name. Expect the first build to be structurally
   right and rhythmically wrong; the loop converges in two or three rounds,

@@ -12,12 +12,13 @@ edition wins. Never fork the protocol.
 ## 1. Guards and grounding
 
 - Output contract for your FIRST message: it opens with the model expectation,
-  before any question or observation. Session zero is architecture work and
-  should run on the escalation tier of the model ladder (Part 2; `/model fable`
-  under the current bindings, or `/model best` where the organization has no
-  Fable access). It is not the day-to-day `opusplan` default. Say so; do not
-  assume the user read the README, and do not let environment friction displace
-  the line (a cold run has skipped it exactly that way). Continue either way.
+  before any question or observation. Session zero is architecture work: it
+  runs on `opus`, the planning tier's model, and a complex project on the escalation tier
+  of the model ladder (Part 2; `/model fable` under the current bindings, or
+  `/model best` where the organization has no Fable access). It is not the day-to-day
+  `opusplan` default. Say so; do not assume the user read the README, and do
+  not let environment friction displace the line (a cold run has skipped it
+  exactly that way). Continue either way.
 - Greenfield guard: if the current directory is not empty and not a git
   repository, stop and ask before touching anything. An existing codebase
   belongs to /setlist:retrofit instead.
@@ -39,7 +40,7 @@ Ask for, in plain conversation:
 
 ## 3. The Part 8 interview and decisions, exactly as written
 
-- Run Part 8 Step 1 as one structured round: only genuine forks become
+- Run Part 8 Step 1 as one structured round: only real forks become
   questions, recommendations stated inline, and the stopping rule holds (one
   round is right, two is fine, three is procrastination). The round OPENS with
   "what has changed since this framework edition was written" (tooling,
@@ -47,13 +48,15 @@ Ask for, in plain conversation:
   the environment facts Step 1 demands: the opusplan check below, the QA
   tooling for this project type, the design surface question for UI projects,
   and the riskiest assumption worth a spike.
-- Verify `opusplan` by LIVE PROBE before parking, the same probe the prompt
-  path runs: attempt the selection once from this environment (a one-shot
-  `claude -p --model opusplan` invocation that returns any clean reply
-  verifies it resolves; in an interactive session, `/model opusplan` and read
-  the response). Only if the probe cannot run or fails: leave the model line
-  out of settings.json and park verification in STATUS.md with a named owner.
-  Never park without attempting the probe.
+- Verify `opusplan` by LIVE PROBE before parking: run
+  `bash "${CLAUDE_PLUGIN_ROOT}/scripts/model-probe.sh"` (say first that it
+  spends two short headless sessions of the user's quota) and keep its two
+  `served planning <id>` and `served execution <id>` lines for the answers
+  file. They record the model each phase served, which `/setlist:validate`
+  compares with a later run. Only if the probe cannot run or names no model:
+  leave both answers empty, which leaves the model line out of settings.json,
+  and park verification in STATUS.md with a named owner. Never park without
+  attempting the probe.
 - Verify `jq` in the same environment check (`command -v jq`). The stamp
   refuses before it writes anything when `jq` is missing or not working (it
   builds `.claude/sdd.json` with `jq`, and the three stamped GIT hooks fail
@@ -75,14 +78,15 @@ Ask for, in plain conversation:
 ## 4. Phase 1: the mechanical stamp
 
 Write the answers file to `.claude/stamp-answers.txt` in the project directory,
-KEY=VALUE lines:
+one NAME=VALUE pair per line:
 
 ```
 project_name=<name>
 stack=<short stack id>
 working_mode=<review-only | developer-writes>
 ui=<yes|no>
-opusplan_verified=<yes|no>
+planning_model=<the id on the probe's "served planning" line, or empty>
+execution_model=<the id on the probe's "served execution" line, or empty>
 design_surface=<yes|no>
 src_role=<src, or the agreed path>
 tests_role=<tests, or the agreed path>
@@ -97,10 +101,14 @@ The stamp emits every framework-fixed file, including the four session hooks
 the trunk audit and the forge check beside it, `.github/workflows/
 setlist-forge-check.yml` (the check as a required status check, `setlist forge
 check`) and `.github/CODEOWNERS` (the four protected paths under an `@OWNER`
-slot that phase 2 fills with the team that owns the enforcement layer; a
+slot that phase 2 fills with the owner the human names for the enforcement
+layer, a team or a handle, asked in the interview and never inferred from the
+plugin's own metadata or its author; with no answer the slot stands, and a
 standing slot is a validate finding), the `gates` block in `sdd.json` (three
 empty tiers `/scaffold` records beside `gate_command`), `specs/TEMPLATE.md`
-extracted from the edition, the committed edition copy, and `AGENTS.md` beside
+extracted from the edition, the committed edition copy, the `verify` skill
+(Claude Code asks for it before a commit; it runs `gate_command` and reports,
+and refuses nothing), and `AGENTS.md` beside
 `CLAUDE.md` (a pointer to it and to the edition for agents that read
 `AGENTS.md`, never a second copy of the golden rules). Do not regenerate
 any stamped file by hand. Requiring the check on the trunk is the user's act at
@@ -115,7 +123,7 @@ ones as DRAFT or parking-lot rows), `RUNBOOK.md` as Part 7 instantiated with
 this stack's exact commands, and every `[PHASE 2 SLOT: ...]` marker the stamp
 left behind. No slot marker survives this phase.
 
-**Seed `docs/diagrams/` here, in phase 2, and never in the stamp.** Create the
+Seed `docs/diagrams/` here, in phase 2, and never in the stamp. Create the
 directory and write two files from the decisions just made: `context.md` at L1
 (the system, its users and the outside services it talks to) and the L2
 container block at the bottom of `steering/structure.md` beside the core model.

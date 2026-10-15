@@ -47,7 +47,7 @@ reader is comparing your drawing habits rather than your options.
   whether the protocol changed too.
 - **Mark what is new and what goes.** A one-word label (`new`, `removed`) or a
   comment on the line is enough; a legend is a sign the figure is doing too much.
-- **Two options, not four.** Three shapes in one comparison is a survey, and a
+- **Two options at most.** Three shapes in one comparison is a survey, and a
   survey is prose with a table. If the decision really has three live options,
   compare the two that are close and say in a sentence why the third is out.
 
@@ -62,7 +62,7 @@ conversation that reopens it six months later.
 It does NOT belong in the living diagrams. `docs/diagrams/` holds the system as
 it is on the trunk; a comparison holds a choice, including one that was not
 taken. Absorbing a comparison into a living diagram at close means keeping the
-side that shipped and deleting the other, which is a redraw, not a move.
+side that shipped and deleting the other, which is a redraw.
 
 ## What goes wrong
 

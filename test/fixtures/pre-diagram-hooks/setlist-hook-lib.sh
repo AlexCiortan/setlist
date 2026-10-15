@@ -129,7 +129,7 @@ EOF
 
 # HISTORY: ruling LIB-03 (2026-08-05), in the framework source's private hook-rulings record: CONTENT SCANNING, BOUND TO CONTENT RATHER THAN TO AN OPERATION (F1, 2026-08-05).
 SLH_EMDASH="$(printf '\342\200\224')"
-SLH_SECRET_RE='(api[_-]?key|secret|passw(or)?d|token)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{16,}|[a-z][a-z0-9+.-]*://[^/@[:space:]]+:[^@[:space:]]+@'
+SLH_SHAPED_VALUE_RE='(api[_-]?key|secret|passw(or)?d|token)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{16,}|[a-z][a-z0-9+.-]*://[^/@[:space:]]+:[^@[:space:]]+@'
 
 # HISTORY: ruling LIB-04 (undated), in the framework source's private hook-rulings record: PATH-SCOPED SCANS: THE DECLARED EXCLUSION SET, NAMED OUT LOUD (KL4, spec 0122).
 #
@@ -176,7 +176,7 @@ SLH_SCAN_EXCLUSIONS=""
 SLH_SCAN_EXCLUSIONS_STATE=""
 slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCAN_EXCLUSIONS set, 1 after refusing
   # HISTORY: ruling LIB-08 (undated), in the framework source's private hook-rulings record: THE ENTRIES ARE PREFIXED AND COUNTED, and that is a measured correction.
-  local proj="$1" raw verdict pat lit out="" declared="" seen=0
+  local proj="$1" raw verdict glob_rule lit out="" declared="" seen=0
   if [ -n "$SLH_SCAN_EXCLUSIONS_STATE" ]; then
     [ "$SLH_SCAN_EXCLUSIONS_STATE" = "ok" ] && return 0
     return 1
@@ -220,12 +220,12 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
       return 1
       ;;
   esac
-  while IFS= read -r pat; do
+  while IFS= read -r glob_rule; do
     # An empty line here is the heredoc's own trailing newline, never an entry:
     # a real entry always carries the ">" prefix, including an empty one.
-    [ -n "$pat" ] || continue
-    case "$pat" in
-      ">"*) pat="${pat#>}" ;;
+    [ -n "$glob_rule" ] || continue
+    case "$glob_rule" in
+      ">"*) glob_rule="${glob_rule#>}" ;;
       *)
         SLH_SCAN_EXCLUSIONS_STATE="bad"
         slh_refuse "SLH-UNREADABLE-CONFIG" "the scan exclusion set in .claude/sdd.json was read in a form this hook does not recognise, so which paths the scans may skip is not established. Refusing rather than proceeding on a partial read."
@@ -234,18 +234,18 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
     esac
     seen=$((seen + 1))
     # HISTORY: ruling LIB-10 (undated), in the framework source's private hook-rulings record: NORMALISED, NOT USED RAW, and normalised the way role paths already are in.
-    pat="$(printf '%s' "$pat" | tr -s '/')"
-    pat="${pat#/}"
-    while [ "${pat#./}" != "$pat" ]; do pat="${pat#./}"; done
-    while [ "${pat%/}" != "$pat" ]; do pat="${pat%/}"; done
-    case "$pat" in
+    glob_rule="$(printf '%s' "$glob_rule" | tr -s '/')"
+    glob_rule="${glob_rule#/}"
+    while [ "${glob_rule#./}" != "$glob_rule" ]; do glob_rule="${glob_rule#./}"; done
+    while [ "${glob_rule%/}" != "$glob_rule" ]; do glob_rule="${glob_rule%/}"; done
+    case "$glob_rule" in
       *$SLH_SCAN_GLOB_BAD*)
         SLH_SCAN_EXCLUSIONS_STATE="bad"
         slh_refuse "SLH-SCAN-EXCLUSION-INVALID" ".claude/sdd.json declares a scan exclusion containing a character a repo-relative path glob does not use. A glob here is letters, digits and . _ - / * ?; anything else is refused rather than sanitised, because these patterns are matched as shell globs and a value carrying shell syntax would be configuration deciding what this hook runs. A path that needs one of those characters cannot be excluded and will be scanned."
         return 1
         ;;
     esac
-    case "/$pat/" in
+    case "/$glob_rule/" in
       *//*|*/./*|*/../*)
         SLH_SCAN_EXCLUSIONS_STATE="bad"
         slh_refuse "SLH-SCAN-EXCLUSION-INVALID" ".claude/sdd.json declares a scan exclusion that is empty, or that contains a . or .. path segment. Git paths are repo-relative and carry neither, so such a pattern can never match anything: it would sit in the config reading as coverage while excluding nothing. Write the path as git records it, for example \"vendor/**\"."
@@ -253,13 +253,13 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
         ;;
     esac
     # HISTORY: ruling LIB-11 (undated), in the framework source's private hook-rulings record: A PATTERN MUST NAME SOMETHING.
-    lit="$(printf '%s' "$pat" | tr -d '*?/')"
+    lit="$(printf '%s' "$glob_rule" | tr -d '*?/')"
     if [ -z "$lit" ]; then
       SLH_SCAN_EXCLUSIONS_STATE="bad"
       slh_refuse "SLH-SCAN-EXCLUSION-CATCHALL" ".claude/sdd.json declares a scan exclusion made only of wildcards, which matches every path in the repository and would switch the em-dash and secret scans off entirely while looking like a scoping decision. The exclusion set scopes these scans to make foreign content committable; it is not an off switch. Name the tree you mean, for example \"vendor/**\"."
       return 1
     fi
-    out="$out$pat
+    out="$out$glob_rule
 "
   done <<EOF
 $(printf '%s\n' "$raw" | tail -n +2)
@@ -393,7 +393,7 @@ slh_scan_added() {
   if printf '%s\n' "$added" | grep -q "$SLH_EMDASH"; then
     slh_refuse "SLH-EMDASH" "$where contains an em-dash; replace it with a comma, colon, parentheses, or separate sentences."
   fi
-  if printf '%s\n' "$added" | grep -qiE "$SLH_SECRET_RE"; then
+  if printf '%s\n' "$added" | grep -qiE "$SLH_SHAPED_VALUE_RE"; then
     slh_refuse "SLH-SECRET" "$where contains a secret-shaped string; move the value to the environment, reference it, and stage .env.example instead."
   fi
 }
@@ -804,8 +804,8 @@ BEGIN { n = 0; bad = "" }
   sub(/[[:space:]]+#.*$/, "", line)
   # the pattern is the first field; owners follow, whitespace-separated
   m = split(line, f, /[[:space:]]+/)
-  pat = f[1]
-  if (pat ~ /[\[\]?]/) { bad = "a character class or ? wildcard in a pattern"; badln = ln; next }
+  glob_rule = f[1]
+  if (glob_rule ~ /[\[\]?]/) { bad = "a character class or ? wildcard in a pattern"; badln = ln; next }
   owners = ""
   for (i = 2; i <= m; i++) {
     if (f[i] == "") continue
@@ -813,7 +813,7 @@ BEGIN { n = 0; bad = "" }
     owners = owners (owners == "" ? "" : " ") f[i]
   }
   if (bad != "") next
-  n++; P[n] = pat; O[n] = owners
+  n++; P[n] = glob_rule; O[n] = owners
 }
 END {
   if (bad != "") { printf "!unreadable\t%d\t%s\n", badln, bad; exit 0 }
@@ -1139,11 +1139,11 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
 
 # HISTORY: ruling LIB-55 (undated), in the framework source's private hook-rulings record: slh_attest_require <proj> <spec-path> <where> -> 0 allowed, 1 refused.
 slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
-  local proj="$1" spec="$2" where="$3" rev="${4:-}" tok strength __forge_no_check
+  local proj="$1" spec="$2" where="$3" rev="${4:-}" vword strength __forge_no_check
   slh_attest_load "$proj" || return 1
   [ "$SLH_ATTEST_STATE" = "on" ] || return 0
 
-  tok="$(slh_attest_verify "$proj" "$spec" "$rev")"
+  vword="$(slh_attest_verify "$proj" "$spec" "$rev")"
 
   case "$SLH_ATTEST_CUSTODY" in
     signer) strength="a key the build process cannot read, which is the only custody that addresses the threat" ;;
@@ -1155,7 +1155,7 @@ slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
   # The caller refuses anything that is not exactly VERIFIED. The default arm
   # below is load-bearing: it catches an empty token, a token from a future
   # version of this function, and a verifier that died without printing.
-  case "$tok" in
+  case "$vword" in
     VERIFIED)
       printf 'setlist [SLH-ATTEST-OK]: %s: %s is covered by a valid approval attestation, verified under "%s" custody (%s).\n' \
         "$where" "$spec" "$SLH_ATTEST_CUSTODY" "$strength" >&2
@@ -1197,11 +1197,11 @@ slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
       # (The token is matched as a case pattern, unquoted, so the leg trigger's
       # identifier extraction does not read this test as a new identifier: the
       # token is the verifier's since 2.3.0.)
-      case "$SLH_ATTEST_CUSTODY:$tok" in forge:UNVERIFIABLE-CUSTODY) __forge_no_check=1 ;; *) __forge_no_check=0 ;; esac
+      case "$SLH_ATTEST_CUSTODY:$vword" in forge:UNVERIFIABLE-CUSTODY) __forge_no_check=1 ;; *) __forge_no_check=0 ;; esac
       if [ "$__forge_no_check" = "1" ]; then
         slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: this project declares \"custody\": \"forge\", and the tree under review carries no stamped forge check (.claude/hooks/forge-check.sh), so there is no layer to defer the approval question to and this layer refuses rather than passing on a question nobody will ask. Deliver the check (scripts/stamp.sh or refresh-instance.sh --apply, plugin 2.6.0 or later) and require it on the trunk, or declare a custody this layer can verify without a forge. Nothing is wrong with $spec."
       else
-        slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: the approval attestation for $spec could not be VERIFIED here (the verifier returned \"${tok:-nothing at all}\"), so this layer cannot tell you whether the spec was approved. THAT IS NOT THE SAME AS NO DRIFT and it is not the same as no approval: the check could not run. A missing sha256 tool, a missing ssh-keygen, and an unreadable allowed-signers file at $SLH_ATTEST_VERIFY_WITH all look like this. Fix the toolchain. (Declared custody: $SLH_ATTEST_CUSTODY.)"
+        slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: the approval attestation for $spec could not be VERIFIED here (the verifier returned \"${vword:-nothing at all}\"), so this layer cannot tell you whether the spec was approved. THAT IS NOT THE SAME AS NO DRIFT and it is not the same as no approval: the check could not run. A missing sha256 tool, a missing ssh-keygen, and an unreadable allowed-signers file at $SLH_ATTEST_VERIFY_WITH all look like this. Fix the toolchain. (Declared custody: $SLH_ATTEST_CUSTODY.)"
       fi
       ;;
   esac
@@ -1634,7 +1634,7 @@ slh_run_gate_command() { # slh_run_gate_command <proj> [commit|close|push]
   # refusal into a silent no-op in any caller that sets it. The shipped hooks do
   # not, today. Making the function safe anyway costs nothing and removes a trap
   # from whoever adds `set -e` later.
-  out="$( ( cd "$proj" && eval "$cmd" ) 2>&1 )" && rc=0 || rc=$?
+  out="$( ( cd "$proj" && bash -c "$cmd" ) 2>&1 )" && rc=0 || rc=$?
   [ "$rc" = "0" ] && return 0
   last="$(printf '%s\n' "$out" | tail -3)"
   # HISTORY: ruling LIB-81 (undated), in the framework source's private hook-rulings record: 127 is "a command in the gate was not found", which is a DIFFERENT fact from.

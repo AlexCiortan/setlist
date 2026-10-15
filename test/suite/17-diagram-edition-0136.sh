@@ -131,8 +131,8 @@ if [[ -s "$DG_V114_LIB" && -s "$DG_V114_AUDIT" ]] && ! grep -q 'slh_diagram_swit
     fi
     # the audit over the same commit, both versions
     git -C "$DG_D" -c core.hooksPath=/dev/null commit -qm "close 0001" >/dev/null 2>&1
-    dg_old="$(norm_baseline_frame_str "$(norm_frozen_sigpipe_str "$(lf_jq bash "$DG_V114_AUDIT" "$DG_D" 2>&1)")")"
-    dg_new="$(norm_baseline_frame_str "$(lf_jq bash "$DG_AUDIT" "$DG_D" 2>&1)")"
+    dg_old="$(norm_audit_codes_str "$(norm_baseline_frame_str "$(norm_frozen_sigpipe_str "$(lf_jq bash "$DG_V114_AUDIT" "$DG_D" 2>&1)")")")"
+    dg_new="$(norm_audit_codes_str "$(norm_baseline_frame_str "$(lf_jq bash "$DG_AUDIT" "$DG_D" 2>&1)")")"
     if [[ "$dg_old" != "$dg_new" ]]; then
       DG_DIFF_BAD=$((DG_DIFF_BAD + 1)); dg_diff_detail "the audit, form $DG_DIFF_N [$DG_F]" "$dg_old" "$dg_new"
     fi
@@ -841,7 +841,7 @@ dg_record_seed() { # dg_record_seed <dir>  -- the record as it stands before the
 DG_SW="$WORK/dg-switch-foreign"; dg_fixture "$DG_SW"
 mkdir -p "$DG_SW/docs/diagrams"
 printf '# our own picture\n\n```mermaid\ngraph TD\n  a["src/auth"]\n```\n' > "$DG_SW/docs/diagrams/legacy.md"
-printf 'PNG\n' > "$DG_SW/docs/diagrams/architecture.png"
+printf 'PNG\n' > "$DG_SW/docs/diagrams/architecture.export"
 git -C "$DG_SW" add -A >/dev/null
 git -C "$DG_SW" -c core.hooksPath=/dev/null commit -qm "a project that already keeps diagrams here" >/dev/null 2>&1
 if bash "$DG_AUDIT" "$DG_SW" 2>/dev/null | grep -q 'diagram'; then
@@ -880,7 +880,9 @@ p=sys.argv[1]; d=json.load(open(p)); d["diagram_command"]="bash .claude/gen.sh";
 PY
 git -C "$DG_SWC" add -A >/dev/null
 git -C "$DG_SWC" -c core.hooksPath=/dev/null commit -qm "declare diagram_command, no docs/diagrams at all" >/dev/null 2>&1
-if bash -c 'eval "$(awk "/^slh_diagram_switch_on\(\)/,/^}\$/" "$1")"; slh_diagram_switch_on "$2" HEAD' _ "$DG_AUDIT" "$DG_SWC"; then
+# The predicate is extracted to a file and sourced, never run as a string (spec 0193).
+awk '/^slh_diagram_switch_on\(\)/,/^}$/' "$DG_AUDIT" > "$WORK/dg-switch-fn.sh"
+if bash -c '. "$1"; slh_diagram_switch_on "$2" HEAD' _ "$WORK/dg-switch-fn.sh" "$DG_SWC"; then
   ok "switch command: a declared diagram_command arms the half on its own, with no docs/diagrams/ in the tree, because the lockfile arm is what it opted into"
 else
   bad "switch command: a declared diagram_command arms the half on its own" "the predicate read no diagram_command, so a project whose only surface is a generated view is unarmed"
@@ -888,7 +890,7 @@ fi
 DG_SWN="$WORK/dg-switch-neither"; dg_fixture "$DG_SWN"
 git -C "$DG_SWN" add -A >/dev/null
 git -C "$DG_SWN" -c core.hooksPath=/dev/null commit -qm "neither marker" >/dev/null 2>&1
-if bash -c 'eval "$(awk "/^slh_diagram_switch_on\(\)/,/^}\$/" "$1")"; slh_diagram_switch_on "$2" HEAD' _ "$DG_AUDIT" "$DG_SWN"; then
+if bash -c '. "$1"; slh_diagram_switch_on "$2" HEAD' _ "$WORK/dg-switch-fn.sh" "$DG_SWN"; then
   bad "switch neither: with neither marker the half is UNARMED" "the predicate armed a project that opted into nothing"
 else
   ok "switch neither: with neither marker the half is UNARMED, which is the absence claim both public layers make"
@@ -1058,6 +1060,37 @@ if [[ "$FC_RC" -eq 0 ]]; then
   ok "render b2: the same unparseable diagram passes when there is no renderer, which is why the workflow's install step fails the job"
 else
   bad "render b2: the same unparseable diagram passes when there is no renderer" "rc=$FC_RC; absence must not refuse here"
+fi
+
+# THE FULL RENDERER WRITES NOTHING (spec 0192, item 1a). Where only mermaid-cli is on
+# PATH the check asks it the same question, does the block parse, with its output sent
+# to standard output and discarded, so no scratch file is written and no file name is
+# chosen. The stub refuses any output that is not standard output, and its parse error
+# goes to standard error, the words the refusal quotes; what it prints on standard
+# output must never reach the refusal.
+DG_MB="$WORK/dg-mmdc-bin"; mkdir -p "$DG_MB"
+cat > "$DG_MB/mmdc" <<'STUBM'
+#!/usr/bin/env bash
+in=""; out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in -i) in="$2"; shift 2 ;; -o) out="$2"; shift 2 ;; *) shift ;; esac
+done
+[[ "$out" == "-" ]] || { echo "mmdc stub: refused to write the file [$out]; only standard output is allowed" >&2; exit 3; }
+grep -q 'BROKEN' "$in" && { echo "mmdc stub: parse error near BROKEN" >&2; exit 1; }
+echo "the stub's rendered output"
+exit 0
+STUBM
+chmod +x "$DG_MB/mmdc"
+PATH="$DG_MB:$DG_NOREND_PATH"; export PATH
+fc_run "$DG_FR" --base main --head spec/0001-thing --forge none
+fc_case "render c (0192): with mermaid-cli alone, a block that parses PASSES and no scratch file is written" 0 "PASS (custody: none declared)"
+fc_run "$DG_FR2" --base main --head spec/0001-thing --forge none
+fc_case "render d (0192): with mermaid-cli alone, a block that does not parse refuses as FC-DIAGRAM-RENDER" 1 "DIAGRAM-RENDER" FC-DIAGRAM-RENDER
+DG_MB_LINE="$(printf '%s\n' "$FC_ERR" | grep -F '[FC-DIAGRAM-RENDER]')"
+if printf '%s' "$DG_MB_LINE" | grep -qF 'The renderer said: mmdc stub: parse error near BROKEN' && ! printf '%s' "$DG_MB_LINE" | grep -qF "rendered output"; then
+  ok "render e (0192): the refusal quotes the renderer's standard error and never its standard output"
+else
+  bad "render e (0192): the refusal quotes the renderer's standard error and never its standard output" "$(printf '%s' "$DG_MB_LINE" | cut -c1-260)"
 fi
 
 PATH="$DG_SAVED_PATH"; export PATH
@@ -1325,3 +1358,214 @@ fi
 
 fi; shard_region_end
 # <<< SHARD-END stamped-voice-0161
+
+# =============================================================================
+# THE COMMIT LAYER'S GIT READS (spec 0195, item 3; 0184's E-c). Each reader of the
+# index or a tree that a commit-time hook relies on, with exactly one of its git calls
+# failed by a shim on PATH (exit 139, a killed process), must refuse by name with
+# SLH-AUDIT-GIT-FAILED and never read the failure as "absent". The close-gate readers
+# are driven through slh_verify_close out of the library, as dg_verify drives it; the
+# pre-commit readers through the hook itself; the three a commit-time hook does not
+# reach today (R7's tree path, R13, R14) through the library directly. Each case has a
+# control: the same fixture with no fault reads as it always did.
+# Helpers defined OUTSIDE the region (the independence rule); the shim is built inside.
+# =============================================================================
+hg_lib() { printf '%s' "$ROOT/templates/git-hooks/setlist-hook-lib.sh"; }
+hg_run() { # hg_run <fault-pattern|@none@> <dir> <bash-script using $L and $D> -> HG_OUT, HG_RC
+  # The case's script is the tail of the program bash -c runs, after a fixed prelude that loads the
+  # library: a string handed to a shell as its argument, never run by eval (spec 0193's rule).
+  HG_OUT="$(env PATH="$HG_BIN:$PATH" HG_REALGIT="$HG_REALGIT" HG_FAULT="$1" bash -c '
+    set -u; SLH_REFUSED=0
+    L="$1"; D="$2"
+    # a merge in progress is a two-parent landing, a staged close on the trunk a single-parent one
+    SLH_CLOSE_SINGLE_PARENT=1; [ ! -f "$D/.git/MERGE_HEAD" ] || SLH_CLOSE_SINGLE_PARENT=0
+    # shellcheck disable=SC1090
+    . "$L"
+    SLH_REFUSED=0
+'"$3" _ "$(hg_lib)" "$2" 2>&1)"; HG_RC=$?
+}
+hg_vc() { hg_run "$1" "$2" 'slh_verify_close "$D" main "the close"; echo "REFUSED=$SLH_REFUSED"'; }
+hg_pc() { # hg_pc <fault-pattern|@none@> <dir>: the instance's own pre-commit over its index
+  HG_OUT="$(cd "$2" && env PATH="$HG_BIN:$PATH" HG_REALGIT="$HG_REALGIT" HG_FAULT="$1" bash .githooks/pre-commit </dev/null 2>&1)"; HG_RC=$?
+}
+hg_refused() { # hg_refused <name> <how: vc|rc> [a code that must NOT stand in for it]
+  local why=""
+  grep -q '\[SLH-AUDIT-GIT-FAILED\]' <<< "$HG_OUT" || why="no [SLH-AUDIT-GIT-FAILED];"
+  grep -q 'judged nothing' <<< "$HG_OUT" || why="$why no 'judged nothing';"
+  if [[ "$2" == vc ]]; then grep -q '^REFUSED=1$' <<< "$HG_OUT" || why="$why not refused;"
+  else [[ "$HG_RC" -eq 1 ]] || why="$why exit $HG_RC, not 1;"; fi
+  if [[ -n "${3:-}" ]] && grep -qF "[$3]" <<< "$HG_OUT"; then why="$why refused as [$3], another reason's code;"; fi
+  if [[ -z "$why" ]]; then ok "$1"
+  else bad "$1" "$why $(grep -E 'setlist \[|REFUSED=' <<< "$HG_OUT" | head -3 | tr '\n' ' ' | cut -c1-260)"; fi
+}
+hg_inst() { # hg_inst <dir> <record|page>: an instance with its hooks in .githooks, on main
+  local d="$1"
+  rm -rf "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude" "$d/.githooks"
+  git_init "$d"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src","tests":"tests"}}\n' > "$d/.claude/sdd.json"
+  printf 'x\n' > "$d/src/app.js"
+  printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | ACTIVE | wip |\n' > "$d/specs/STATUS.md"
+  printf '# Spec 0001\n\nStatus: ACTIVE\n' > "$d/specs/0001-thing.md"
+  [[ "$2" == record ]] && printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{}}\n' > "$d/.claude/status.json"
+  cp "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$(hg_lib)" "$d/.githooks/"
+  chmod +x "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+  git -C "$d" add -A >/dev/null 2>&1; git -C "$d" -c core.hooksPath=/dev/null commit -qm stamp >/dev/null 2>&1
+}
+hg_close() { # hg_close <dir>: gh_fixture's closed spec branch, merged with --no-commit (the index the merge hook judges)
+  gh_fixture "$1" yes
+  git -C "$1" -c core.hooksPath=/dev/null merge -q --no-commit --no-ff spec/0001-thing >/dev/null 2>&1
+}
+
+# >>> SHARD-BEGIN hook-git-0195 cost=4
+if shard_region hook-git-0195; then
+HG_REALGIT="$(command -v git)"
+HG_BIN="$WORK/hg-bin"; mkdir -p "$HG_BIN"
+printf '#!/usr/bin/env bash\ncase "$*" in $HG_FAULT) exit 139 ;; esac\nexec "$HG_REALGIT" "$@"\n' > "$HG_BIN/git"
+chmod +x "$HG_BIN/git"
+
+# R1, the staged list (pre-commit): a failed listing was an empty index, "nothing to judge".
+HGD="$WORK/hg-r1"; hg_inst "$HGD" page; printf 'n\n' > "$HGD/NOTES.md"; git -C "$HGD" add NOTES.md
+hg_pc @none@ "$HGD"
+[[ "$HG_RC" -eq 0 ]] && ok "0195 R1 (control): a docs commit is allowed" || bad "0195 R1 (control): a docs commit is allowed" "exit $HG_RC: $(tail -2 <<< "$HG_OUT" | tr '\n' ' ')"
+hg_pc '*diff --cached --name-only*' "$HGD"
+hg_refused "0195 R1: the staged list's git killed refuses by name, never reads as a commit with nothing staged" rc
+
+# R2, the record's presence in the index (pre-commit): a failed listing was "no record", the page path.
+HGD="$WORK/hg-r2"; hg_inst "$HGD" record; printf 'n\n' > "$HGD/NOTES.md"; git -C "$HGD" add NOTES.md
+hg_pc @none@ "$HGD"
+[[ "$HG_RC" -eq 0 ]] && ok "0195 R2 (control): a docs commit in a structured instance is allowed" || bad "0195 R2 (control): a docs commit in a structured instance is allowed" "exit $HG_RC: $(tail -2 <<< "$HG_OUT" | tr '\n' ' ')"
+hg_pc '*ls-files --cached -- .claude/status.json*' "$HGD"
+hg_refused "0195 R2: the record's presence unreadable refuses by name, never takes the page path" rc
+
+# R3, the staged record's text (pre-commit): a failed show was an empty, malformed record.
+HGD="$WORK/hg-r3"; hg_inst "$HGD" record
+jq . "$HGD/.claude/status.json" > "$HGD/rec.tmp" && mv "$HGD/rec.tmp" "$HGD/.claude/status.json"
+printf '\n' >> "$HGD/specs/STATUS.md"; git -C "$HGD" add .claude/status.json specs/STATUS.md
+hg_pc @none@ "$HGD"
+[[ "$HG_RC" -eq 0 ]] && ok "0195 R3 (control): a record change staged with its page is allowed" || bad "0195 R3 (control): a record change staged with its page is allowed" "exit $HG_RC: $(grep 'setlist \[' <<< "$HG_OUT" | head -2 | tr '\n' ' ')"
+hg_pc '*show :.claude/status.json*' "$HGD"
+hg_refused "0195 R3: the staged record's show killed refuses by name, never as a malformed record" rc SLH-RECORD-MALFORMED
+
+# R4, the index's text (the close gate): rule_in_force read a failed show of the stamp as the pre-rule exemption.
+HGD="$WORK/hg-r4"; gh_fixture "$HGD" yes
+jq '.plugin = {"version":"2.12.0"}' "$HGD/.claude/sdd.json" > "$HGD/sdd.tmp" && mv "$HGD/sdd.tmp" "$HGD/.claude/sdd.json"
+git -C "$HGD" add .claude/sdd.json; git -C "$HGD" -c core.hooksPath=/dev/null commit -qm "stamp 2.12.0" >/dev/null 2>&1
+git -C "$HGD" -c core.hooksPath=/dev/null merge -q --no-commit --no-ff spec/0001-thing >/dev/null 2>&1
+hg_vc @none@ "$HGD"
+if grep -q '^REFUSED=1$' <<< "$HG_OUT" && grep -q 'SLH-NO-CLOSE-REVIEW' <<< "$HG_OUT"; then ok "0195 R4 (control): a 2.12.0 close with no close-review block is refused as SLH-NO-CLOSE-REVIEW"
+else bad "0195 R4 (control): a 2.12.0 close with no close-review block is refused as SLH-NO-CLOSE-REVIEW" "$(grep -E 'setlist \[|REFUSED=' <<< "$HG_OUT" | head -3 | tr '\n' ' ')"; fi
+hg_vc '*show :.claude/sdd.json*' "$HGD"
+hg_refused "0195 R4: the index's stamp unreadable refuses by name, never reads as the pre-rule exemption" vc
+
+# R5, HEAD's text (the close gate): a failed show of HEAD's page was "nothing closed before".
+HGD="$WORK/hg-r5"; hg_close "$HGD"
+hg_vc @none@ "$HGD"
+grep -q '^REFUSED=0$' <<< "$HG_OUT" && ok "0195 R5 (control): the closed spec's merge is allowed" || bad "0195 R5 (control): the closed spec's merge is allowed" "$(grep -E 'setlist \[|REFUSED=' <<< "$HG_OUT" | head -3 | tr '\n' ' ')"
+hg_vc '*show HEAD:specs/STATUS.md*' "$HGD"
+hg_refused "0195 R5: HEAD's page unreadable refuses by name, never reads as a page that closed nothing" vc
+
+# R6, the spec file for a number (the close gate): a failed listing was "no spec file".
+HGD="$WORK/hg-r6"; gh_fixture "$HGD" no
+git -C "$HGD" checkout -q spec/0001-thing
+printf '# Spec 0001\n\nStatus: CLOSED\n\n## Closing report\n\n- QA Pass 1 verdicts:\n\n```qa-pass-1\n1: PASS\n```\n\n- QA Pass 1 report (pasted verbatim):\n\ncriterion 1: PASS\n\n- QA Pass 2 (human): done\n\n- Architecture diagram: no impact\n' > "$HGD/specs/0001-thing.md"
+git -C "$HGD" add -A; git -C "$HGD" -c core.hooksPath=/dev/null commit -qm "report" >/dev/null 2>&1
+git -C "$HGD" checkout -q main; git -C "$HGD" -c core.hooksPath=/dev/null checkout -q spec/0001-thing -- specs/0001-thing.md
+git -C "$HGD" -c core.hooksPath=/dev/null commit -qm "the report reaches main" >/dev/null 2>&1
+git -C "$HGD" -c core.hooksPath=/dev/null merge -q --no-commit --no-ff spec/0001-thing >/dev/null 2>&1
+printf '# inv\n\n| Num | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | Thing | CLOSED | done |\n' > "$HGD/specs/STATUS.md"; git -C "$HGD" add specs/STATUS.md
+hg_vc @none@ "$HGD"
+grep -q '^REFUSED=0$' <<< "$HG_OUT" && ok "0195 R6 (control): a close whose spec file the merge does not stage reads it from the index, allowed" || bad "0195 R6 (control): a close whose spec file the merge does not stage reads it from the index, allowed" "$(grep -E 'setlist \[|REFUSED=' <<< "$HG_OUT" | head -3 | tr '\n' ' ')"
+hg_vc '*ls-files specs/0001-[*].md*' "$HGD"
+hg_refused "0195 R6: the spec file's listing killed refuses by name, never as a close with no spec file" vc SLH-CLOSES-NO-SPEC-FILE
+
+# R7, the page at a tree (the push walk's reader, driven directly): a failed show was "nothing active".
+HGD="$WORK/hg-r7"; hg_inst "$HGD" page
+hg_run @none@ "$HGD" 'slh_active_specs "$D" HEAD; echo "RC=$?"'
+grep -q '^0001$' <<< "$HG_OUT" && ok "0195 R7 (control): HEAD's page names spec 0001 active" || bad "0195 R7 (control): HEAD's page names spec 0001 active" "$(tr '\n' ' ' <<< "$HG_OUT" | cut -c1-200)"
+hg_run '*HEAD*specs/STATUS.md*' "$HGD" 'slh_active_specs "$D" HEAD; echo "RC=$?"'
+grep -q '^RC=1$' <<< "$HG_OUT" && HG_RC=1 || HG_RC=0
+hg_refused "0195 R7: the page at a tree unreadable refuses by name, never reads as no spec active" rc
+
+# R8, the diagram switch's callers (the close gate): status 2 was "unarmed", every diagram check skipped.
+HGD="$WORK/hg-r8"; dg_fixture "$HGD"; dg_arm "$HGD"
+printf '\nmore\n' >> "$HGD/docs/diagrams/context.md"; printf 'x\n' >> "$HGD/src/auth/main.txt"
+dg_stage_close "$HGD" '- Architecture diagram: no impact'
+hg_vc @none@ "$HGD"
+grep -q 'SLH-DIAGRAM-UNDECLARED' <<< "$HG_OUT" && ok "0195 R8 (control): an armed close touching a diagram under 'no impact' is refused" || bad "0195 R8 (control): an armed close touching a diagram under 'no impact' is refused" "$(grep -E 'setlist \[|REFUSED=' <<< "$HG_OUT" | head -3 | tr '\n' ' ')"
+hg_vc '*ls-tree*docs/diagrams/*' "$HGD"
+hg_refused "0195 R8: the switch's read killed refuses by name, never reads the half unarmed" vc
+
+# R9, steering/structure.md's two versions (the close gate): status 2 was discarded.
+HGD="$WORK/hg-r9"; dg_fixture "$HGD"; dg_arm "$HGD"
+sed 's|  a\["src/auth"\] --> b\["src/auth"\]|  a["src/auth"] --> c["src/auth"]|' "$HGD/steering/structure.md" > "$HGD/st.tmp" && mv "$HGD/st.tmp" "$HGD/steering/structure.md"
+printf 'x\n' >> "$HGD/src/auth/main.txt"
+dg_stage_close "$HGD" '- Architecture diagram: updated (steering/structure.md)'
+hg_vc @none@ "$HGD"
+grep -q '^REFUSED=0$' <<< "$HG_OUT" && ok "0195 R9 (control): a close naming the structure file it changed is allowed" || bad "0195 R9 (control): a close naming the structure file it changed is allowed" "$(grep -E 'setlist \[|REFUSED=' <<< "$HG_OUT" | head -3 | tr '\n' ' ')"
+hg_vc '*show HEAD:steering/structure.md*' "$HGD"
+hg_refused "0195 R9: the structure file's earlier version unreadable refuses by name, never reads as a changed diagram" vc
+
+# R10, a drawn path's presence (the close gate): status 2 was "absent", a stale node.
+HGD="$WORK/hg-r10"; dg_fixture "$HGD"; dg_arm "$HGD"; printf 'x\n' >> "$HGD/src/auth/main.txt"
+dg_stage_close "$HGD" '- Architecture diagram: no impact'
+hg_vc @none@ "$HGD"
+grep -q '^REFUSED=0$' <<< "$HG_OUT" && ok "0195 R10 (control): a close under an armed half whose drawn paths exist is allowed" || bad "0195 R10 (control): a close under an armed half whose drawn paths exist is allowed" "$(grep -E 'setlist \[|REFUSED=' <<< "$HG_OUT" | head -3 | tr '\n' ' ')"
+hg_vc '*ls-files --cached -- src/auth' "$HGD"
+hg_refused "0195 R10: a drawn path's listing killed refuses by name, never reads the path as absent" vc SLH-DIAGRAM-STALE-NODE
+
+# R11, the diagram files and their text (the close gate): a failed listing was "no diagrams, no nodes".
+hg_vc '*ls-files --cached -- docs/diagrams/[*].md*' "$HGD"
+hg_refused "0195 R11: the diagram files' listing killed refuses by name, never reads as no drawn names" vc
+
+# R12, the committed generated view (the close gate): a failed listing was "no view committed".
+HGD="$WORK/hg-r12"; dg_fixture "$HGD"; dg_arm "$HGD"
+jq '.diagram_command = "cat gen.mmd"' "$HGD/.claude/sdd.json" > "$HGD/sdd.tmp" && mv "$HGD/sdd.tmp" "$HGD/.claude/sdd.json"
+printf '```mermaid\ngraph TD\n  g["src/auth"]\n```\n' > "$HGD/gen.mmd"
+mkdir -p "$HGD/docs/diagrams/generated"; cp "$HGD/gen.mmd" "$HGD/docs/diagrams/generated/view.md"
+git -C "$HGD" add -A; git -C "$HGD" -c core.hooksPath=/dev/null commit -qm "declare the view" >/dev/null 2>&1
+printf 'x\n' >> "$HGD/src/auth/main.txt"; dg_stage_close "$HGD" '- Architecture diagram: no impact'
+hg_vc @none@ "$HGD"
+grep -q '^REFUSED=0$' <<< "$HG_OUT" && ok "0195 R12 (control): a close with its generated view current is allowed" || bad "0195 R12 (control): a close with its generated view current is allowed" "$(grep -E 'setlist \[|REFUSED=' <<< "$HG_OUT" | head -3 | tr '\n' ' ')"
+hg_vc '*ls-files --cached -- docs/diagrams/generated/[*]*' "$HGD"
+hg_refused "0195 R12: the generated view's listing killed refuses by name, never as a view not committed" vc SLH-DIAGRAM-SHAPE
+
+# R13, an ownership file at a tree (the library, no hook reaches it today): a failed read was "absent".
+HGD="$WORK/hg-r13"; hg_inst "$HGD" page; mkdir -p "$HGD/.github"; printf '* @owner\n' > "$HGD/.github/CODEOWNERS"
+git -C "$HGD" add -A; git -C "$HGD" -c core.hooksPath=/dev/null commit -qm owners >/dev/null 2>&1
+hg_run @none@ "$HGD" 'slh_codeowners_load "$D" HEAD; echo "RC=$? STATE=$SLH_CODEOWNERS_STATE"'
+grep -q 'RC=0 STATE=ok' <<< "$HG_OUT" && ok "0195 R13 (control): the ownership file at HEAD is read" || bad "0195 R13 (control): the ownership file at HEAD is read" "$(tr '\n' ' ' <<< "$HG_OUT" | cut -c1-200)"
+hg_run '*HEAD*.github/CODEOWNERS*' "$HGD" 'slh_codeowners_load "$D" HEAD; echo "RC=$? STATE=$SLH_CODEOWNERS_STATE"'
+grep -q '^RC=1 ' <<< "$HG_OUT" && HG_RC=1 || HG_RC=0
+hg_refused "0195 R13: the ownership file at a tree unreadable refuses by name, never reads as absent" rc
+
+# R14, the attestation document at a tree (the push walk's verifier, driven directly): a failed read was "no attestation".
+HGD="$WORK/hg-r14"; hg_inst "$HGD" page; mkdir -p "$HGD/specs/attest"; printf '{}\n' > "$HGD/specs/attest/0001.json"
+git -C "$HGD" add -A; git -C "$HGD" -c core.hooksPath=/dev/null commit -qm attest >/dev/null 2>&1
+hg_run '*HEAD*specs/attest/0001.json*' "$HGD" 'printf "TOKEN=%s\n" "$(slh_attest_verify "$D" specs/0001-thing.md HEAD)"'
+if grep -q '^TOKEN=GIT-FAILED$' <<< "$HG_OUT"; then HG_RC=1; else HG_RC=0; fi
+hg_refused "0195 R14: the attestation's presence at a tree unreadable refuses by name, never reads as NO-ATTESTATION" rc
+
+# R15, the scan past attributes (pre-commit): a failed listing added nothing, a staged blob unscanned.
+HGD="$WORK/hg-r15"; hg_inst "$HGD" page; printf 'notes.txt -diff\n' > "$HGD/.gitattributes"
+git -C "$HGD" add .gitattributes; git -C "$HGD" -c core.hooksPath=/dev/null commit -qm attrs >/dev/null 2>&1
+printf 'a line \342\200\224 with the dash\n' > "$HGD/notes.txt"; git -C "$HGD" add notes.txt
+hg_pc @none@ "$HGD"
+[[ "$HG_RC" -eq 1 ]] && grep -q 'SLH-EMDASH' <<< "$HG_OUT" && ok "0195 R15 (control): an em-dash in a -diff path is read past its attribute and refused" || bad "0195 R15 (control): an em-dash in a -diff path is read past its attribute and refused" "exit $HG_RC: $(grep 'setlist \[' <<< "$HG_OUT" | head -2 | tr '\n' ' ')"
+hg_pc '*diff --cached --numstat*' "$HGD"
+hg_refused "0195 R15: the scan's listing past attributes killed refuses by name, never adds nothing" rc
+
+# R16, the merged branch's page (the close gate): a failed show completed no chore.
+HGD="$WORK/hg-r16"; hg_inst "$HGD" page
+git -C "$HGD" checkout -q -b chore/c; printf 'y\n' >> "$HGD/src/app.js"
+printf -- '- CHORE-001: DONE 2026-10-14. maintenance\n' >> "$HGD/specs/STATUS.md"
+git -C "$HGD" add -A; git -C "$HGD" -c core.hooksPath=/dev/null commit -qm "chore on a pre-record branch" >/dev/null 2>&1
+git -C "$HGD" checkout -q main; printf '{"setlist_status":1,"specs":{"0001":{"status":"active"}},"chores":{}}\n' > "$HGD/.claude/status.json"
+git -C "$HGD" add -A; git -C "$HGD" -c core.hooksPath=/dev/null commit -qm "adopt the record" >/dev/null 2>&1
+git -C "$HGD" -c core.hooksPath=/dev/null merge -q --no-commit --no-ff chore/c >/dev/null 2>&1
+hg_vc @none@ "$HGD"
+grep -q '^REFUSED=0$' <<< "$HG_OUT" && ok "0195 R16 (control): a pre-record branch's chore line completes the chore at the merge" || bad "0195 R16 (control): a pre-record branch's chore line completes the chore at the merge" "$(grep -E 'setlist \[|REFUSED=' <<< "$HG_OUT" | head -3 | tr '\n' ' ')"
+hg_vc '*show [0-9a-f]*:specs/STATUS.md*' "$HGD"
+hg_refused "0195 R16: the merged branch's page unreadable refuses by name, never completes nothing" vc SLH-CLOSES-NO-SPEC
+
+fi; shard_region_end
+# <<< SHARD-END hook-git-0195

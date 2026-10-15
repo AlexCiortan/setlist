@@ -22,19 +22,21 @@ two roles.
 - Planner, additionally: the DECISIONS.md index table; full ADR entries only on
   demand; steering docs only when the planning question touches them.
 - Builder, additionally: only the steering docs the spec's `Owner docs:` header
-  names. That field is load-bearing, not decoration.
+  names. That field is essential: it is how the Builder's budget is set.
 - After a compaction event, and in any multi-hour build, re-read STATUS.md and
   the active spec before continuing.
 
 ## The per-feature loop (Part 7)
 
 Plan (re-ground from STATUS.md, ground-truth the premise against the running
-code, one structured round for genuine forks, propose the spec), branch via
+code, one structured round for real forks, propose the spec; at approval, the
+pre-build reading by the stamped `spec-reader`, advisory, its questions
+answered in the spec or dismissed), branch via
 /setlist:checkpoint, build in small spec-scoped commits, QA Pass 1 automated
 against the criteria, QA Pass 2 human acceptance, close through the gate,
 repeat. Chores run between specs, never during a build.
 
-**Every planning precondition reads the STATUS STATE, never the spec number.**
+Every planning precondition reads the STATUS STATE, never the spec number.
 Close order does not follow spec order. A spec can sit BUILT or PARKED on its
 branch while later specs merge past it, so "0044 is done, therefore 0045 can
 build on it" is false whenever 0044 is parked, and that exact sentence has been
@@ -44,7 +46,7 @@ PARKED both mean it is not.
 
 ## Park, do not improvise
 
-A genuine ambiguity found mid-build goes to specs/STATUS.md under "Open
+A real ambiguity found mid-build goes to specs/STATUS.md under "Open
 questions for the Planner" and is surfaced to the human. Never resolved by
 guessing, never widened into scope. A gate failure that cannot be resolved
 within the spec's scope is parked the same way; never widen scope to fix a
@@ -52,8 +54,8 @@ gate.
 
 ## Interview discipline
 
-When 2 to 4 decisions need locking, ask them as ONE structured multi-question
-round with recommendations inline; only genuine forks become questions. The
+When 2 to 4 decisions need locking, ask them as ONE structured round of several
+questions, with recommendations inline. Only real forks become questions. The
 stopping rule: one round is right, two is fine, three is procrastination.
 
 ## Gotchas (field-observed)
@@ -65,4 +67,4 @@ stopping rule: one round is right, two is fine, three is procrastination.
   reality before its branch opens; never build from the session-zero text.
 - Baked-in judgment calls beat manufactured forks. The same re-ground offered
   its three judgment calls as veto points with recommendations instead of
-  opening a new interview round; reserve questions for genuine forks.
+  opening a new interview round; reserve questions for real forks.

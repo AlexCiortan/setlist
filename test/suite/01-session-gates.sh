@@ -229,11 +229,11 @@ mkdir -p "$RG/specs"
 printf '# Status\n' > "$RG/specs/STATUS.md"
 
 # w. the three observed sources each produce their own pointer
-run_hook "$HOOKS/regrounding-hook.sh" "$RG" "$(session_payload startup)"
+run_hook "$HOOKS/regrounding-hook.sh" "$RG" "$(hook_payload startup)"
 expect_context "regrounding w1: startup points at specs/STATUS.md" "read specs/STATUS.md"
-run_hook "$HOOKS/regrounding-hook.sh" "$RG" "$(session_payload resume)"
+run_hook "$HOOKS/regrounding-hook.sh" "$RG" "$(hook_payload resume)"
 expect_context "regrounding w2: resume warns the repo may have moved" "repo may have moved"
-run_hook "$HOOKS/regrounding-hook.sh" "$RG" "$(session_payload compact)"
+run_hook "$HOOKS/regrounding-hook.sh" "$RG" "$(hook_payload compact)"
 expect_context "regrounding w3: compact warns a summary is not the spec" "a summary of the spec is not the spec"
 
 # =============================================================================
@@ -269,7 +269,7 @@ else
 fi
 
 # AC2: an untouched ACTIVE spec produces no drift warning.
-run_hook "$HOOKS/regrounding-hook.sh" "$SH1" "$(session_payload startup)"
+run_hook "$HOOKS/regrounding-hook.sh" "$SH1" "$(hook_payload startup)"
 if sh_context | grep -q 'SPEC DRIFT'; then
   bad "spec-hash AC2: an untouched spec produces NO drift warning" "it warned on a clean spec"
 else
@@ -281,7 +281,7 @@ expect_context "spec-hash AC2b: the ordinary pointer still ships alongside the c
 # so if THIS warned, the mechanism would cry wolf on every honest close and be
 # switched off within a day.
 printf -- '- Deviations: none\n' >> "$SH1/specs/0001-thing.md"
-run_hook "$HOOKS/regrounding-hook.sh" "$SH1" "$(session_payload startup)"
+run_hook "$HOOKS/regrounding-hook.sh" "$SH1" "$(hook_payload startup)"
 if sh_context | grep -q 'SPEC DRIFT'; then
   bad "spec-hash AC4: editing the Closing report produces NO drift warning" "it warned on an ordinary build append"
 else
@@ -292,7 +292,7 @@ fi
 SH3="$WORK/spechash-3"; sh_fixture "$SH3" ACTIVE yes "Build the thing."
 sed -e 's/Build the thing./Build the OTHER thing./' "$SH3/specs/0001-thing.md" > "$SH3/t" && mv "$SH3/t" "$SH3/specs/0001-thing.md"
 for sh_src in startup resume compact; do
-  run_hook "$HOOKS/regrounding-hook.sh" "$SH3" "$(session_payload "$sh_src")"
+  run_hook "$HOOKS/regrounding-hook.sh" "$SH3" "$(hook_payload "$sh_src")"
   if sh_context | grep -q 'SPEC DRIFT'; then
     ok "spec-hash AC3: a byte changed above the Closing report warns on source=$sh_src"
   else
@@ -302,7 +302,7 @@ done
 
 # AC5: a pre-v1.7 spec has no field. No warning, no error, valid JSON.
 SH5="$WORK/spechash-5"; sh_fixture "$SH5" ACTIVE no "Build the thing."
-run_hook "$HOOKS/regrounding-hook.sh" "$SH5" "$(session_payload startup)"
+run_hook "$HOOKS/regrounding-hook.sh" "$SH5" "$(hook_payload startup)"
 if [[ "$HOOK_RC" -eq 0 ]] && printf '%s' "$HOOK_OUT" | jq -e . >/dev/null 2>&1 && ! sh_context | grep -q 'SPEC DRIFT'; then
   ok "spec-hash AC5: a spec with no Spec-hash field is silent and still emits valid JSON"
 else
@@ -316,7 +316,7 @@ SHNH="$WORK/spechash-nohasher"; sh_fixture "$SHNH" ACTIVE yes "Build the thing."
 sed -e 's/Build the thing./Build the OTHER thing./' "$SHNH/specs/0001-thing.md" > "$SHNH/t" && mv "$SHNH/t" "$SHNH/specs/0001-thing.md"
 SHNH_BIN="$WORK/nohasher-bin"; mkdir -p "$SHNH_BIN"
 for shim in sha256sum shasum; do printf '#!/bin/sh\nexit 127\n' > "$SHNH_BIN/$shim"; chmod +x "$SHNH_BIN/$shim"; done
-HOOK_OUT="$(printf '%s' "$(session_payload startup)" | PATH="$SHNH_BIN:$PATH" CLAUDE_PROJECT_DIR="$SHNH" bash "$HOOKS/regrounding-hook.sh" 2>/dev/null)"
+HOOK_OUT="$(printf '%s' "$(hook_payload startup)" | PATH="$SHNH_BIN:$PATH" CLAUDE_PROJECT_DIR="$SHNH" bash "$HOOKS/regrounding-hook.sh" 2>/dev/null)"
 if sh_context | grep -q 'SPEC INTEGRITY: UNVERIFIED'; then
   ok "spec-hash AC9: with no sha256 tool the check reports UNVERIFIED rather than staying silent"
 else
@@ -348,7 +348,7 @@ fi
 # requires the claim be pinned. If a future edit ever made this emit a denial,
 # the README would be understating what Setlist does, which is the rarer but
 # still real direction of drift.
-run_hook "$HOOKS/regrounding-hook.sh" "$SH3" "$(session_payload startup)"
+run_hook "$HOOKS/regrounding-hook.sh" "$SH3" "$(hook_payload startup)"
 if [[ "$HOOK_RC" -eq 0 ]] \
    && [[ -z "$(printf '%s' "$HOOK_OUT" | jq -r '.setlistAdvisory.verdict // .hookSpecificOutput.permissionDecision // empty')" ]] \
    && sh_context | grep -q 'SPEC DRIFT'; then
@@ -365,7 +365,7 @@ fi
 # be both an A9 violation and a dependency between two deliberately separate
 # trees. Asserted on the DRIFT message, because that is the moment a user is
 # most likely to think this notice is the enforcement.
-run_hook "$HOOKS/regrounding-hook.sh" "$SH3" "$(session_payload startup)"
+run_hook "$HOOKS/regrounding-hook.sh" "$SH3" "$(hook_payload startup)"
 if sh_context | grep -q 'verified at the git-hook layer, which is the only layer that can refuse'; then
   ok "spec-hash advisory boundary: the drift notice names the layer that verifies and states this one does not"
 else
@@ -386,7 +386,7 @@ fi
 # A spec that is not ACTIVE is not the one being built, so it is not checked.
 SHQ="$WORK/spechash-queued"; sh_fixture "$SHQ" QUEUED yes "Build the thing."
 sed -e 's/Build the thing./Build the OTHER thing./' "$SHQ/specs/0001-thing.md" > "$SHQ/t" && mv "$SHQ/t" "$SHQ/specs/0001-thing.md"
-run_hook "$HOOKS/regrounding-hook.sh" "$SHQ" "$(session_payload startup)"
+run_hook "$HOOKS/regrounding-hook.sh" "$SHQ" "$(hook_payload startup)"
 if sh_context | grep -q 'SPEC DRIFT'; then
   bad "spec-hash scope: only the ACTIVE spec is checked" "it warned about a QUEUED spec"
 else
@@ -400,7 +400,7 @@ fi
 run_hook_nojq "$HOOKS/scope-hook.sh" "$SC" "$(edit_payload "$SC/specs/0001-thing.md")"
 expect_deny "no-jq i3: the scope hook fails closed" "jq"
 
-run_hook_nojq "$HOOKS/regrounding-hook.sh" "$RG" "$(session_payload startup)"
+run_hook_nojq "$HOOKS/regrounding-hook.sh" "$RG" "$(hook_payload startup)"
 expect_context "no-jq i5: the pointer still ships and names the condition" "jq is not usable"
 
 # =============================================================================
@@ -463,7 +463,7 @@ expect_deny "toolchain t4: the scope hook names a no-git code when git is broken
 # gates have silently stopped enforcing, session start produced malformed JSON
 # carrying no warning at all: the notice is suppressed by exactly the condition
 # it exists to announce.
-run_hook_brokenjq "$HOOKS/regrounding-hook.sh" "$RG" "$(session_payload startup)"
+run_hook_brokenjq "$HOOKS/regrounding-hook.sh" "$RG" "$(hook_payload startup)"
 if printf '%s' "$HOOK_OUT" | jq -e . >/dev/null 2>&1; then
   ok "broken-jq j5: the re-grounding hook still emits VALID JSON when jq is broken"
 else
@@ -480,7 +480,7 @@ BARE="$WORK/bare"
 git_init "$BARE"
 run_hook "$HOOKS/scope-hook.sh" "$BARE" "$(edit_payload "$BARE/src/app.js")"
 expect_allow "no-sdd x1: the scope hook stays silent outside an instance"
-run_hook "$HOOKS/regrounding-hook.sh" "$BARE" "$(session_payload startup)"
+run_hook "$HOOKS/regrounding-hook.sh" "$BARE" "$(hook_payload startup)"
 expect_allow "no-sdd x2: the regrounding hook stays silent outside an instance"
 fi; shard_region_end
 # <<< SHARD-END session-gates-01
@@ -522,7 +522,7 @@ if [[ "$STAMP_RC" -eq 0 ]]; then
         "these differ from templates/hooks:$STAMP_DIFF (substitution must never touch hook files)"
   fi
 else
-  bad "stamp y: stamp.sh copies all four hooks byte-verbatim" "stamp.sh exited non-zero"
+  bad "stamp y: stamp.sh copies all four hooks byte-verbatim" "stamp.sh exited $STAMP_RC"
 fi
 fi; shard_region_end
 # <<< SHARD-END stamp-verbatim-01
@@ -542,7 +542,9 @@ elif ! cmp -s "$ROOT/templates/claude/agents/close-reviewer.md" "$CRS_F"; then C
 CRS_FM="$(awk 'NR == 1 && $0 == "---" { on = 1; next } on && $0 == "---" { exit } on' "$CRS_F" 2>/dev/null || true)" # fail-open-ok: an empty frontmatter fails every line below
 grep -qx 'name: close-reviewer' <<< "$CRS_FM" || CRS_BAD="$CRS_BAD name"
 grep -qx 'model: opus' <<< "$CRS_FM" || CRS_BAD="$CRS_BAD model-not-the-opus-alias"
-grep -qx 'disallowedTools: Write, Edit' <<< "$CRS_FM" || CRS_BAD="$CRS_BAD not-read-only"
+# Read-only since 2.12.0 by an allow-list (spec 0185, item 4): no Write, no Edit among its tools.
+CRS_TOOLS="$(sed -n 's/^tools: //p' <<< "$CRS_FM")"
+[[ -n "$CRS_TOOLS" ]] && ! grep -qwE 'Write|Edit|MultiEdit|NotebookEdit' <<< "$CRS_TOOLS" || CRS_BAD="$CRS_BAD not-read-only"
 grep -qF 'templates/claude/agents/close-reviewer.md' "$ROOT/skills/upgrade/SKILL.md" || CRS_BAD="$CRS_BAD upgrade-does-not-add-it"
 grep -qF '| `claude/agents/close-reviewer.md` | `.claude/agents/close-reviewer.md` |' "$ROOT/templates/STAMP-TREE.md" || CRS_BAD="$CRS_BAD stamp-tree-row"
 if [[ -z "$CRS_BAD" ]]; then
@@ -552,3 +554,31 @@ else
 fi
 fi; shard_region_end
 # <<< SHARD-END close-review-stamp-0175
+
+# THE SPEC READER, STAMPED (spec 0194, item 4; C-80, R9.1): the pre-build reading at spec
+# approval. The prelude's stamp writes it byte-verbatim; it runs on the delegated tier's alias,
+# its tools are Read, Grep and Glob (no Bash, so no write the harness would not stop), and the
+# places that deliver and describe it name it: STAMP-TREE, the upgrade skill, the spec-authoring
+# skill's one advisory step and Part 7's loop.
+# >>> SHARD-BEGIN spec-reader-stamp-0194 cost=1
+if shard_region spec-reader-stamp-0194; then
+SRS_F="$STAMP_TARGET/.claude/agents/spec-reader.md"
+SRS_BAD=""
+[[ "$STAMP_RC" -eq 0 ]] || SRS_BAD="$SRS_BAD stamp-rc=$STAMP_RC"
+if [[ ! -f "$SRS_F" ]]; then SRS_BAD="$SRS_BAD agent-absent"
+elif ! cmp -s "$ROOT/templates/claude/agents/spec-reader.md" "$SRS_F"; then SRS_BAD="$SRS_BAD agent-not-byte-identical"; fi
+SRS_FM="$(awk 'NR == 1 && $0 == "---" { on = 1; next } on && $0 == "---" { exit } on' "$SRS_F" 2>/dev/null || true)" # fail-open-ok: an empty frontmatter fails every line below
+grep -qx 'name: spec-reader' <<< "$SRS_FM" || SRS_BAD="$SRS_BAD name"
+grep -qx 'model: haiku' <<< "$SRS_FM" || SRS_BAD="$SRS_BAD model-not-the-haiku-alias"
+grep -qx 'tools: Read, Grep, Glob' <<< "$SRS_FM" || SRS_BAD="$SRS_BAD tools-not-read-grep-glob"
+grep -qF 'templates/claude/agents/spec-reader.md' "$ROOT/skills/upgrade/SKILL.md" || SRS_BAD="$SRS_BAD upgrade"
+grep -qF '| `claude/agents/spec-reader.md` | `.claude/agents/spec-reader.md` |' "$ROOT/templates/STAMP-TREE.md" || SRS_BAD="$SRS_BAD stamp-tree-row"
+grep -qF 'run the stamped `spec-reader`' "$ROOT/skills/spec-authoring/SKILL.md" || SRS_BAD="$SRS_BAD spec-authoring-step"
+grep -qF 'The pre-build reading (new in' "$ROOT/setlist-operations.md" || SRS_BAD="$SRS_BAD part-7"
+if [[ -z "$SRS_BAD" ]]; then
+  ok "0194 spec reader stamp: the stamp writes the spec-reader agent byte-verbatim (haiku alias, Read, Grep and Glob only), and STAMP-TREE, the upgrade, spec-authoring and Part 7 name it"
+else
+  bad "0194 spec reader stamp: the stamp writes the spec-reader agent byte-verbatim (haiku alias, Read, Grep and Glob only), and STAMP-TREE, the upgrade, spec-authoring and Part 7 name it" "$SRS_BAD"
+fi
+fi; shard_region_end
+# <<< SHARD-END spec-reader-stamp-0194

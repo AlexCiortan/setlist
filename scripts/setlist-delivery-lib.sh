@@ -56,8 +56,8 @@
 # hooks (a one-line resolver; a variable load; a trailing comment). That is
 # the session-gate parser history replayed inside the guard, and this
 # repository froze those parsers for exactly this reason. So the question is
-# no longer textual. A hook file is OURS when its content hash is in the set
-# of bytes this project has ever shipped for templates/git-hooks/ (every
+# no longer textual. A hook file is OURS when its content hash is in the
+# set of bytes this project has ever shipped for templates/git-hooks/ (every
 # historical blob, listed below), or when it is byte-identical to the current
 # shipped file. Nothing else is ours: an operator-ADJUSTED copy refuses with
 # the file named, a backup discipline, and SETLIST_ADOPT_HOOKSPATH=1 as the
@@ -81,6 +81,15 @@
 # that really is ours, which is the failure the content-hash design exists to
 # avoid.
 KNOWN_SETLIST_HOOK_BLOBS="
+  12edbe6c43903dcd4e3b039318607718767bfefa
+  150dfe9b8f71e292db4b376eb466c6377bdeb06b
+  1f3ba7f43ca976c0745a01ccd490ede9883c8230
+  325ee01dd49cd3774fee57dc350fb1a0790e958f
+  548facdc175da19ad759f6587232a8fc43cb8b34
+  559b888cefb188bc15327ec347f5d602085815d1
+  6b7b698e361d09c28f3b1c01e0bce35117f62c7c
+  77586ed949398cc96beac38a5f58e923c7ea6801
+  83fba43ea08cbc2d17124653773a8ff3e29f20f7
   b8516f7f298b57eb1f3a501c58b8d584f5eaead3
   604e2df8e3e312ed3c29989c72afdce9ec78a7f5
   4e64547f79a4a70c5093e3e542dba26f5d7e7325
@@ -176,6 +185,7 @@ KNOWN_SETLIST_HOOK_BLOBS="
   bf0955f4140fd09d4bd0611e84fd1f18a225d6c5
   c2b8593fc2548511903ba64d6f8ce0ba79aaaf84
   c633f8baa92c3f7fc8fcc3cb6f566e35e7e78696
+  c6b2dbec9542bba38d4c6a150a9358588dd4ed9f
   c7093ce9e66780cb69f8c44ac229a92c7f4b7235
   c980712cb1ab00df02c36736bd68c9f191dc8436
   ce7a2f074dc8b06ee77d7e2607d3595af6f06062
@@ -204,6 +214,7 @@ KNOWN_SETLIST_HOOK_BLOBS="
   f458bc15090e880a4795ec8502077cecd84f151b
   f87c78c62f2a925a3ac52adabf740d5d061aba60
   fb240463618c7b16025c217e75b833437f6c8512
+  ff4f271211b2cc4f4f104198552277f77e458916
   ff54ee3f1de169584ad16713ba79cf561c5d8d66
   38ab0ea94e84a885aebbe412e310075dccca22a7
   8e5002d0abf0e57ddc66e79566c5202af8065b89
@@ -262,6 +273,14 @@ KNOWN_SETLIST_HOOK_BLOBS="
   eeff1b1bb6293e7c74d1646db89a7103d0b0e2e2
   fb6a7e604acf2467940b17c042bee441f5155eae
   28cf15b8ae2906a4d4eaa79fc7b76f7f7b2b376f
+  8afad3868cd52c3e05b8fed8044aa1c282c0174a
+  5a3ea400228cf9d31ad77a8450077dc5d57293e1
+  c5d05694b21470fc06330c6b0daf7b0097d198f2
+  ceb935e4b15a637dd732b5b3abf4db7108842ea5
+  8ba3edf9e75fcabefc3c4aba6cf60bdbc46ab552
+  ee9ce807924a3ad5a1a02399d2fab05ca63b310e
+  56e90ec577af735a4137a5a8a649561b3689da81
+  e5afaf4e1a06574a11a29139b27e349282f6bef8
 "
 
 # THE HASH IS COMPUTED, NEVER ASKED OF GIT (adversary round 3, findings 1-2).
@@ -352,7 +371,7 @@ hooks_layer_is_ours() { # hooks_layer_is_ours <dir> -> 0 when nothing foreign ru
 #     the working tree, absolute as given) and the configured VALUE is printed.
 #   - core.hooksPath UNSET: git runs $GIT_DIR/hooks, which is where
 #     `pre-commit install` and `lefthook install` wire themselves (both leave
-#     hooksPath unset; pre-commit refuses to install when it is set). Setting
+#     hooksPath unset; pre-commit refuses to install when it is configured). Setting
 #     hooksPath makes git ignore that directory ENTIRELY, so unset-but-occupied
 #     is the displacement case the 2.0.0 leg proved (F2): the guard's early
 #     return on unset was exactly the two most common tools' wiring. The
@@ -647,11 +666,18 @@ setlist_deliver_file() { # setlist_deliver_file <src> <root> <rel-dest>
     local backup_reason
     backup_reason="$(setlist_deliver_dest_unsafe "$root" "$rel.setlist-backup")"
     if [[ -n "$backup_reason" ]]; then printf '%s' "$backup_reason"; return 1; fi
-    if ! cp "$dest" "$dest.setlist-backup"; then
-      printf 'could not back up %s before replacing it; the previous file is still in place and was NOT replaced.' "$rel"
-      return 1
+    # THE FIRST BACKUP IS KEPT (spec 0189, the 2.12.0 leg's F11): a later refresh used to
+    # copy over an existing .setlist-backup, so the user's original was gone after a second
+    # differing refresh. A backup already there is never overwritten, and the line says so.
+    if [[ -f "$dest.setlist-backup" ]]; then
+      printf '%s differed and was replaced; the backup from an earlier refresh at %s.setlist-backup is kept and was not overwritten, so the file it replaced is not kept\n' "$rel" "$rel"
+    else
+      if ! cp "$dest" "$dest.setlist-backup"; then
+        printf 'could not back up %s before replacing it; the previous file is still in place and was NOT replaced.' "$rel"
+        return 1
+      fi
+      printf '%s differed and was replaced; the previous file is kept at %s.setlist-backup\n' "$rel" "$rel"
     fi
-    printf '%s differed and was replaced; the previous file is kept at %s.setlist-backup\n' "$rel" "$rel"
   fi
   if ! cp "$src" "$dest"; then
     printf 'could not write %s; whatever was there before is still in place.' "$rel"

@@ -127,15 +127,23 @@ obs_clone() { # obs_clone <repo> <trunk> -> sets OBS_CLONE, the clone at the tru
   OBS_CLONE="$c"
 }
 obs_range() { # obs_range <repo> <tip> -> "since merges commits": the parent of the Nth-newest first-parent merge, or the root
-  local repo="$1" tip="$2" nth since nm nc
-  nth="$(git -C "$repo" rev-list --first-parent --merges "$tip" 2>/dev/null | sed -n "${OBS_MERGES}p")"
+  # Every call read for its status (spec 0189, the 2.12.0 leg's F7): a walk git could not
+  # finish used to read as an empty history and print "nothing to read" at exit 0. A failed
+  # call returns 1, and the caller refuses by the audit's code.
+  local repo="$1" tip="$2" list nth since nm nc
+  list="$(git -C "$repo" rev-list --first-parent --merges "$tip" 2>/dev/null)" || return 1
+  nth="$(sed -n "${OBS_MERGES}p" <<< "$list")"
   if [[ -n "$nth" ]]; then
-    since="$(git -C "$repo" rev-parse --verify --quiet "$nth^1" 2>/dev/null)"
+    since="$(git -C "$repo" rev-parse --verify --quiet "$nth^1" 2>/dev/null)" || return 1
   else
-    since="$(git -C "$repo" rev-list --first-parent "$tip" 2>/dev/null | tail -n1)"
+    list="$(git -C "$repo" rev-list --first-parent "$tip" 2>/dev/null)" || return 1
+    since="$(tail -n1 <<< "$list")"
   fi
-  nm="$(git -C "$repo" rev-list --first-parent --merges "$since..$tip" 2>/dev/null | wc -l | tr -d ' ')"
-  nc="$(git -C "$repo" rev-list --first-parent "$since..$tip" 2>/dev/null | wc -l | tr -d ' ')"
+  [[ -n "$since" ]] || return 1
+  list="$(git -C "$repo" rev-list --first-parent --merges "$since..$tip" 2>/dev/null)" || return 1
+  nm="$(awk 'NF { n++ } END { print n + 0 }' <<< "$list")"
+  list="$(git -C "$repo" rev-list --first-parent "$since..$tip" 2>/dev/null)" || return 1
+  nc="$(awk 'NF { n++ } END { print n + 0 }' <<< "$list")"
   printf '%s %s %s' "$since" "$nm" "$nc"
 }
 obs_range_line() { # obs_range_line <repo> <trunk> <since> <merges> <commits>
@@ -155,8 +163,28 @@ obs_refusals() { # obs_refusals <audit output> <range commits, short, one per li
       code="${BASH_REMATCH[1]}"
       printf '%s\t%s\t[%s]\n' "$sha" "$code" "$code"
     else
-      # No code (E-2): the sentence stands in its place, and its first six words key it.
-      printf '%s\t%s\t%s\n' "$sha" "$(awk '{ for (i = 1; i <= 6 && i <= NF; i++) printf "%s%s", (i > 1 ? " " : ""), $i }' <<< "$rest")" "$(obs_text "$rest")"
+      # No code: an audit stamped before plugin 2.12.0 printed nine refusals as a
+      # sentence alone, and 2.12.0 gives each a code (spec 0184, E-a as ruled). Such
+      # a sentence is keyed by the code it now carries, so the delta across the
+      # upgrade compares a refusal with itself rather than listing it on both sides;
+      # any other codeless line is keyed, as before, by its first six words (0176 E-2).
+      code=""
+      case "$rest" in
+        "parentless commit carrying feature code offered as "*) code=SLH-PARENTLESS-COMMIT ;;
+        "feature code committed directly to "*) code=SLH-DIRECT-COMMIT ;;
+        "chore-shaped merge with no recorded completion"*) code=SLH-UNSPECCED-MERGE ;;
+        "spec "*" has several files matching specs/"*) code=SLH-SPEC-DUPLICATE ;;
+        "spec "*" marked CLOSED with no specs/"*) code=SLH-CLOSES-NO-SPEC-FILE ;;
+        "spec "*" was marked CLOSED without:"*) code=SLH-CLOSE-INCOMPLETE ;;
+        "spec "*" reached "*" without:"*) code=SLH-MERGE-INCOMPLETE ;;
+        "role-path code reached "*" under specs that were already CLOSED before it"*) code=SLH-CLOSES-NO-SPEC ;;
+        "the merge commit itself introduced role-path files that no parent carries"*) code=SLH-MERGE-INJECTED-FILE ;;
+      esac
+      if [[ -n "$code" ]]; then
+        printf '%s\t%s\t[%s]\n' "$sha" "$code" "$code"
+      else
+        printf '%s\t%s\t%s\n' "$sha" "$(awk '{ for (i = 1; i <= 6 && i <= NF; i++) printf "%s%s", (i > 1 ? " " : ""), $i }' <<< "$rest")" "$(obs_text "$rest")"
+      fi
     fi
   done <<< "$out"
 }
@@ -194,7 +222,9 @@ if [[ "$REPORT_MODE" == "observe" ]]; then
   mkdir -p "$OBS_C/.claude"
   jq -n --arg trunk "$OBS_TRUNK" --arg version "$PLUGIN_VERSION" '{trunk: $trunk, roles: {src: $ARGS.positional}, plugin: {version: $version}}' --args "${OBS_ROLES[@]}" > "$OBS_C/.claude/sdd.json" \
     || die "--observe: could not write the configuration into the private clone. Nothing was written in the repository."
-  read -r OBS_SINCE OBS_NM OBS_NC <<< "$(obs_range "$OBS_C" "$OBS_TRUNK")"
+  OBS_RANGE="$(obs_range "$OBS_C" "$OBS_TRUNK")" \
+    || die "[SLH-AUDIT-GIT-FAILED] --observe: git could not read the history of $(obs_text "$OBS_TRUNK") (a missing or corrupt object, an object file git cannot read, or a git process killed mid-read), so observe read nothing: an answer git could not produce is not an empty answer. 'git fsck' in the repository names a damaged object. Nothing was written."
+  read -r OBS_SINCE OBS_NM OBS_NC <<< "$OBS_RANGE"
   printf 'observe (plugin %s): %s, read in a private clone; nothing was installed or written in it.\n' "$PLUGIN_VERSION" "$(obs_text "$OBS_REPO")"
   printf 'roles: %s\n' "$(obs_text "${OBS_ROLES[*]}")"
   obs_range_line "$OBS_C" "$OBS_TRUNK" "$OBS_SINCE" "$OBS_NM" "$OBS_NC"
@@ -269,7 +299,7 @@ else
     newer) DIRECTION=forward ;;
     same)  DIRECTION=same ;;
     older)
-      die "refusing to refresh: this would move the instance BACKWARDS. The instance records plugin $RECORDED; this plugin tree is $PLUGIN_VERSION. Refreshing would reinstall the older enforcement files over the newer ones and report success. If the older plugin is genuinely the one you want, say so deliberately by editing .plugin.version in $SDD first."
+      die "refusing to refresh: this would move the instance BACKWARDS. The instance records plugin $RECORDED; this plugin tree is $PLUGIN_VERSION. Refreshing would reinstall the older enforcement files over the newer ones and report success. If the older plugin is the one you want, say so deliberately by editing .plugin.version in $SDD first."
       ;;
     *)
       die "refusing to refresh: $SDD records a plugin version this script cannot read ('$RECORDED'), so the direction of the move cannot be established. Correct the value, then retry."
@@ -307,6 +337,31 @@ for h in $STAMPED_HOOKS; do
     SAME="$SAME $h.sh"
   else
     CHANGED="$CHANGED $h.sh"
+  fi
+done
+
+# --- the stamped skill and agent files (2.12.0, spec 0185, E-d) -----------------
+# These template files reach an upgraded instance through the same NEW / SAME /
+# CHANGED shape as the session hooks: the verify skill Claude Code asks for
+# before a commit, the close reviewer, whose tool list moved in 2.12.0, and since
+# 2.13.0 (spec 0194) the qa-verifier, which moved to the delegated tier, and
+# the spec reader, new (the pre-build reading at approval). Before
+# 2.12.0 nothing refreshed any of them, and before 2.13.0 the qa-verifier never:
+# an agent arrived only where it was missing, so an instance kept the one it was
+# stamped with. A differing copy is replaced and kept beside it as
+# .setlist-backup, the git hooks' rule.
+STAMPED_FILES=".claude/skills/verify/SKILL.md .claude/agents/close-reviewer.md .claude/agents/qa-verifier.md .claude/agents/spec-reader.md"
+SF_CHANGED=""; SF_SAME=""; SF_NEW=""
+stamped_file_src() { # stamped_file_src <.claude/rel> -> the template it is stamped from
+  printf '%s/templates/claude/%s' "$ROOT" "${1#.claude/}"
+}
+for f in $STAMPED_FILES; do
+  if [[ ! -f "$INSTANCE/$f" ]]; then
+    SF_NEW="$SF_NEW $f"
+  elif cmp -s "$(stamped_file_src "$f")" "$INSTANCE/$f"; then
+    SF_SAME="$SF_SAME $f"
+  else
+    SF_CHANGED="$SF_CHANGED $f"
   fi
 done
 
@@ -642,7 +697,7 @@ GH_CFG_NEEDED=""
 if [[ "$(git -C "$INSTANCE" config --get core.hooksPath 2>/dev/null || true)" != ".githooks" ]]; then  # fail-open-ok: this read DETECTS what needs setting rather than deciding anything; an unreadable config yields the empty string, which does not equal the wanted value, so the setting is reported as needed and then SET below, failing toward doing the work
   GH_CFG_NEEDED="$GH_CFG_NEEDED core.hooksPath"
 fi
-if [[ "$(git -C "$INSTANCE" config --get merge.ff 2>/dev/null || true)" != "false" ]]; then  # fail-open-ok: same as above, the read only detects; an unreadable value is not "false" so merge.ff is reported as needed and then set
+if [[ "$(git -C "$INSTANCE" config --get merge.ff 2>/dev/null || true)" != "false" ]]; then  # fail-open-ok: same as above, the read only detects; an unreadable value is not "false" so merge.ff is reported as needed and then written
   GH_CFG_NEEDED="$GH_CFG_NEEDED merge.ff"
 fi
 
@@ -751,7 +806,7 @@ else
 #
 # THE PREDICATE IS IDENTITY, NOT SPELLING (spec 0173, item 3; KL10 taken; the public bullet
 # "The wiring check recognises only the command spellings settings.json.tmpl ships" retired).
-# The enumerated set above was the honest answer to "a shape test cannot express the file I
+# The enumerated set above was the answer to "a shape test cannot express the file I
 # stamped", and it had two residuals the 2.4.0 and 2.7.0 reviews measured, one in each direction:
 # `bash "$CLAUDE_PROJECT_DIR"/.claude/hooks/bypass-deny.sh`, which RUNS the stamped file, was
 # reported NOT WIRED (the first word is `bash`), and `"$CLAUDE_PROJECT_DIR"/.claude/hooks/
@@ -928,7 +983,7 @@ OURS_TEST='
     # both ways on the shipped bytes before the fix.
     #
     # The consequence was not cosmetic: --apply exits 3 INCOMPLETE every time,
-    # so an instance whose protection is genuinely live can never certify, and
+    # so an instance whose protection is live can never certify, and
     # the documented workaround was to name tools explicitly. Claude Code
     # treats an absent matcher and `*` as "every tool", so both are FULL
     # coverage and the check now says so before it builds any regex.
@@ -1024,8 +1079,8 @@ OURS_TEST='
     if [[ "$SCOPE_UNCOVERED" == "<unreadable>" ]]; then
       WIRING_GAPS="$WIRING_GAPS
   the scope hook's matcher(s) $SCOPE_MATCHERS could not be evaluated as a
-  pattern, so which tools they cover is unknown. Reported as a gap rather than a
-  pass. Set the matcher to \"Write|Edit|MultiEdit|NotebookEdit\"."
+  pattern, so which tools they cover is unknown. Reported as a gap rather than
+  a pass. Set the matcher to \"Write|Edit|MultiEdit|NotebookEdit\"."
     elif [[ -n "$SCOPE_UNCOVERED" ]]; then
       WIRING_GAPS="$WIRING_GAPS
   the scope hook's matcher(s) $SCOPE_MATCHERS do not cover: $SCOPE_UNCOVERED.
@@ -1075,11 +1130,17 @@ verdict_delta() { # verdict_delta -> prints the delta; exit status 0 when both s
   trunk="$(jq -r '.trunk // "main"' "$SDD" 2>/dev/null || printf 'main')" # fail-open-ok: an unreadable name falls back to main, and a trunk that is no branch refuses below
   tip="$(git -C "$INSTANCE" rev-parse --verify --quiet "refs/heads/${trunk}^{commit}" 2>/dev/null)" \
     || die "--delta: the recorded trunk $(obs_text "$trunk") is not a local branch here, so there is no history to compare. Nothing was written."
-  [[ "$(git -C "$INSTANCE" rev-parse --is-shallow-repository 2>/dev/null)" != "true" ]] \
+  # The shallow question read for its status (spec 0189, F18's sibling here): a killed call
+  # read as "not shallow".
+  DELTA_SHALLOW="$(git -C "$INSTANCE" rev-parse --is-shallow-repository 2>/dev/null)" \
+    || die "[SLH-AUDIT-GIT-FAILED] --delta: git could not answer whether this clone is shallow, so the range cannot be trusted to be here: an answer git could not produce is not an empty answer. Nothing was written."
+  [[ "$DELTA_SHALLOW" != "true" ]] \
     || die "--delta: this is a shallow clone, so the merges in the range may not be here to read. Nothing was written."
   obs_clone "$INSTANCE" "$trunk"; c="$OBS_CLONE"
   mkdir -p "$c/.claude" && cp "$SDD" "$c/.claude/sdd.json"
-  read -r since nm nc <<< "$(obs_range "$c" "$trunk")"
+  since="$(obs_range "$c" "$trunk")" \
+    || die "[SLH-AUDIT-GIT-FAILED] --delta: git could not read the history of $(obs_text "$trunk") (a missing or corrupt object, an object file git cannot read, or a git process killed mid-read), so the delta read nothing: an answer git could not produce is not an empty answer. 'git fsck' in the repository names a damaged object. Nothing was written."
+  read -r since nm nc <<< "$since"
   printf 'verdict delta (plugin %s against the audit this instance has stamped), read in a private clone; nothing was written.\n' "$PLUGIN_VERSION"
   obs_range_line "$c" "$trunk" "$since" "$nm" "$nc"
   inrange="$(git -C "$c" log --first-parent --format=%h "$since..$trunk")"
@@ -1135,6 +1196,52 @@ printf '%s\n' "$SKEW_OUT"
 [[ -n "$NEW" ]]     && printf '  missing, would be stamped:%s\n' "$NEW"
 [[ -n "$CHANGED" ]] && printf '  bytes differ, would be replaced:%s\n' "$CHANGED"
 [[ -n "$SAME" ]]    && printf '  already byte-identical:%s\n' "$SAME"
+[[ -n "$SF_NEW" ]]     && printf '  missing, would be stamped:%s\n' "$SF_NEW"
+[[ -n "$SF_CHANGED" ]] && printf '  bytes differ, would be replaced (the previous file is kept as .setlist-backup):%s\n' "$SF_CHANGED"
+SF_KEPT=""; for f in $SF_CHANGED; do [[ -f "$INSTANCE/$f.setlist-backup" ]] && SF_KEPT="$SF_KEPT $f"; done
+[[ -n "$SF_KEPT" ]] && printf '  a .setlist-backup from an earlier refresh is already there and is kept, so the file now in place is not:%s\n' "$SF_KEPT"
+[[ -n "$SF_SAME" ]]    && printf '  already byte-identical:%s\n' "$SF_SAME"
+# THE BYPASS DENY BLOCKS ON FAILURE (2.13.0, spec 0194, C-77). The stamped entry
+# carries "onFailure": "block", so from Claude Code 2.1.295 a bypass deny that
+# times out or cannot start blocks the command. This script never edits
+# .claude/settings.json (the wiring block above says why), so an instance whose
+# entry lacks the key is told the one edit. It is a report and never a wiring
+# gap: the hook runs either way, and only what a failed run does moves.
+# Spec 0196 (the 2.13.0 leg's F4, F10, F17): the stamped entry is the one the wiring check
+# certifies (ours_spellings), never any command containing the name, so a project's own hook
+# of that name is neither edited nor allowed to silence the report; the report fires when ANY
+# stamped entry lacks the key; the edit addresses each such entry by its position, so the
+# printed program carries no path a Windows shell could rewrite; and a PreToolUse that cannot
+# be read is named rather than passed over.
+BD_OURS="$(ours_spellings bypass-deny 2>/dev/null)"; [[ -n "$BD_OURS" ]] || BD_OURS='[]'
+BD_RC=0
+BD_AT="$( { printf '%s\n' "$BD_OURS"; cat "$INSTANCE/.claude/settings.json" 2>/dev/null; } | jq -s -c '
+  .[0] as $ours | .[1]
+  | [ (.hooks.PreToolUse // []) as $p | ($p | if type == "array" then . else error("PreToolUse is not a list") end)
+      | to_entries[] | .key as $i | (.value.hooks // []) | to_entries[]
+      | select((.value.command // "") as $c | ($ours | index($c)) != null)
+      | select(.value.onFailure != "block") | [$i, .key] ]' 2>/dev/null)" || BD_RC=$?
+if [[ "$BD_RC" -ne 0 ]]; then
+  printf '.claude/settings.json could not be read for the bypass deny'"'"'s "onFailure" key (its hooks.PreToolUse is not a list jq can read), so whether a bypass deny that times out or cannot start blocks the command is unknown. Fix the file'"'"'s shape, then refresh again.\n'
+elif [[ "$BD_AT" != "[]" && -n "$BD_AT" ]]; then
+  BD_ONFAIL_PROG="$(printf '%s' "$BD_AT" | jq -r 'map(".hooks.PreToolUse[\(.[0])].hooks[\(.[1])] += {\"onFailure\": \"block\"}") | join(" | ")')"
+  printf '.claude/settings.json: the bypass deny'"'"'s entry carries no "onFailure": "block", so a bypass deny that times out or cannot start still lets the command through. The one edit, which keeps everything else in the file (the key needs Claude Code 2.1.295; an older one ignores it and runs the hook as before):\n'
+  printf "    jq '%s' .claude/settings.json > .claude/settings.json.new && mv .claude/settings.json.new .claude/settings.json\n" "$BD_ONFAIL_PROG"
+fi
+# THE SERVED MODEL IS NOT MIGRATED, IT IS REPORTED (2.12.0, spec 0185, E-b as
+# ruled). Since 2.12.0 the stamp records "models" (the id each phase of the
+# planning binding served at the bootstrap probe). An instance stamped earlier
+# recorded a yes or a no in an answers file that is not kept, and a yes names no
+# model, so there is nothing to translate; the refresh spends no quota to measure
+# one. It says so where settings.json binds a model (the stamp writes that line
+# only when the probe passed), and validate's re-probe names the live ids. No
+# alias is named here: this file holds none of its own (drift m).
+if [[ -n "$(jq -r '.model // empty' "$INSTANCE/.claude/settings.json" 2>/dev/null)" ]] \
+   && ! jq -e '.models | type == "object"' "$SDD" >/dev/null 2>&1; then
+  printf '.claude/sdd.json records no served model ("models"), so /setlist:validate has no stamp-time model to compare a phase with; its re-probe reads the live ids and names them. The refresh records none it did not measure.\n'
+  LEGACY_OP="$(sed -n 's/^opusplan_verified=//p' "$INSTANCE/.claude/stamp-answers.txt" 2>/dev/null | tail -n1)"
+  [[ -z "$LEGACY_OP" ]] || printf '  .claude/stamp-answers.txt carries opusplan_verified=%s, the legacy yes or no: it names no model and is not migrated.\n' "$(obs_text "$LEGACY_OP")"
+fi
 # THE GIT-HOOK BOUNDARY IS REPORTED TOO (1.1.0 leg, fourth run, F21).
 #
 # GH_NEW, GH_CHANGED and GH_CFG_NEEDED were computed a hundred lines above and
@@ -1159,8 +1266,10 @@ fi
 # The forge check and its workflow are reported the same way (2.6.0, spec
 # 0132): the check is a delivered file beside the audit; the workflow is
 # WIRING and is delivered only when absent, because an instance that edited
-# its workflow (a runner label, a matrix) keeps its edit, and the workflow
-# carries no mechanism byte to go stale.
+# its workflow (a runner label, a matrix) keeps its edit. Since 2.13.0 (spec
+# 0196) one thing in it can go stale: the step that writes the forge's answers
+# for --protection-file, without which the refreshed check asks the forge nothing;
+# a workflow lacking it is reported STALE with the one edit, below.
 FC_DEST="$INSTANCE/.claude/hooks/forge-check.sh"
 FC_NOTE=""
 if [[ -f "$ROOT/scripts/forge-check.sh" ]]; then
@@ -1171,13 +1280,22 @@ fi
 [[ -n "$FC_NOTE" ]] && printf '  .claude/hooks/forge-check.sh: %s\n' "$FC_NOTE"
 FCW_SRC="$ROOT/templates/root/.github/workflows/setlist-forge-check.yml"
 FCW_DEST="$INSTANCE/.github/workflows/setlist-forge-check.yml"
-FCW_NOTE=""
+FCW_NOTE=""; FCW_EDIT=""
 if [[ -f "$FCW_SRC" ]]; then
   if [[ ! -f "$FCW_DEST" ]]; then FCW_NOTE="missing, would be delivered (wiring: the required check's workflow)"
+  elif ! grep -qF -- '--protection-file' "$FCW_DEST"; then
+    # Spec 0196 (the 2.13.0 leg's F3, the cold run's M-1): since 2.13.0 the check reads the forge's
+    # answers only from --protection-file, which the template's workflow writes. A workflow from
+    # before that hands the refreshed check no file, so it asks the forge nothing and every forge
+    # question reads as unanswered. That workflow is no longer wiring alone: it is reported STALE
+    # with the one edit, and never edited here (0194 decision 10's shape; the exit is unchanged).
+    FCW_NOTE="is STALE: it hands the refreshed check no --protection-file (it predates 2.13.0), so the check asks the forge nothing and every forge question reads as unanswered; under forge custody every pull request refuses. Replace it with the template's, then re-apply any edit of your own (a runner label, a matrix):"
+    FCW_EDIT="    cp \"$FCW_SRC\" .github/workflows/setlist-forge-check.yml"
   elif ! cmp -s "$FCW_SRC" "$FCW_DEST"; then FCW_NOTE="differs from the template and is LEFT AS IS (wiring, not mechanism; the check it runs is refreshed above)"
   fi
 fi
 [[ -n "$FCW_NOTE" ]] && printf '  .github/workflows/setlist-forge-check.yml: %s\n' "$FCW_NOTE"
+[[ -n "${FCW_EDIT:-}" ]] && printf '%s\n' "$FCW_EDIT"
 # THE QUESTION IS COVERAGE, NOT A SPELLING (spec 0157, SD12; the 2.9.0 leg's
 # F14). This tested one regex, `^[[:space:]]*/\.github/([[:space:]]|$)`, and so
 # it was wrong in both directions at once: a strictly BROADER rule
@@ -1253,6 +1371,8 @@ elif [[ -n "$GH_NEW" || -n "$GH_CHANGED" || -n "$GH_CFG_NEEDED" ]]; then
   printf 'the git-hook boundary (this is the layer that carries the guarantee):\n'
   [[ -n "$GH_NEW" ]]     && printf '  missing, would be delivered:%s\n' "$GH_NEW"
   [[ -n "$GH_CHANGED" ]] && printf '  bytes differ, would be replaced (the previous file is kept as .setlist-backup):%s\n' "$GH_CHANGED"
+  GH_KEPT_R=""; for h in $GH_CHANGED; do [[ -f "$INSTANCE/.githooks/$h.setlist-backup" ]] && GH_KEPT_R="$GH_KEPT_R $h"; done
+  [[ -n "$GH_KEPT_R" ]] && printf '  a .setlist-backup from an earlier refresh is already there and is kept, so the file now in place is not:%s\n' "$GH_KEPT_R"
   [[ -n "$GH_CFG_NEEDED" ]] && printf '  git config still to set:%s   (without BOTH of these the hooks are inert)\n' "$GH_CFG_NEEDED"
   if [[ -n "$FOREIGN_HOOKSPATH" && "$SD2_OURS_EDITED" -eq 1 ]]; then
     printf '  WOULD REPLACE FILES THAT ARE NOT THIS RELEASE%ss:%s in %s\n' "'" " ${FOREIGN_HOOK_NAMES% }" "$FOREIGN_HOOKSPATH_SHOWN"
@@ -1641,7 +1761,7 @@ if [[ -n "$ROLE_EMPTY" ]]; then
 fi
 
 if [[ "$APPLY" != "yes" ]]; then
-  if [[ -n "$CHANGED" ]]; then
+  if [[ -n "$CHANGED" || -n "$SF_CHANGED" ]]; then
     printf 'Report only. Diff each differing file against the plugin template before applying: a deliberate instance edit is a fork to surface in the umbrella ADR, not a file to overwrite in silence.\n'
   fi
   printf 'Re-run with --apply to perform the refresh and record plugin %s in the instance.\n' "$PLUGIN_VERSION"
@@ -1705,6 +1825,10 @@ for h in $STAMPED_HOOKS trunk-audit forge-check; do
   ADV_UNSAFE="$(setlist_deliver_dest_unsafe "$INSTANCE" ".claude/hooks/$h.sh" 2>/dev/null)"
   [[ -z "$ADV_UNSAFE" ]] || die "refusing to refresh: $ADV_UNSAFE Nothing has been changed."
 done
+for f in $STAMPED_FILES; do
+  ADV_UNSAFE="$(setlist_deliver_dest_unsafe "$INSTANCE" "$f" 2>/dev/null)"
+  [[ -z "$ADV_UNSAFE" ]] || die "refusing to refresh: $ADV_UNSAFE Nothing has been changed."
+done
 mkdir -p "$INSTANCE/.claude/hooks" \
   || die "could not create .claude/hooks in $INSTANCE; nothing was refreshed."
 for h in $STAMPED_HOOKS; do
@@ -1720,6 +1844,13 @@ done
 # ours to chmod.
 for h in $STAMPED_HOOKS; do
   chmod +x "$INSTANCE/.claude/hooks/$h.sh" 2>/dev/null || true # fail-open-ok: cosmetic, the hooks are invoked via bash
+done
+for f in $STAMPED_FILES; do
+  mkdir -p "$INSTANCE/$(dirname "$f")" \
+    || die "could not create $(dirname "$f") in $INSTANCE; $f was not delivered. Nothing has been recorded, so re-run once the cause is fixed."
+  ADV_NOTE="$(setlist_deliver_file "$(stamped_file_src "$f")" "$INSTANCE" "$f")" \
+    || die "could not deliver $f: ${ADV_NOTE:-the copy failed} Nothing has been recorded, so re-run once the cause is fixed."
+  [[ -z "$ADV_NOTE" ]] || printf 'refresh-instance.sh: %s\n' "$ADV_NOTE"
 done
 
 # The git hooks and their two config settings. Both halves, because either alone
@@ -1844,14 +1975,22 @@ elif [[ -d "$GITHOOKS_SRC" ]]; then
         deliver "removing the symlink at .githooks/$h.setlist-backup" rm -f "$GH_BACKUP"
         printf 'refresh-instance.sh: .githooks/%s.setlist-backup was a symlink; it was removed (its target untouched) and a real backup takes its place.\n' "$h"
       fi
-      deliver "backing up the previous .githooks/$h" cp "$INSTANCE/.githooks/$h" "$GH_BACKUP"
+      # The first backup is kept (spec 0189, the leg's F11, the same rule as the delivery
+      # library's): a backup already there is never overwritten.
+      GH_KEPT=0
+      if [[ -f "$GH_BACKUP" ]]; then GH_KEPT=1
+      else deliver "backing up the previous .githooks/$h" cp "$INSTANCE/.githooks/$h" "$GH_BACKUP"; fi
       if [[ -L "$INSTANCE/.githooks/$h" ]]; then
         # cp follows a symlink and would overwrite the linked file OUTSIDE
         # the boundary (round 8, finding 3); the link goes, its target stays.
         deliver "removing the symlink at .githooks/$h" rm -f "$INSTANCE/.githooks/$h"
         printf 'refresh-instance.sh: .githooks/%s was a symlink; it becomes a regular file and the linked script was NOT touched.\n' "$h"
       fi
-      printf 'refresh-instance.sh: .githooks/%s differed from the shipped hook; the previous file is kept at .githooks/%s.setlist-backup\n' "$h" "$h"
+      if [[ "$GH_KEPT" -eq 1 ]]; then
+        printf 'refresh-instance.sh: .githooks/%s differed from the shipped hook; the backup from an earlier refresh at .githooks/%s.setlist-backup is kept and was not overwritten, so the file it replaced is not kept\n' "$h" "$h"
+      else
+        printf 'refresh-instance.sh: .githooks/%s differed from the shipped hook; the previous file is kept at .githooks/%s.setlist-backup\n' "$h" "$h"
+      fi
     fi
     # A FAILED COPY LEAVES THE OLD FILE, which is still executable, so the
     # executability loop below would pass over stale bytes and report them
@@ -1948,9 +2087,9 @@ mv "$TMP" "$SDD" \
 [[ "$GATES_WRITE" -eq 1 ]] && printf 'refresh-instance.sh: wrote the gates block to %s (commit empty; close and push the single gate_command), the shape the hooks already read for an absent block.\n' "$SDD"
 [[ -n "$AUDIT_BASELINE_WRITE" ]] && printf 'refresh-instance.sh: recorded audit.baseline %s in %s, so the trunk audit judges this history from the commit this instance was first governed at rather than from the stamp.\n' "$AUDIT_BASELINE_WRITE" "$SDD"
 if [[ -n "$GITHOOKS_SKIP_NOTE" ]]; then
-  printf 'refresh-instance.sh: refreshed the four stamped hooks and recorded plugin %s in %s; the git-hook boundary was NOT touched (see above).\n' "$PLUGIN_VERSION" "$SDD"
+  printf 'refresh-instance.sh: refreshed the four stamped hooks and the stamped skill and agent files, and recorded plugin %s in %s; the git-hook boundary was NOT touched (see above).\n' "$PLUGIN_VERSION" "$SDD"
 else
-  printf 'refresh-instance.sh: refreshed the four stamped hooks, delivered the git-hook boundary (.githooks/ plus core.hooksPath and merge.ff), and recorded plugin %s in %s\n' "$PLUGIN_VERSION" "$SDD"
+  printf 'refresh-instance.sh: refreshed the four stamped hooks and the stamped skill and agent files, delivered the git-hook boundary (.githooks/ plus core.hooksPath and merge.ff), and recorded plugin %s in %s\n' "$PLUGIN_VERSION" "$SDD"
   if [[ "$CHAIN_MODE" -eq 1 ]]; then printf 'refresh-instance.sh: CHAINED the hook layer that ran from %s (foreign: %s): it is recorded as "hooks_chain" in .claude/sdd.json, and each Setlist git hook runs its hook of the same name after its own verdict%s. Commit .claude/sdd.json%s with the migration.\n' "$FOREIGN_HOOKSPATH_SHOWN" "${FOREIGN_HOOK_NAMES% }" "${CHAIN_NAMES:+ (pass-throughs written for: ${CHAIN_NAMES% })}" "${CHAIN_NAMES:+ and those .githooks files}"; fi
 fi
 printf 'Hooks load at session start, so the refreshed gates bind from the NEXT session onward.\n'

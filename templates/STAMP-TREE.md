@@ -67,8 +67,10 @@ documentation, never copied into instances.
 | `claude/settings.json.tmpl` | `.claude/settings.json` | always (model line only when opusplan verified) |
 | `claude/sdd.json.tmpl` | `.claude/sdd.json` | always |
 | `claude/status.json` | `.claude/status.json` | always, byte-verbatim (the structured status record, RP1: stamped instances are structured from birth in both modes; upgrades never receive it, and opt in through checkpoint's human-confirmed transcription) |
-| `claude/agents/qa-verifier.md` | `.claude/agents/qa-verifier.md` | always |
-| `claude/agents/close-reviewer.md` | `.claude/agents/close-reviewer.md` | always (2.11.0, spec 0175: the close review's read-only agent on the `opus` alias, run by `/setlist:checkpoint` at every close; `/setlist:upgrade` adds it where missing) |
+| `claude/agents/qa-verifier.md` | `.claude/agents/qa-verifier.md` | always (since 2.13.0, spec 0194, on the delegated tier, `model: haiku`, and `/setlist:upgrade`'s refresh delivers it, replacing a differing copy and keeping it as `.setlist-backup`) |
+| `claude/agents/spec-reader.md` | `.claude/agents/spec-reader.md` | always (2.13.0, spec 0194: the pre-build reading, a read-only agent on the delegated tier with no Bash, run at spec approval; advisory, read by no gate; `/setlist:upgrade`'s refresh delivers it) |
+| `claude/agents/close-reviewer.md` | `.claude/agents/close-reviewer.md` | always (2.11.0, spec 0175: the close review's read-only agent on the `opus` alias, run by `/setlist:checkpoint` at every close; since 2.12.0, spec 0185, a `tools:` allow-list with no Write or Edit, and `/setlist:upgrade`'s refresh delivers it, replacing a differing copy and keeping it as `.setlist-backup`) |
+| `claude/skills/verify/SKILL.md` | `.claude/skills/verify/SKILL.md` | always, byte-verbatim (2.12.0, spec 0185: the skill Claude Code asks for before a commit; it runs `gate_command` and reports, and refuses nothing; `/setlist:upgrade`'s refresh delivers it) |
 | `claude/skills/scaffold/SKILL.md.tmpl` | `.claude/skills/scaffold/SKILL.md` | new projects (retrofits get no generated skill; the health check ships as `/setlist:validate`) |
 | `claude/skills/browser-qa/SKILL.md` | `.claude/skills/browser-qa/SKILL.md` | ui = yes |
 | `hooks/scope-hook.sh` | `.claude/hooks/scope-hook.sh` | always, byte-verbatim |
@@ -119,10 +121,12 @@ stops nothing and reports nothing.
   question. Neither is a session hook, so the wiring check does not enumerate
   them.
 - `specs/TEMPLATE.md`: Appendix C extracted from the bundled edition at stamp
-  time via `scripts/part.sh appendix-c` (the fenced template body, unfenced).
+  time via `scripts/part.sh appendix-c` (the fenced template body, unfenced),
+  read from `setlist-operations.md`.
   Never a maintained second copy.
-- The edition file itself, copied from the plugin root into the instance root
-  (the audit-trail rule, Part 8 Step 3).
+- The edition itself, its three files copied from the plugin root into the
+  instance root: `setlist.md`, `setlist-operations.md` and `setlist-changelog.md`
+  (the audit-trail rule, Part 8 Step 3; three files since spec 0191).
 - The empty role directories: `steering/`, `journal/`, plus the src and tests
   role paths from the answers file, each holding a `.gitkeep`.
 

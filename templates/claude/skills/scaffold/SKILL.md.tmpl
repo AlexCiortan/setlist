@@ -36,7 +36,7 @@ once, after phase 2 of the bootstrap; a repo that is already scaffolded gets
    (`. .venv/bin/activate && ...`, `poetry run ...`, `npm exec --no -- ...`, which runs the project's installed tool and never downloads one), or
    calls the tools by their in-project paths. VERIFY it before recording it:
 
-       command -v jq >/dev/null 2>&1 || { echo "jq is not installed, so the gate command was not read: install jq first"; false; } && { ( eval "$(jq -r .gate_command .claude/sdd.json)" ) >/dev/null 2>&1; echo $?; }
+       command -v jq >/dev/null 2>&1 || { echo "jq is not installed, so the gate command was not read: install jq first"; false; } && { bash -c "$(jq -r .gate_command .claude/sdd.json)" >/dev/null 2>&1; echo $?; }
 
    It checks for jq first and says so, because without jq the command reads as
    empty and an empty command "passes" (Git for Windows, for one, ships no jq).
@@ -47,9 +47,10 @@ once, after phase 2 of the bootstrap; a repo that is already scaffolded gets
    and that never comes up.
 
 3. Flip "scaffolded" to true in .claude/sdd.json. This arms the scope hook:
-   from the next write on, feature code on the trunk branch (the "trunk"
-   field in .claude/sdd.json) is blocked, so finish the scaffold before
-   flipping.
+   from the next write on, it warns when feature code is written on the trunk
+   branch (the "trunk" field in .claude/sdd.json) and lets the write proceed;
+   it is advice, and the git hooks are what refuse unspecced work, at commit,
+   merge and push. Finish the scaffold before flipping.
 
 4. Write the scaffold record to journal/0001-scaffold.md: dependency versions,
    files created, anything machine-specific learned during the install. Point

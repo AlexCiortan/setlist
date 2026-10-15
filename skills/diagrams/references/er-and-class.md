@@ -8,7 +8,7 @@ subgraph as an endpoint, with any clause moved into the prose under the figure.
 This is the type for the central data structure, and its home is the core-model
 section of `steering/structure.md`, beside the prose that defines it. The prose
 states the invariants; the picture shows the shape. Neither replaces the other,
-and if the prose is thin the answer is better prose, not a bigger diagram.
+and if the prose is thin the answer is better prose; a bigger diagram does not help.
 
 ## Which of the two
 
@@ -70,7 +70,7 @@ classDiagram
 ## The one rule people skip
 
 The core model is the highest-leverage document, so this figure is the one most
-worth keeping true, and it is also the one that rots quietly: schema changes land
+worth keeping true, and it is also the one that rots unnoticed. Schema changes land
 in migrations, and nothing in a migration reminds you the picture exists. The
 close is what catches it, and only if you name the file in the diagram field.
 When a spec changes the shape of the data, `steering/structure.md` is in the

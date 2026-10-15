@@ -12,7 +12,8 @@
 # BYTE-IDENTICAL across the three carriers (the lockstep, extended); the two
 # frozen awk readers are byte-identical to the PRE-RECORD generation pinned in
 # test/fixtures/pre-record-hooks (the absence path retained, proven against
-# the blob rather than inspected); a present-and-malformed record REFUSES on
+# the blob rather than inspected; its one edit, the gate command's run line,
+# is told in test/fixtures/pre-diagram-hooks/PROVENANCE.md, spec 0193); a present-and-malformed record REFUSES on
 # otherwise CLEAN content at every layer that reads it, and never falls back;
 # and absence is byte-identical to the pre-record generation across a case
 # battery, with a discrimination control proving the differential can see a
@@ -466,6 +467,7 @@ else
     RP1_DIFF_N=$((RP1_DIFF_N + 1))
     norm_escape_coaching "$RP1DD/$RP1_CASE-pre.out"; norm_escape_coaching "$RP1DD/$RP1_CASE-now.out"
     norm_baseline_frame "$RP1DD/$RP1_CASE-pre.out"; norm_baseline_frame "$RP1DD/$RP1_CASE-now.out"
+    norm_audit_codes "$RP1DD/$RP1_CASE-pre.out"; norm_audit_codes "$RP1DD/$RP1_CASE-now.out"
     norm_frozen_sigpipe "$RP1DD/$RP1_CASE-pre.out"   # the frozen generation only (spec 0180, E-l)
     if ! cmp -s "$RP1DD/$RP1_CASE-pre.out" "$RP1DD/$RP1_CASE-now.out"; then
       RP1_DIFF_BAD="$RP1_DIFF_BAD $RP1_CASE"

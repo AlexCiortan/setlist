@@ -117,7 +117,9 @@ slh_require_toolchain || exit 1
 
 TRUNK="$(slh_trunk "$PROJ")" || exit 1
 
-STAGED="$(slh_staged_files "$PROJ")"
+# A listing that failed refuses by name inside the reader (spec 0195), and its child's
+# refusal is carried out by the status: the hook judged nothing.
+STAGED="$(slh_staged_files "$PROJ")" || exit 1
 # fail-open-ok: an empty index is nothing to judge. Note the direction: only an
 # EMPTY staged list short-circuits, and it short-circuits because a commit with
 # no content carries no work anywhere.
@@ -146,8 +148,10 @@ STAGED="$(slh_staged_files "$PROJ")"
 # read as clean. A scan that could not run has not passed.
 if __DIFF="$(git -C "$PROJ" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ 2>/dev/null)"; then
   # Text past a -diff or binary attribute (spec 0173, item 5; the library says how and why).
+  # Its git reads refuse by name when one fails (spec 0195), carried out by the status.
+  __XT="$(slh_scan_text_past_attributes "$PROJ" cached)" || exit 1
   __DIFF="$__DIFF
-$(slh_scan_text_past_attributes "$PROJ" cached)"
+$__XT"
   slh_scan_added "$PROJ" "$__DIFF" "staged content"
 else
   slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render the staged diff, so the scan of staged content read nothing and has judged nothing. A scan that could not run has not passed. Run 'git diff --cached' here to see the failure (a configuration value git cannot parse, or a diff driver that fails, looks like this)."
@@ -177,7 +181,10 @@ STATES_RE="$(printf '%s' "$SLH_LIFECYCLE_STATES" | tr ' ' '|')"
 # its own promise rather than an improvement.
 # fail-open-ok: a grep that filters everything out means this commit stages no
 # spec file, so there is no lifecycle transition to pair with an inventory row.
-if slh_record_present "$PROJ" ""; then
+__RP=0
+slh_record_present "$PROJ" "" || __RP=$?
+[ "$__RP" -ne 2 ] || exit 1
+if [ "$__RP" -eq 0 ]; then
   # THE RECORD, OR THE PAGE (RP1, edition v1.12). In a structured instance the
   # lifecycle-flip detection is A STAGED CHANGE TO .claude/status.json, not a
   # parse of the spec's markdown: the record is the machine inventory, so the
@@ -185,7 +192,10 @@ if slh_record_present "$PROJ" ""; then
   # being load-bearing here. A staged MODIFICATION (never the addition: the
   # adoption commit that creates the record is an opt-in, not a flip) demands
   # the human page in the same commit, which is what checkpoint writes anyway.
-  if git -C "$PROJ" diff --cached --name-only --diff-filter=M 2>/dev/null | grep -qx '.claude/status.json'; then
+  # The staged modifications, from the one reader of the staged list (spec 0195: a listing
+  # that fails refuses by name, never reads as "the record was not modified").
+  __MODIFIED="$(slh_staged_files "$PROJ" M)" || exit 1
+  if grep -qx '.claude/status.json' <<< "$__MODIFIED"; then
     if ! grep -qx 'specs/STATUS.md' <<< "$STAGED"; then
       slh_refuse "SLH-STATUS-MISSING" "this commit changes the status record (.claude/status.json) but does not stage specs/STATUS.md; /setlist:checkpoint writes the record and the human inventory page in the same commit, so a record change arriving alone is a hand edit or half a checkpoint."
     fi
@@ -194,7 +204,7 @@ if slh_record_present "$PROJ" ""; then
   # is where a hand edit outside checkpoint gets caught before it is history:
   # present-and-malformed refuses, never a pass, never a fallback to the page.
   if grep -qx '.claude/status.json' <<< "$STAGED"; then
-    __REC_STAGED="$(slh_record_show "$PROJ" "")"
+    __REC_STAGED="$(slh_record_show "$PROJ" "")" || exit 1
     if [ "$(slh_record_verdict "$__REC_STAGED")" != "ok" ]; then
       slh_refuse "SLH-RECORD-MALFORMED" "the staged .claude/status.json is not a well-formed status record (Part 3 of the edition: setlist_status 1; specs.<num> with a lowercase lifecycle token, qa_pass_1 exactly ok, diagram exactly updated or no-impact; chores.<id> open or done with files as an array). Only /setlist:checkpoint writes this file; fix the staged copy rather than committing a record no gate can read, because every gate that reads it refuses a malformed record outright."
     fi
@@ -266,7 +276,7 @@ if [ "$ATTEST_CODE" = "1" ]; then
     __ACTIVE_SPECS=""
   fi
   for __num in $__ACTIVE_SPECS; do
-    __sf="$(slh_spec_path_for "$PROJ" "$__num")"
+    __sf="$(slh_spec_path_for "$PROJ" "$__num")" || exit 1
     # A row that names no readable spec file is the close verification's
     # SLH-CLOSES-NO-SPEC-FILE question, not this one; it is left to the layer
     # that owns it rather than answered twice with two different codes.
@@ -295,8 +305,8 @@ fi
 #               the merge that was just refused.
 #
 # The oracle caught that: the completing commit was blocked in the probe only
-# because SLH-STATUS-MISSING happened to fire on unrelated grounds, which is a
-# pass nobody earned. Same reason a conflicted merge resolution reaches here.
+# because SLH-STATUS-MISSING happened to fire on unrelated grounds, which is
+# a pass nobody earned. Same reason a conflicted merge resolution reaches here.
 # ---------------------------------------------------------------------------
 # THE commit TIER (P2, design section 8; 2.6.0). Every commit runs the
 # instance's `gates.commit` command, the fast gate: empty by default and empty

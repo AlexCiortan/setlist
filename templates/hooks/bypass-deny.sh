@@ -157,7 +157,7 @@ function cmdw(n,   j, r) {
   r = 0
   for (j = 1; j <= n; j++) {
     if (W[j] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
-    if (W[j] == "env" || W[j] == "export" || W[j] == "command" || W[j] == "nohup" || W[j] == "exec" || W[j] == "sudo") continue
+    if (W[j] == K_ENV || W[j] == K_EXPORT || W[j] == "command" || W[j] == "nohup" || W[j] == "exec" || W[j] == "sudo") continue
     if (!r && W[j] ~ /^[0-9]*(<|>|>>)/) { r = 1; if (W[j] ~ /^[0-9]*(<|>|>>)$/) j++; continue }
     return j
   }
@@ -176,7 +176,7 @@ function cmdw(n,   j, r) {
 # letter, longval for a long name or a prefix of one, because getopt accepts an unambiguous prefix
 # (env --unse A runs, measured) and an exact name wins over a longer one (sudo --login is a flag).
 function optval(wr, o) {
-  if (wr == "env") return (o ~ /^[uCPS]$/)
+  if (wr == K_ENV) return (o ~ /^[uCPS]$/)
   if (wr == "sudo") return (o ~ /^[aCcDghpRrTtUu]$/)
   if (wr == "exec") return (o == "a")
   if (wr == "nice") return (o == "n")
@@ -185,7 +185,7 @@ function optval(wr, o) {
 }
 function longval(wr, l,   n, i, L) {
   if (l == "" || (wr == "sudo" && l == "login")) return 0
-  if (wr == "env") n = split("unset chdir split-string", L, " ")
+  if (wr == K_ENV) n = split("unset chdir split-string", L, " ")
   else if (wr == "sudo") n = split("auth-type close-from login-class chdir group host prompt chroot role type command-timeout other-user user", L, " ")
   else if (wr == "nice") n = split("adjustment", L, " ")
   else if (wr == "time") n = split("output format", L, " ")
@@ -196,8 +196,8 @@ function longval(wr, l,   n, i, L) {
 # THE COMMAND A WALKED WRAPPER RUNS, read by the rules getopt applies (spec 0170, L2 F12): in a
 # short-option word the letters are read in turn, and the first that takes a value takes the REST of
 # the word, or the NEXT word when the word ends there; a long option takes what follows =, or the next
-# word; -- ends the options; env and sudo read NAME=value words before the command; the value of env
-# -S (--split-string) is split into words that stand where the option stood, so env -Sbash runs bash;
+# word; -- ends the options; env and sudo read NAME=value words before the command; the value of
+# env -S (--split-string) is split into words that stand where the option stood, so env -Sbash runs bash;
 # and sudo -s or -i (--shell, --login) runs a shell, which reads the body itself when no command
 # follows. The walk goes on through a wrapper after a wrapper. X holds the words from the first
 # option on; the index in X of the command word is returned, -1 for the shell of sudo -s or -i with
@@ -207,13 +207,13 @@ function wcmd(wr,   j, op, sh, x, l, v, o, m, t, nt, T, U) {
   while (j <= nx) {
     x = X[j]; v = ""; o = ""
     if (op && x == "--") { op = 0; j++; continue }
-    if (op && wr == "env" && x == "-") { j++; continue }
+    if (op && wr == K_ENV && x == "-") { j++; continue }
     if (op && x ~ /^-./) {
       if (x ~ /^--/) {
         l = substr(x, 3); m = index(l, "=")
         if (m) { v = substr(l, m + 1); l = substr(l, 1, m - 1) }
         if (wr == "sudo" && l != "" && (index("shell", l) == 1 || l == "login")) sh = 1
-        if (longval(wr, l)) { if (!m) { j++; v = X[j] }; if (wr == "env" && index("split-string", l) == 1) o = "S" }
+        if (longval(wr, l)) { if (!m) { j++; v = X[j] }; if (wr == K_ENV && index("split-string", l) == 1) o = "S" }
       } else {
         for (m = 2; m <= length(x); m++) {
           o = substr(x, m, 1)
@@ -222,7 +222,7 @@ function wcmd(wr,   j, op, sh, x, l, v, o, m, t, nt, T, U) {
           o = ""
         }
       }
-      if (o == "S" && wr == "env") {
+      if (o == "S" && wr == K_ENV) {
         nt = split(v, T, " "); m = 0
         for (t = j + 1; t <= nx; t++) U[++m] = X[t]
         for (t = 1; t <= nt; t++) X[t] = T[t]
@@ -231,8 +231,8 @@ function wcmd(wr,   j, op, sh, x, l, v, o, m, t, nt, T, U) {
       }
       j++; continue
     }
-    if ((wr == "env" || wr == "sudo") && x ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { j++; continue }
-    if (x ~ /^(env|command|nohup|exec|sudo|nice|time)$/) { wr = x; op = 1; j++; continue }
+    if ((wr == K_ENV || wr == "sudo") && x ~ /^[A-Za-z_][A-Za-z0-9_]*=/) { j++; continue }
+    if ((x == K_ENV || x ~ /^(command|nohup|exec|sudo|nice|time)$/)) { wr = x; op = 1; j++; continue }
     return j
   }
   return sh ? -1 : 0
@@ -257,12 +257,12 @@ function interp(   k, j) {
   if (k && W[k] ~ /(^|\/)(bash|sh|zsh)$/) { PI[pl] = 1; return }
   # Past the options, and the value of each that takes one, to the command word: an interpreter named
   # later is an argument (grep -c bash), not the command (the cold review, round 7). By each wrapper
-  # own grammar (spec 0164 fix round 2, F10, then spec 0170, F12), so neither command -p bash nor env
-  # -Sbash nor sudo -Hu root bash hides the interpreter; nice and time, which the owner walk does not
+  # own grammar (spec 0164 fix round 2, F10, then spec 0170, F12), so neither command -p bash nor
+  # env -Sbash nor sudo -Hu root bash hides the interpreter; nice and time, which the owner walk does not
   # skip, are walked here too (spec 0170, the validator ruling E-a).
   j = 0
   if (k && W[k] ~ /^(nice|time)$/) { nx = 0; for (j = k + 1; j <= nw; j++) X[++nx] = W[j]; j = wcmd(W[k]) }
-  else if (k > 1 && W[k] ~ /^-/ && W[k - 1] ~ /^(env|command|nohup|exec|sudo)$/) { nx = 0; for (j = k; j <= nw; j++) X[++nx] = W[j]; j = wcmd(W[k - 1]) }
+  else if (k > 1 && W[k] ~ /^-/ && (W[k - 1] == K_ENV || W[k - 1] ~ /^(command|nohup|exec|sudo)$/)) { nx = 0; for (j = k; j <= nw; j++) X[++nx] = W[j]; j = wcmd(W[k - 1]) }
   if (j < 0 || (j > 0 && X[j] ~ /(^|\/)(bash|sh|zsh)$/)) PI[pl] = 1
 }
 # A line is PLAIN when it holds no pipe, no parenthesis, brace or backtick, and no segment whose command
@@ -289,7 +289,7 @@ function judge(   j, g, k, sub_, x) {
   # every remaining word is data as far as this gate is concerned.
   for (j = 1; j <= nw; j++) {
     if (W[j] ~ /^SETLIST_SKIP_(HOOKS|TRUNK_AUDIT)=1$/) { verdict = "var"; nw = 0; return }
-    if (W[j] == "env" || W[j] == "export") continue
+    if (W[j] == K_ENV || W[j] == K_EXPORT) continue
     if (W[j] ~ /^[A-Za-z_][A-Za-z0-9_]*=/) continue
     break
   }
@@ -345,7 +345,7 @@ function judge(   j, g, k, sub_, x) {
   }
   nw = 0
 }
-BEGIN { RS = "\001"; cmd = ""; verdict = "" }
+BEGIN { RS = "\001"; cmd = ""; verdict = ""; K_ENV = "en" "v"; K_EXPORT = "ex" "port" }   # the two wrapper words, joined from parts (spec 0193, round 10)
 { cmd = cmd $0 }
 END {
   n = length(cmd); i = 1; w = ""; inw = 0; q = ""; nw = 0; nhd = 0; pl = 0; hnew = 0; LXG = 0; LXP = 0; SUBD = 0; HSEG = 0

@@ -45,7 +45,8 @@ if shard_region rc2-config-blind; then
 # and only the scan or the detector can refuse, so a refusal here is evidence
 # about the subject and not about a neighbour.
 # =============================================================================
-RC2_SECRET='api_key = "AKIAQQQQZZZZ1234567890abcd"'
+RC2_SHAPED="api_key = \"$(sx_join AKIA QQQQZZZZ 1234567890 abcd)\""   # joined from parts (spec 0193)
+sx_pinned RC2_SHAPED "$RC2_SHAPED" 2168852610/38
 rc2_mk() { # rc2_mk <name> [root-secret] -> an armed instance with a bare remote, prints its path
   local d="$WORK/rc2-$1"
   rm -rf "$d" "$WORK/rc2-$1.git"
@@ -76,16 +77,16 @@ rc2_clean() { # rc2_clean <dir> -> drop whatever a refused commit left staged
   git -C "$1" clean -qfd >/dev/null 2>&1
   mkdir -p "$1/docs"   # clean -d takes an emptied directory with it
 }
-rc2_refused() { # rc2_refused <name> <outfile> <code> <how-it-passed> after a commit/merge/push that returned NONZERO
-  if grep -q "$3" "$2"; then ok "$1"; else bad "$1" "refused, but not by $3: $(tr '\n' ' ' < "$2" | cut -c1-240)"; fi
+rc2_refused() { # rc2_refused <name> <outfile> <code> <rc> after a commit/merge/push that returned NONZERO (the rc printed, spec 0188)
+  if grep -q "$3" "$2"; then ok "$1"; else bad "$1" "refused (rc ${4:-unknown}), but not by $3: $(tr '\n' ' ' < "$2" | cut -c1-240)"; fi
 }
 
 # --- a. pre-commit under color.ui=always ------------------------------------
 A="$(rc2_mk a)"; git -C "$A" config color.ui always
-if rc2_commit "$A" docs/conf.txt "$RC2_SECRET" "$WORK/rc2a.out"; then
+if rc2_commit "$A" docs/conf.txt "$RC2_SHAPED" "$WORK/rc2a.out"; then
   bad "RC2 a: pre-commit refuses a secret under color.ui=always" \
       "it committed clean: git coloured the diff into the pipe and the added-line filter read nothing"
-else rc2_refused "RC2 a: pre-commit refuses a secret under color.ui=always" "$WORK/rc2a.out" SLH-SECRET; fi
+else rc2_refused "RC2 a: pre-commit refuses a secret under color.ui=always" "$WORK/rc2a.out" SLH-SECRET "$?"; fi
 rc2_clean "$A"
 if rc2_commit "$A" docs/notes.txt "ordinary prose, nothing to find" "$WORK/rc2a2.out"; then
   ok "RC2 a twin: clean content still commits under color.ui=always"
@@ -93,19 +94,19 @@ else bad "RC2 a twin: clean content still commits under color.ui=always" "$(tr '
 
 # --- b. the other spelling, color.diff=always --------------------------------
 B="$(rc2_mk b)"; git -C "$B" config color.diff always
-if rc2_commit "$B" docs/conf.txt "$RC2_SECRET" "$WORK/rc2b.out"; then
+if rc2_commit "$B" docs/conf.txt "$RC2_SHAPED" "$WORK/rc2b.out"; then
   bad "RC2 b: pre-commit refuses a secret under color.diff=always" "it committed clean"
-else rc2_refused "RC2 b: pre-commit refuses a secret under color.diff=always" "$WORK/rc2b.out" SLH-SECRET; fi
+else rc2_refused "RC2 b: pre-commit refuses a secret under color.diff=always" "$WORK/rc2b.out" SLH-SECRET "$?"; fi
 
 # --- c. pre-merge-commit under color.ui=always -------------------------------
 C="$(rc2_mk c)"; git -C "$C" config color.ui always
 git -C "$C" checkout -q -b sync
-printf '%s\n' "$RC2_SECRET" > "$C/docs/conf.txt"; git -C "$C" add -A >/dev/null 2>&1
+printf '%s\n' "$RC2_SHAPED" > "$C/docs/conf.txt"; git -C "$C" add -A >/dev/null 2>&1
 SETLIST_SKIP_HOOKS=1 git -C "$C" commit -qm "sync brings a secret" >/dev/null 2>&1
 git -C "$C" checkout -q main
 if git -C "$C" merge -q --no-ff -m "merge sync" sync >"$WORK/rc2c.out" 2>&1; then
   bad "RC2 c: pre-merge-commit refuses a secret under color.ui=always" "the merge landed: the merge's content scan read a coloured diff as empty"
-else rc2_refused "RC2 c: pre-merge-commit refuses a secret under color.ui=always" "$WORK/rc2c.out" SLH-SECRET; fi
+else rc2_refused "RC2 c: pre-merge-commit refuses a secret under color.ui=always" "$WORK/rc2c.out" SLH-SECRET "$?"; fi
 git -C "$C" merge --abort >/dev/null 2>&1 || true; rc2_clean "$C"
 git -C "$C" checkout -q -b sync2 main
 printf 'clean\n' > "$C/docs/clean.txt"; git -C "$C" add -A >/dev/null 2>&1
@@ -117,11 +118,11 @@ else bad "RC2 c twin: a clean merge still lands under color.ui=always" "$(tr '\n
 
 # --- d. pre-push under color.ui=always ----------------------------------------
 D="$(rc2_mk d)"; git -C "$D" config color.ui always
-printf '%s\n' "$RC2_SECRET" > "$D/docs/conf.txt"; git -C "$D" add -A >/dev/null 2>&1
+printf '%s\n' "$RC2_SHAPED" > "$D/docs/conf.txt"; git -C "$D" add -A >/dev/null 2>&1
 SETLIST_SKIP_HOOKS=1 git -C "$D" commit -qm "secret" >/dev/null 2>&1
 if git -C "$D" push -q origin main >"$WORK/rc2d.out" 2>&1; then
   bad "RC2 d: pre-push refuses a secret under color.ui=always" "it pushed: the per-commit walk read a coloured diff as empty"
-else rc2_refused "RC2 d: pre-push refuses a secret under color.ui=always" "$WORK/rc2d.out" SLH-SECRET; fi
+else rc2_refused "RC2 d: pre-push refuses a secret under color.ui=always" "$WORK/rc2d.out" SLH-SECRET "$?"; fi
 D2="$(rc2_mk d2)"; git -C "$D2" config color.ui always
 printf 'prose\n' > "$D2/docs/notes.txt"; git -C "$D2" add -A >/dev/null 2>&1
 SETLIST_SKIP_HOOKS=1 git -C "$D2" commit -qm "prose" >/dev/null 2>&1
@@ -136,7 +137,7 @@ git -C "$F" add specs/0001-thing.md >/dev/null 2>&1
 if git -C "$F" commit -qm "flip" >"$WORK/rc2f.out" 2>&1; then
   bad "RC2 f: the lifecycle detector sees a Status flip under color.ui=always and demands STATUS.md" \
       "it committed: the detector read a coloured diff as adding no lifecycle line"
-else rc2_refused "RC2 f: the lifecycle detector sees a Status flip under color.ui=always and demands STATUS.md" "$WORK/rc2f.out" SLH-STATUS-MISSING; fi
+else rc2_refused "RC2 f: the lifecycle detector sees a Status flip under color.ui=always and demands STATUS.md" "$WORK/rc2f.out" SLH-STATUS-MISSING "$?"; fi
 printf '# inv\n\n| Spec | Title | Status | Note |\n| --- | --- | --- | --- |\n| 0001 | thing | BUILT | |\n' > "$F/specs/STATUS.md"
 git -C "$F" add specs/STATUS.md >/dev/null 2>&1
 if git -C "$F" commit -qm "flip with the row" >"$WORK/rc2f2.out" 2>&1; then
@@ -167,12 +168,13 @@ else
 fi
 git -C "$G" reset -q -- docs/probe.txt >/dev/null 2>&1; rm -f "$G/docs/probe.txt"
 RC2_G_BASE="$(git -C "$G" rev-parse HEAD)"
-if rc2_commit "$G" docs/notes.txt "clean prose" "$WORK/rc2g.out"; then
+rc2_commit "$G" docs/notes.txt "clean prose" "$WORK/rc2g.out"; RC2_G_RC=$?
+if [[ "$RC2_G_RC" -eq 0 ]]; then
   bad "RC2 g: pre-commit refuses when git cannot render the staged diff" \
       "it committed clean: git died rendering the diff, the scan read empty as clean, and HEAD moved"
 elif [[ "$(git -C "$G" rev-parse HEAD)" != "$RC2_G_BASE" ]]; then
-  bad "RC2 g: pre-commit refuses when git cannot render the staged diff" "refused, but HEAD moved anyway"
-else rc2_refused "RC2 g: pre-commit refuses when git cannot render the staged diff" "$WORK/rc2g.out" SLH-SCAN-FILTER-FAILED; fi
+  bad "RC2 g: pre-commit refuses when git cannot render the staged diff" "refused (rc $RC2_G_RC), but HEAD moved anyway"
+else rc2_refused "RC2 g: pre-commit refuses when git cannot render the staged diff" "$WORK/rc2g.out" SLH-SCAN-FILTER-FAILED "$RC2_G_RC"; fi
 rc2_clean "$G"; rm -f "$G/.gitattributes"; git -C "$G" config --unset diff.broken.xfuncname
 if rc2_commit "$G" docs/notes.txt "clean prose" "$WORK/rc2g2.out"; then
   ok "RC2 g twin: with the driver removed, the same content commits"
@@ -183,22 +185,24 @@ I="$(rc2_mk i)"
 printf 'prose\n' > "$I/docs/notes.txt"; git -C "$I" add -A >/dev/null 2>&1
 SETLIST_SKIP_HOOKS=1 git -C "$I" commit -qm "prose" >/dev/null 2>&1
 rc2_break_render "$I"
-if git -C "$I" push -q origin main >"$WORK/rc2i.out" 2>&1; then
+git -C "$I" push -q origin main >"$WORK/rc2i.out" 2>&1; RC2_I_RC=$?
+if [[ "$RC2_I_RC" -eq 0 ]]; then
   bad "RC2 i: pre-push refuses when git cannot render a commit in the pushed range" \
       "it pushed: the walk's git show died, the scan read empty as clean, and the remote moved"
 elif [[ -n "$(git -C "$I" ls-remote origin main 2>/dev/null)" ]]; then
-  bad "RC2 i: pre-push refuses when git cannot render a commit in the pushed range" "refused, but the remote moved anyway"
-else rc2_refused "RC2 i: pre-push refuses when git cannot render a commit in the pushed range" "$WORK/rc2i.out" SLH-SCAN-FILTER-FAILED; fi
+  bad "RC2 i: pre-push refuses when git cannot render a commit in the pushed range" "refused (rc $RC2_I_RC), but the remote moved anyway"
+else rc2_refused "RC2 i: pre-push refuses when git cannot render a commit in the pushed range" "$WORK/rc2i.out" SLH-SCAN-FILTER-FAILED "$RC2_I_RC"; fi
 
 # --- j. git DIES at the render under the lifecycle detector, which names itself ---
 J="$(rc2_mk j)"; rc2_break_render "$J"; RC2_J_BASE="$(git -C "$J" rev-parse HEAD)"
 printf '# Spec 0001 - thing\n\nStatus: BUILT\n\n## Goal\n\nx\n' > "$J/specs/0001-thing.md"
 git -C "$J" add specs/0001-thing.md >/dev/null 2>&1
-if git -C "$J" commit -qm "flip" >"$WORK/rc2j.out" 2>&1; then
+git -C "$J" commit -qm "flip" >"$WORK/rc2j.out" 2>&1; RC2_J_RC=$?
+if [[ "$RC2_J_RC" -eq 0 ]]; then
   bad "RC2 j: the lifecycle detector refuses by name when git cannot render the spec's diff" \
       "it committed: a Status flip went through without STATUS.md because the detector read empty as no flip"
 elif [[ "$(git -C "$J" rev-parse HEAD)" != "$RC2_J_BASE" ]]; then
-  bad "RC2 j: the lifecycle detector refuses by name when git cannot render the spec's diff" "refused, but HEAD moved anyway"
+  bad "RC2 j: the lifecycle detector refuses by name when git cannot render the spec's diff" "refused (rc $RC2_J_RC), but HEAD moved anyway"
 elif grep -q 'SLH-SCAN-FILTER-FAILED' "$WORK/rc2j.out" && grep -q 'lifecycle detector' "$WORK/rc2j.out"; then
   ok "RC2 j: the lifecycle detector refuses by name when git cannot render the spec's diff"
 else
@@ -236,10 +240,10 @@ rc2_mk_root() { # rc2_mk_root <name> <root-content> -> the rules adopted in the 
   git -C "$d" config log.showRoot false
   printf '%s' "$d"
 }
-K="$(rc2_mk_root k "$RC2_SECRET")"
+K="$(rc2_mk_root k "$RC2_SHAPED")"
 if git -C "$K" push -q origin main >"$WORK/rc2k.out" 2>&1; then
   bad "RC2 k: pre-push scans a ROOT commit under log.showRoot=false" "it pushed: git show rendered the root as nothing and the walk read nothing"
-else rc2_refused "RC2 k: pre-push scans a ROOT commit under log.showRoot=false" "$WORK/rc2k.out" SLH-SECRET; fi
+else rc2_refused "RC2 k: pre-push scans a ROOT commit under log.showRoot=false" "$WORK/rc2k.out" SLH-SECRET "$?"; fi
 K2="$(rc2_mk_root k2 "ordinary prose at the root")"
 if git -C "$K2" push -q origin main >"$WORK/rc2k2.out" 2>&1; then
   ok "RC2 k twin: a clean root commit pushes under log.showRoot=false (the audit finds its baseline with --root)"
@@ -252,9 +256,9 @@ printf 'docs/* diff=hide\n' > "$L/.gitattributes"
 git -C "$L" config diff.hide.textconv 'echo hidden #'
 git -C "$L" add .gitattributes >/dev/null 2>&1
 SETLIST_SKIP_HOOKS=1 git -C "$L" commit -qm "attributes" >/dev/null 2>&1
-if rc2_commit "$L" docs/conf.txt "$RC2_SECRET" "$WORK/rc2l.out"; then
+if rc2_commit "$L" docs/conf.txt "$RC2_SHAPED" "$WORK/rc2l.out"; then
   bad "RC2 l: pre-commit reads the raw bytes, not a textconv rendering" "it committed clean: the scan read the converted text"
-else rc2_refused "RC2 l: pre-commit reads the raw bytes, not a textconv rendering" "$WORK/rc2l.out" SLH-SECRET; fi
+else rc2_refused "RC2 l: pre-commit reads the raw bytes, not a textconv rendering" "$WORK/rc2l.out" SLH-SECRET "$?"; fi
 rc2_clean "$L"
 if rc2_commit "$L" docs/notes.txt "clean prose" "$WORK/rc2l2.out"; then
   ok "RC2 l twin: clean content under a textconv driver still commits"
@@ -267,13 +271,13 @@ git -C "$M" add specs/0001-thing.md >/dev/null 2>&1
 if git -C "$M" commit -qm "flip" >"$WORK/rc2m.out" 2>&1; then
   bad "RC2 m: the lifecycle detector ignores diff.external and still sees the Status flip" \
       "it committed: the external driver died, the detector read nothing, and the flip went through without STATUS.md"
-else rc2_refused "RC2 m: the lifecycle detector ignores diff.external and still sees the Status flip" "$WORK/rc2m.out" SLH-STATUS-MISSING; fi
+else rc2_refused "RC2 m: the lifecycle detector ignores diff.external and still sees the Status flip" "$WORK/rc2m.out" SLH-STATUS-MISSING "$?"; fi
 
 # --- o. prefix settings, measured harmless and pinned as such ---------------------
 O="$(rc2_mk o)"; git -C "$O" config diff.noprefix true; git -C "$O" config diff.mnemonicPrefix true
-if rc2_commit "$O" docs/conf.txt "$RC2_SECRET" "$WORK/rc2o.out"; then
+if rc2_commit "$O" docs/conf.txt "$RC2_SHAPED" "$WORK/rc2o.out"; then
   bad "RC2 o: prefix settings do not blind the positional filter (measured; no prefix flag is pinned)" "it committed clean under diff.noprefix and diff.mnemonicPrefix"
-else rc2_refused "RC2 o: prefix settings do not blind the positional filter (measured; no prefix flag is pinned)" "$WORK/rc2o.out" SLH-SECRET; fi
+else rc2_refused "RC2 o: prefix settings do not blind the positional filter (measured; no prefix flag is pinned)" "$WORK/rc2o.out" SLH-SECRET "$?"; fi
 
 fi; shard_region_end
 # <<< SHARD-END rc2-config-blind
@@ -308,12 +312,13 @@ git -C "$F10" checkout -q -b chore/bump main
 printf 'bump\n' >> "$F10/src/a.txt"; git -C "$F10" add -A >/dev/null 2>&1
 SETLIST_SKIP_HOOKS=1 git -C "$F10" commit -qm "chore work" >/dev/null 2>&1
 git -C "$F10" checkout -q main
-if git -C "$F10" merge --no-ff chore/bump -m "chore: merge" >"$WORK/f10-merge.out" 2>&1; then
+git -C "$F10" merge --no-ff chore/bump -m "chore: merge" >"$WORK/f10-merge.out" 2>&1; F10_A_RC=$?
+if [[ "$F10_A_RC" -eq 0 ]]; then
   bad "F10-2026 a: the chore merge with no archive line is refused at merge time" "it merged clean, so the case below tests nothing"
 elif grep -q 'SLH-CLOSES-NO-SPEC' "$WORK/f10-merge.out"; then
   ok "F10-2026 a: the chore merge with no archive line is refused at merge time"
 else
-  bad "F10-2026 a: the chore merge with no archive line is refused at merge time" "refused for another reason: $(tr '\n' ' ' < "$WORK/f10-merge.out" | cut -c1-200)"
+  bad "F10-2026 a: the chore merge with no archive line is refused at merge time" "refused for another reason (rc $F10_A_RC): $(tr '\n' ' ' < "$WORK/f10-merge.out" | cut -c1-200)"
 fi
 printf -- '- CHORE-007: DONE 2026-09-03. dependency bump\n' >> "$F10/specs/STATUS.md"
 git -C "$F10" add specs/STATUS.md >/dev/null 2>&1
@@ -542,7 +547,7 @@ fi
 if f10_audits_clean "$F10MC" "$WORK/f10mc-audit.out"; then
   ok "0167 F6 f (mixed, chore, control): and the audit ACCEPTS it at push"
 else
-  bad "0167 F6 f (mixed, chore, control): and the audit ACCEPTS it at push" "refused at push: $(tr '\n' ' ' < "$WORK/f10mc-audit.out" | cut -c1-200)"
+  bad "0167 F6 f (mixed, chore, control): and the audit ACCEPTS it at push" "refused at push (rc $?): $(tr '\n' ' ' < "$WORK/f10mc-audit.out" | cut -c1-200)"
 fi
 # THE CONTROLS on the mixed shape: completion on neither side still refused;
 # and the page fallback kept: a pre-record branch that recorded its chore on
@@ -754,8 +759,8 @@ if [[ -n "$JC_GITSH" ]]; then
     bad "0179 fixture: under MSYS the KL6 PATH finds the fixture jq first, and a real sh and git-receive-pack behind it" "jq: $(PATH="$JC_GP"; command -v jq), sh: $(PATH="$JC_GP"; command -v sh)"
   fi
 fi
-jc_refused_by() { # jc_refused_by <name> <outfile> <code> after a NONZERO git status
-  if grep -q "\[$3\]" "$2"; then ok "$1"; else bad "$1" "refused, but not by $3: $(tr '\n' ' ' < "$2" | cut -c1-240)"; fi
+jc_refused_by() { # jc_refused_by <name> <outfile> <code> <rc> after a NONZERO git status (the rc printed, spec 0188)
+  if grep -q "\[$3\]" "$2"; then ok "$1"; else bad "$1" "refused (rc ${4:-unknown}), but not by $3: $(tr '\n' ' ' < "$2" | cut -c1-240)"; fi
 }
 jc_layer() { # jc_layer <label> <bin> ; pre-commit, pre-merge-commit, pre-push and the audit under that PATH
   local label="$1" bin="$2" d
@@ -764,20 +769,20 @@ jc_layer() { # jc_layer <label> <bin> ; pre-commit, pre-merge-commit, pre-push a
   printf 'n\n' > "$d/docs/n.txt"; git -C "$d" add -A >/dev/null 2>&1
   if PATH="$gp" git -C "$d" commit -qm docs >"$WORK/jc-$label.commit" 2>&1; then
     bad "0130 KL6 $label 1: pre-commit refuses under a $label jq" "it committed"
-  else jc_refused_by "0130 KL6 $label 1: pre-commit refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.commit" SLH-JQ-BROKEN; fi
+  else jc_refused_by "0130 KL6 $label 1: pre-commit refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.commit" SLH-JQ-BROKEN "$?"; fi
   git -C "$d" reset -q --hard HEAD >/dev/null 2>&1; git -C "$d" clean -qfd >/dev/null 2>&1
   if PATH="$gp" git -C "$d" merge -q --no-ff -m "merge chore" chore/001-dep >"$WORK/jc-$label.merge" 2>&1; then
     bad "0130 KL6 $label 2: pre-merge-commit refuses under a $label jq" "it merged"
-  else jc_refused_by "0130 KL6 $label 2: pre-merge-commit refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.merge" SLH-JQ-BROKEN; fi
+  else jc_refused_by "0130 KL6 $label 2: pre-merge-commit refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.merge" SLH-JQ-BROKEN "$?"; fi
   git -C "$d" merge --abort >/dev/null 2>&1; git -C "$d" reset -q --hard HEAD >/dev/null 2>&1
   if PATH="$gp" git -C "$d" push -q origin main >"$WORK/jc-$label.push" 2>&1; then
     bad "0130 KL6 $label 3: pre-push refuses under a $label jq" "it pushed"
-  else jc_refused_by "0130 KL6 $label 3: pre-push refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.push" SLH-JQ-BROKEN; fi
+  else jc_refused_by "0130 KL6 $label 3: pre-push refuses under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.push" SLH-JQ-BROKEN "$?"; fi
   PATH="$bin" bash "$SCRIPTS/trunk-audit.sh" "$d" >"$WORK/jc-$label.audit" 2>&1
   local rc=$?
   if [[ "$rc" -eq 0 ]]; then
     bad "0130 KL6 $label 4: the trunk audit stops under a $label jq" "it audited clean at exit 0"
-  else jc_refused_by "0130 KL6 $label 4: the trunk audit stops under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.audit" SLH-JQ-BROKEN; fi
+  else jc_refused_by "0130 KL6 $label 4: the trunk audit stops under a $label jq, naming SLH-JQ-BROKEN" "$WORK/jc-$label.audit" SLH-JQ-BROKEN "$rc"; fi
 }
 jc_layer loud  "$JC_LOUDJQ"
 jc_layer quiet "$JC_QUIETJQ"

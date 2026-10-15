@@ -22,18 +22,25 @@ session start, so a session opened before a marketplace update keeps running the
 old tree, including these very instructions. If the check reports SKEW, stop:
 restart the session and run the upgrade there. If it reports that the state is
 unverified, say that too, in those words; unverified is not clean, and the
-refresh below will say the same thing again rather than let it pass quietly.
+refresh below will say the same thing again rather than let it pass unnoticed.
 
 ## 1. Establish old and new
 
 - The OLD edition is the framework markdown committed in this repo:
   `setlist.md` (a pre-cutover instance carries it under the edition's
-  original filename instead; still exactly one framework markdown at the
-  root). Read its version from inside the file (the Edition header line, or the
+  original filename instead, one framework markdown at the root; an instance
+  stamped or upgraded since plugin 2.13.0 carries the three files named
+  below). Read its version from inside the file (the Edition header line, or the
   Version line in older editions); do not ask the user for it.
-- The NEW edition is the one bundled at the plugin root:
-  `"${CLAUDE_PLUGIN_ROOT}"/setlist.md`, its version on its Edition header
-  line. Its Changelog section is the authoritative delta list.
+- The NEW edition is the one bundled at the plugin root, three files since
+  plugin 2.13.0: `"${CLAUDE_PLUGIN_ROOT}"/setlist.md` (the core, Parts 1 to
+  6), `setlist-operations.md` (Parts 7 to 10 and Appendices A to C) and
+  `setlist-changelog.md`, each carrying the version on its Edition header line.
+  Read the delta from `"${CLAUDE_PLUGIN_ROOT}"/setlist-changelog.md`: its
+  Changelog section is the authoritative delta list. An instance upgrading
+  from an edition before the split carries one `setlist.md` holding its own
+  Changelog; one already on three files carries it in its own
+  `setlist-changelog.md`.
 - Ask conversationally: how was the old edition adopted (a chore number, or
   the original bootstrap/retrofit), and which ADR records it, if any.
 - **When the editions match but the plugin has moved** (a plugin patch that
@@ -53,12 +60,15 @@ refresh below will say the same thing again rather than let it pass quietly.
 All mechanics come from the loaded Part: prefer the window between specs, or
 pause the ACTIVE spec cleanly with a resume prompt; diff the repo's framework
 files against the new edition and list every gap; one structured round for
-genuine forks only; execute on a single chore branch (`chore/vNN-migration`);
+real forks only; execute on a single chore branch (`chore/vNN-migration`);
 relocate verbatim under provenance banners, never rewrite; style rules
 forward-only; one umbrella ADR with its index row; replace the committed
 framework markdown with the new edition in the same commit (as of the setlist
 cutover the committed copy is always named `setlist.md`, so an edition file
-carrying an older name is git-renamed to `setlist.md` in that commit);
+carrying an older name is git-renamed to `setlist.md` in that commit). Since
+plugin 2.13.0 the edition is three files: the instance's `setlist.md` is
+replaced in place by the plugin root's, and `setlist-operations.md` and
+`setlist-changelog.md` are copied beside it, all three in that one commit;
 record accepted
 deviations; close like any chore with docs-only gates.
 
@@ -85,11 +95,11 @@ When the instance predates this plugin, also:
   `bash "${CLAUDE_PLUGIN_ROOT}/scripts/refresh-instance.sh" .` reports what
   would change, and `--apply` before the path performs it. The script
   establishes DIRECTION from the version the instance records, and refuses to
-  move an instance backwards; a byte comparison alone cannot tell newer from
+  move an instance backwards. A byte comparison alone cannot tell newer from
   older, which is how a session once installed the older hooks over the newer
   ones and reported success. It also refuses when it cannot determine either
   version, rather than falling through to the copy. Read its report before
-  applying: any file listed as differing may be a deliberate instance edit, and
+  applying. Any file listed as differing may be a deliberate instance edit, and
   Part 8c is explicit that a customized stamped copy is a fork to surface in
   the umbrella ADR, never a file to silently overwrite. On --apply the four
   session hooks (scope-hook, regrounding-hook, since 2.6.0 stop-hook, and since
@@ -208,18 +218,31 @@ When the instance predates this plugin, also:
   8c): a template the instance deliberately domain-adapted is a fork to
   surface, kept as is and recorded under the umbrella ADR's accepted
   deviations, with the new edition's delta folded in by hand where it matters.
-- Stamp the qa-verifier agent if missing: copy
+- The qa-verifier and spec-reader agents are delivered by the refresh since
+  plugin 2.13.0: it copies
   `${CLAUDE_PLUGIN_ROOT}/templates/claude/agents/qa-verifier.md` to
-  `.claude/agents/qa-verifier.md` (the stamp gives every new instance this
-  agent; an upgraded instance gets the same). If a hand-edited copy exists,
-  surface the diff instead of overwriting.
-- Stamp the close-reviewer agent if missing, exactly as the qa-verifier above:
-  copy `${CLAUDE_PLUGIN_ROOT}/templates/claude/agents/close-reviewer.md` to
+  `.claude/agents/qa-verifier.md` (QA Pass 1, on the delegated tier) and
+  `${CLAUDE_PLUGIN_ROOT}/templates/claude/agents/spec-reader.md` to
+  `.claude/agents/spec-reader.md` (the pre-build reading at spec approval,
+  advisory). Before 2.13.0 the qa-verifier was stamped here by hand where
+  missing and a hand-edited copy was kept; a domain-adapted copy is now kept
+  as `.setlist-backup` beside the new one, so fold its adaptations back in by
+  hand where they matter, and record it as a deviation as above.
+- The close-reviewer agent and the `verify` skill are delivered by the
+  refresh, not by hand: it copies
+  `${CLAUDE_PLUGIN_ROOT}/templates/claude/agents/close-reviewer.md` to
   `.claude/agents/close-reviewer.md` (plugin 2.11.0: `/setlist:checkpoint`
   runs it at every close, and the gates require its block once
-  `.claude/sdd.json` records 2.11.0 or later). If a hand-edited copy exists,
-  surface the diff instead of overwriting.
-- Stamp `AGENTS.md` if missing, exactly as the two agents above: copy
+  `.claude/sdd.json` records 2.11.0 or later) and
+  `${CLAUDE_PLUGIN_ROOT}/templates/claude/skills/verify/SKILL.md` to
+  `.claude/skills/verify/SKILL.md` (plugin 2.12.0: Claude Code asks for a
+  skill of that name before a commit; it runs the gate command and reports).
+  Since 2.12.0 a copy that differs is REPLACED, the previous one kept as
+  `.setlist-backup` beside it (a backup an earlier refresh made is kept and
+  never overwritten), because the reviewer's tool list moved in that
+  release. Quote the refresh's lines for both, and surface a backup it wrote
+  as a hand edit to carry forward or drop.
+- Stamp `AGENTS.md` if missing, as the qa-verifier above: copy
   `${CLAUDE_PLUGIN_ROOT}/templates/root/AGENTS.md` to `AGENTS.md` at the root
   (plugin 2.11.0: a pointer to `CLAUDE.md` and `setlist.md` for agents that read
   `AGENTS.md`, never a second copy of the golden rules). If a different
@@ -241,7 +264,7 @@ When the instance predates this plugin, also:
   `${CLAUDE_PLUGIN_ROOT}/templates/git-hooks/` into a TRACKED `.githooks/`,
   makes the three hooks executable and DIES if any is not, and sets both
   `git config core.hooksPath .githooks` and `git config merge.ff false`. A
-  hand copy is what this bullet used to ask for and it is the worse path: git
+  hand copy is what this bullet used to ask for and it is the worse path. Git
   skips a non-executable hook SILENTLY, so a manual install that loses the mode
   bit leaves a boundary that stops nothing and says nothing.
   **Both settings, and the second is not optional**: a fast-forward merge fires
@@ -276,7 +299,7 @@ When the instance predates this plugin, also:
   warning, and the audit at `pre-push` is what stands between unreviewed work
   and a shared trunk. Nothing is removed and no workflow breaks, but a bypass
   spelling of a session gate, and a route past a per-merge hook, are MAJORs
-  rather than release blockers now, and the honest holes (`--no-verify`, the
+  rather than release blockers now, and the real holes (`--no-verify`, the
   forge merge button, the per-clone config) are listed in the edition's Known
   limitations. An upgrade that silently changes what a guarantee means is worse
   than one that says so.
@@ -291,7 +314,7 @@ When the instance predates this plugin, also:
   v1.7). Existing specs simply lack it and acquire one at their next transition
   to ACTIVE. Do not back-fill hashes across historical specs: a hash computed
   today over a spec approved months ago attests to nothing, and writing one
-  would turn an honest "not yet covered" into a false "verified". Tell the human
+  would turn a truthful "not yet covered" into a false "verified". Tell the human
   the field exists and that the drift warning starts working from the next spec
   that goes ACTIVE.
 - **Mention the new `attestation` block, and migrate NOTHING** (KL3, edition
@@ -331,7 +354,7 @@ When the instance predates this plugin, also:
   exists the instance is a legacy instance and loses nothing: the page readers
   keep deciding, byte-identically. Tell the human the record exists, that new
   instances are structured from birth, and that opting in is
-  `/setlist:checkpoint`'s one-time transcription: it reads STATUS.md, prints
+  `/setlist:checkpoint`'s one-time transcription. It reads STATUS.md, prints
   exactly what it would record, and writes the file only after the human
   confirms the list. Never run that transcription yourself during the upgrade,
   and never unattended: an unconfirmed transcription launders the frozen
@@ -342,7 +365,7 @@ When the instance predates this plugin, also:
   role-path trunk writes and closes refuse with `SLH-RECORD-MALFORMED` whose
   message assumes a corrupted record rather than a foreign owner (measured,
   2.4.0 review). If the file exists and is not Setlist's, surface it to the
-  human BEFORE arming: the honest exits are relocating the foreign file or
+  human BEFORE arming: the legitimate exits are relocating the foreign file or
   declining the record path, never overwriting their file.
 - **The v1.14 delta (plugin 2.6.0): the forge side, the Stop hook and the
   `gates` block.** The refresh delivers all of it (above); what is left for a
@@ -385,6 +408,33 @@ When the instance predates this plugin, also:
   of `${CLAUDE_PLUGIN_ROOT}/templates/root/CLAUDE.md.tmpl`, numbered after the
   instance's own rules; the file is the project's, so the human takes the edit
   or declines it, and a decline is recorded in the umbrella ADR.
+- **The v1.20 delta (plugin 2.12.0): the audit's codes, a `verify` skill,
+  nothing by hand** (Part 8c). The refresh delivers the `verify` skill and the
+  changed `close-reviewer` agent through its report of changed bytes, keeping a
+  differing copy as `.setlist-backup` (never over an earlier backup), and records `plugin.version` 2.12.0,
+  which dates no new rule. Quote the verdict delta before `--apply`: refusals
+  the old audit printed as a sentence alone now carry their codes, and the
+  delta keys each old sentence by its new code. Tell the human that `models`
+  is recorded only by a bootstrap probe and is never migrated, and that the
+  stamped deny and ask rules need Claude Code 2.1.289 or later.
+- **The v1.21 delta (plugin 2.13.0): the delegated tier, the spec reader, the
+  bypass deny blocking on failure, one offered edit** (Part 8c). The refresh
+  delivers `qa-verifier` (now on `model: haiku`), the changed `close-reviewer`
+  (an `effort:` default and the effort line) and the new `spec-reader` through
+  its report of changed bytes, each differing copy kept as `.setlist-backup`;
+  a qa-verifier the instance had adapted is in that backup, so fold its
+  adaptations back in where they matter and record the deviation. When the
+  report prints the `jq` edit that adds `"onFailure": "block"` to the bypass
+  deny's entry in `.claude/settings.json`, offer it as one edit the human takes
+  or declines (it needs Claude Code 2.1.295; an older one ignores it). When the
+  report calls `.github/workflows/setlist-forge-check.yml` STALE (a workflow from
+  before v1.21 hands the refreshed check no answers file, so the check asks the
+  forge nothing), offer the printed `cp` from the template the same way, and say
+  that any local edit to the workflow (a runner label) is re-applied after it. Offer
+  golden rule 13 (Part 4, "delegate the mechanical, never the deciding") in the
+  words of `${CLAUDE_PLUGIN_ROOT}/templates/root/CLAUDE.md.tmpl`, numbered after
+  the instance's own rules. The refresh records `plugin.version` 2.13.0, which
+  dates no new rule; quote the verdict delta before `--apply`.
 - Record all of this inside the umbrella ADR.
 
 ## 4. Instance skill flags (any instance stamped before plugin 1.6)

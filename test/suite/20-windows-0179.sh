@@ -152,14 +152,15 @@ fi
 # The corpus: <OSTYPE> <input> <expected>. A backslash is built with printf and so
 # reaches the function as one backslash; no Windows path is typed through a heredoc.
 PN_BAD=""
+printf '%s\n' "$PN_S" > "$WORK/pn-s.sh"   # the two functions, sourced from a file, never run as a string (spec 0193)
 pn_row() { # pn_row <ostype> <input> <expected>
   local got
-  got="$( eval "$PN_S"; OSTYPE="$1"; slh_path_norm "$2"; printf '%s' "$SLH_PATH_NORMED" )"
+  got="$( . "$WORK/pn-s.sh"; OSTYPE="$1"; slh_path_norm "$2"; printf '%s' "$SLH_PATH_NORMED" )"
   [[ "$got" == "$3" ]] || PN_BAD="$PN_BAD [$1 '$2' -> '$got', wanted '$3']"
 }
 pn_abs() { # pn_abs <ostype> <input> <yes|no>
   local got
-  got="$( eval "$PN_S"; OSTYPE="$1"; if slh_path_abs "$2"; then printf yes; else printf no; fi )"
+  got="$( . "$WORK/pn-s.sh"; OSTYPE="$1"; if slh_path_abs "$2"; then printf yes; else printf no; fi )"
   [[ "$got" == "$3" ]] || PN_BAD="$PN_BAD [$1 abs '$2' -> $got, wanted $3]"
 }
 PN_BS="$(printf '\\')"
@@ -290,7 +291,7 @@ fi
 
 # The skill's scan, extracted from the fenced block after its sentence and run.
 RR_SCAN="$(awk '/the inventory scan from the repository root/ { s = 1 } s && /^```sh$/ { f = 1; next } f && /^```$/ { exit } f { print }' "$ROOT/skills/retrofit/SKILL.md")"
-RR_READ="$( cd "$RR/b" && eval "$RR_SCAN" 2>&1 )"
+RR_READ="$( cd "$RR/b" && bash -c "$RR_SCAN" 2>&1 )"
 if [[ -n "$RR_SCAN" && "$(printf '%s\n' "$RR_READ" | head -n 1)" == "3 app" && "$RR_READ" == *"1 spec (tests)"* && "$RR_READ" != *" src"* ]]; then
   ok "retrofit roles c: the retrofit skill's inventory scan ranks app first and marks spec as the tests candidate"
 else
@@ -327,9 +328,10 @@ fi; shard_region_end
 
 # =============================================================================
 # THE GATE VERIFICATION CHECKS FOR jq FIRST (spec 0179, field item (b)). Git for
-# Windows ships no jq; the stamped /scaffold skill verified the gate command with
-# ( eval "$(jq -r .gate_command .claude/sdd.json)" ), which with no jq evals an
-# empty string and prints 0: a false pass. The line is extracted from the
+# Windows ships no jq; the stamped /scaffold skill verified the gate command by
+# running the string jq read from .claude/sdd.json, which with no jq ran an
+# empty string and printed 0: a false pass. Since spec 0193 the line hands that
+# string to bash -c as its argument. The line is extracted from the
 # template and from the retrofit skill and run as the model would run it.
 # =============================================================================
 # >>> SHARD-BEGIN gate-verify-0179 cost=1
@@ -337,10 +339,10 @@ if shard_region gate-verify-0179; then
 
 GV="$WORK/gate-verify-0179"
 rm -rf "$GV"; mkdir -p "$GV/.claude" "$GV/nojq"
-gv_line() { grep -m 1 'eval "$(jq -r .gate_command .claude/sdd.json)"' "$1" | sed 's/^ *//'; }
+gv_line() { grep -m 1 'bash -c "$(jq -r .gate_command .claude/sdd.json)"' "$1" | sed 's/^ *//'; }
 gv_run() { # gv_run <line> <gate command> <PATH> -> what the line prints
   jq -n --arg g "$2" '{gate_command: $g}' > "$GV/.claude/sdd.json"
-  ( cd "$GV" && PATH="$3" && eval "$1" ) 2>&1
+  ( cd "$GV" && PATH="$3" "$BASH" -c "$1" ) 2>&1
 }
 GV_BAD=""
 for gv_f in "$ROOT/templates/claude/skills/scaffold/SKILL.md.tmpl" "$ROOT/skills/retrofit/SKILL.md"; do
@@ -485,6 +487,33 @@ if [[ "$DR_W" == *"first-detail"*"second-detail"*"PASS 2 of a captured"*"TIME is
 else
   bad "dead retry e: --whole-failures prints every line of a failure; without it the one detail line as before" \
       "whole: $(printf '%s' "$DR_W" | tr '\n' ' ' | cut -c1-200) | default: $(printf '%s' "$DR_OUT" | tr '\n' ' ' | cut -c1-200)"
+fi
+# f, g: an exit 139 INSIDE a case is a sighting the workflow counts (spec 0188, 2.12.0's item 15).
+# The shard runs on and prints its totals; two cases name a 139, a third is red for status 1 and
+# one reads "got 1390", neither of which is a sighting.
+printf '%s\n' '#!/usr/bin/env bash' \
+  'case "$1" in' \
+  '  --list-regions) printf "r1\nr2\n" ;;' \
+  '  --shard) if [ "$2" = "2/2" ]; then echo "__SHARD__ 2/2 regions=1 of 2"; echo "__REGION__ r2 1 0"; echo "PASS  two"; echo "passed 1, failed 0, total 1"; exit 0; fi' \
+  '    echo "__SHARD__ $2 regions=1 of 2"; echo "PASS  early"; echo "FAIL  stamp y: copies the hooks"; echo "       stamp.sh exited 139"; echo "FAIL  plain red"; echo "       expected rc 0, got 1"; echo "FAIL  trunk audit e: a merge"; echo "       expected rc 1, got 139"; echo "FAIL  near miss"; echo "       expected rc 0, got 1390"; echo "__REGION__ r1 1 4"; echo "passed 1, failed 4, total 5"; exit 1 ;;' \
+  'esac' > "$DR_STUB.sh"
+dr_run 0 --retry-dead
+DR_SIGHT="$(printf '%s\n' "$DR_OUT" | grep -c '^DEAD-SHARD: .* died ' || true)"
+if [[ "$DR_RC" -ne 0 && "$DR_SIGHT" -eq 2 \
+      && "$DR_OUT" == *'DEAD-SHARD: shard 1/2: a process died of exit 139 inside case "stamp y: copies the hooks"'* \
+      && "$DR_OUT" == *'inside case "trunk audit e: a merge"'* && "$DR_OUT" != *'inside case "plain red"'* \
+      && "$DR_OUT" != *'inside case "near miss"'* ]]; then
+  ok "dead retry f (0188): an exit 139 inside a case is one DEAD-SHARD sighting per case, counted by the workflow's grep; other reds are not"
+else
+  bad "dead retry f (0188): an exit 139 inside a case is one DEAD-SHARD sighting per case, counted by the workflow's grep; other reds are not" \
+      "rc=$DR_RC sightings=$DR_SIGHT $(printf '%s' "$DR_OUT" | tr '\n' ' ' | cut -c1-400)"
+fi
+dr_run 0
+if [[ "$DR_RC" -ne 0 && "$DR_OUT" != *"DEAD-SHARD:"* ]]; then
+  ok "dead retry g (0188): without --retry-dead the wrapper writes no sighting line, as before"
+else
+  bad "dead retry g (0188): without --retry-dead the wrapper writes no sighting line, as before" \
+      "rc=$DR_RC $(printf '%s' "$DR_OUT" | tr '\n' ' ' | cut -c1-300)"
 fi
 
 fi; shard_region_end

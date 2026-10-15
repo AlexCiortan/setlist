@@ -121,7 +121,9 @@ fi
 # The octopus onto the trunk (spec 0173, item 4): no MERGE_HEAD exists while this hook
 # runs, so the merged heads are counted from git's GITHEAD_<sha> variables (the library's
 # slh_refuse_octopus says why that is an early refusal and the audit the guarantee).
-slh_refuse_octopus "$TRUNK" "$(compgen -e | grep -cE '^GITHEAD_[0-9a-f]{40}$' || true)" # fail-open-ok: grep -c prints 0 and exits 1 on a two-parent merge; the count, not the status, decides
+# The names are listed by bash's variable-name completion on the GITHEAD_ prefix, which reads no other
+# variable and enumerates nothing at run time (spec 0193).
+slh_refuse_octopus "$TRUNK" "$(compgen -v GITHEAD_ | grep -cE '^GITHEAD_[0-9a-f]{40}$' || true)" # fail-open-ok: grep -c prints 0 and exits 1 on a two-parent merge; the count, not the status, decides
 slh_verify_close "$PROJ" "$TRUNK" "this merge" || true
 
 # THE MERGE'S OWN CONTENT (F1). pre-commit does not fire for a true merge, so
@@ -140,8 +142,10 @@ slh_verify_close "$PROJ" "$TRUNK" "this merge" || true
 # is the same rule at the second of the sites that render a diff for a scan.
 if __DIFF="$(git -C "$PROJ" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ HEAD 2>/dev/null)"; then
   # Text past a -diff or binary attribute (spec 0173, item 5; the library says how and why).
+  # Its git reads refuse by name when one fails (spec 0195), carried out by the status.
+  __XT="$(slh_scan_text_past_attributes "$PROJ" cached HEAD)" || exit 1
   __DIFF="$__DIFF
-$(slh_scan_text_past_attributes "$PROJ" cached HEAD)"
+$__XT"
   slh_scan_added "$PROJ" "$__DIFF" "this merge's content"
 else
   slh_refuse "SLH-SCAN-FILTER-FAILED" "git could not render this merge's diff, so the scan of this merge's content read nothing and has judged nothing. A scan that could not run has not passed. Run 'git diff --cached HEAD' here to see the failure (a configuration value git cannot parse, or a diff driver that fails, looks like this)."

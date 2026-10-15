@@ -187,11 +187,11 @@ fi
 # APPEND after the flat repo facts rather than reordering them, so an instance's
 # file grows by addition and every reader can keep treating an absent block as
 # "stamped before that block existed".
-if jq -e 'keys_unsorted | index("release") > index("plugin")' "$STAMP_TARGET/.claude/sdd.json" >/dev/null 2>&1; then
+if jq -e '[to_entries[].key] | index("release") > index("plugin")' "$STAMP_TARGET/.claude/sdd.json" >/dev/null 2>&1; then
   ok "release block: it appends after the plugin block rather than reordering the file"
 else
   bad "release block: it appends after the plugin block rather than reordering the file" \
-      "key order is $(jq -c 'keys_unsorted' "$STAMP_TARGET/.claude/sdd.json" 2>/dev/null)"
+      "key order is $(jq -c '[to_entries[].key]' "$STAMP_TARGET/.claude/sdd.json" 2>/dev/null)"
 fi
 # The three models the edition names, read from the edition rather than retyped,
 # so a model added to Part 6 and not to this list fails here.
@@ -333,7 +333,7 @@ run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$INST"
 expect_script "refresh cfgfail: a failed config write refuses instead of claiming delivery" 1 "FAILED"
 if printf '%s' "$SCRIPT_OUT" | grep -q "delivered the git-hook boundary"; then
   bad "refresh cfgfail2: a failed delivery does NOT claim it delivered the boundary" \
-      "the summary announced the git-hook boundary delivered while core.hooksPath was never set"
+      "the summary announced the git-hook boundary delivered while core.hooksPath was never configured"
 else
   ok "refresh cfgfail2: a failed delivery does NOT claim it delivered the boundary"
 fi
@@ -521,8 +521,9 @@ fi
 # aa. no literal em-dash byte anywhere in the shipped surface. Scoped to what
 # rule 1 governs forward: the plugin tree, the edition, the READMEs, and this
 # suite. Historical editions and journals keep theirs by design and are not
-# part of the publishable set.
-SURFACE="setlist.md README.md .claude-plugin skills templates scripts test .github"
+# part of the publishable set. The public README by its source name (spec 0192, item 3): the
+# export carries no publish/, and its prose gate refuses an em-dash in the shipped copy.
+SURFACE="setlist.md publish/README.public.md .claude-plugin skills templates scripts test .github"
 EM_HITS=""
 EM_FILES=""
 if git -C "$ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
@@ -559,8 +560,8 @@ fi
 
 # =============================================================================
 # 1.0.3: the refresh checks the settings WIRING it cannot copy. Two of this
-# release's fixes live in .claude/settings.json (the write-tool matcher set
-# and the per-hook timeouts), and that file holds the instance's own
+# release's fixes live in .claude/settings.json (the write-tool matcher
+# set and the per-hook timeouts), and that file holds the instance's own
 # permissions and model settings, so the script must not rewrite it. The
 # failure to avoid is a refresh that copies hook bytes, records the new
 # version, exits 0, and leaves two fixes inert while reporting success.
@@ -958,7 +959,7 @@ bl_instance() { # bl_instance <dir> <mode: delivered|fresh> [merges]
     git -C "$d" config merge.ff false
   fi
 }
-bl_key_of() { jq -r '.audit.baseline // "none"' "$1/.claude/sdd.json"; }
+bl_id_of() { jq -r '.audit.baseline // "none"' "$1/.claude/sdd.json"; }
 bl_added_pre_push() { git -C "$1" log --root --diff-filter=A --format=%H -- .githooks/pre-push | tail -n1; }
 
 # d0 (spec 0164, fix round 2, F20 of the 2.10.0 leg): NO HEAD FALLBACK. The
@@ -977,11 +978,11 @@ git -C "$BLX" checkout -q -b spec/0007-up
 printf 'work\n' > "$BLX/src/w.js"
 git -C "$BLX" add -A >/dev/null 2>&1 && git -C "$BLX" commit -qm work >/dev/null 2>&1
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLX"
-if [[ "$(bl_key_of "$BLX")" == "none" ]]; then
+if [[ "$(bl_id_of "$BLX")" == "none" ]]; then
   ok "0164 refresh d0a: with the recorded trunk absent from this clone, NO baseline is written"
 else
   bad "0164 refresh d0a: with the recorded trunk absent from this clone, NO baseline is written" \
-      "recorded '$(bl_key_of "$BLX")' (the branch this refresh ran on), which would refuse every later push from the trunk"
+      "recorded '$(bl_id_of "$BLX")' (the branch this refresh ran on), which would refuse every later push from the trunk"
 fi
 case "$SCRIPT_OUT" in
   *"trunk-renamed"*) ok "0164 refresh d0b: the report names the branch it looked for and could not find" ;;
@@ -1012,11 +1013,11 @@ fi
 # after the stamp, and no key has ever been written.
 BLI="$WORK/inst-baseline-delivered"; bl_instance "$BLI" delivered
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLI"
-if [[ "$(bl_key_of "$BLI")" == "$(bl_added_pre_push "$BLI")" ]]; then
+if [[ "$(bl_id_of "$BLI")" == "$(bl_added_pre_push "$BLI")" ]]; then
   ok "0157 refresh d1: the refresh records audit.baseline at the commit that ADDED .githooks/pre-push"
 else
   bad "0157 refresh d1: the refresh records audit.baseline at the commit that ADDED .githooks/pre-push" \
-      "recorded '$(bl_key_of "$BLI")', wanted '$(bl_added_pre_push "$BLI")': ${SCRIPT_OUT:-<empty>}"
+      "recorded '$(bl_id_of "$BLI")', wanted '$(bl_added_pre_push "$BLI")': ${SCRIPT_OUT:-<empty>}"
 fi
 case "$SCRIPT_OUT" in
   *"audit.baseline"*) ok "0157 refresh d2: the boundary block REPORTS the key it wrote" ;;
@@ -1028,22 +1029,22 @@ expect_script "0157 refresh d3: after the refresh the same instance audits CLEAN
 
 # d4: NEVER OVERWRITTEN. A second refresh leaves the declaration alone, and so
 # does a value a person put there by hand.
-BL_FIRST="$(bl_key_of "$BLI")"
+BL_FIRST="$(bl_id_of "$BLI")"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLI"
-if [[ "$(bl_key_of "$BLI")" == "$BL_FIRST" ]]; then
+if [[ "$(bl_id_of "$BLI")" == "$BL_FIRST" ]]; then
   ok "0157 refresh d4: a second refresh does not rewrite a baseline that is already recorded"
 else
   bad "0157 refresh d4: a second refresh does not rewrite a baseline that is already recorded" \
-      "the value moved from '$BL_FIRST' to '$(bl_key_of "$BLI")'"
+      "the value moved from '$BL_FIRST' to '$(bl_id_of "$BLI")'"
 fi
 BL_HAND="$(git -C "$BLI" rev-parse main)"
 jq --arg b "$BL_HAND" '.audit.baseline = $b' "$BLI/.claude/sdd.json" > "$BLI/t" && mv "$BLI/t" "$BLI/.claude/sdd.json"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLI"
-if [[ "$(bl_key_of "$BLI")" == "$BL_HAND" ]]; then
+if [[ "$(bl_id_of "$BLI")" == "$BL_HAND" ]]; then
   ok "0157 refresh d5: a hand-recorded baseline is a declaration the refresh reports and leaves"
 else
   bad "0157 refresh d5: a hand-recorded baseline is a declaration the refresh reports and leaves" \
-      "the refresh rewrote it to '$(bl_key_of "$BLI")'"
+      "the refresh rewrote it to '$(bl_id_of "$BLI")'"
 fi
 
 # d6: a FIRST delivery: nothing in history added .githooks/pre-push, so the
@@ -1051,11 +1052,11 @@ fi
 BLF="$WORK/inst-baseline-fresh"; bl_instance "$BLF" fresh
 BLF_TIP="$(git -C "$BLF" rev-parse main)"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLF"
-if [[ "$(bl_key_of "$BLF")" == "$BLF_TIP" ]]; then
+if [[ "$(bl_id_of "$BLF")" == "$BLF_TIP" ]]; then
   ok "0157 refresh d6: on a FIRST delivery the baseline recorded is the trunk tip the migration commit will descend from"
 else
   bad "0157 refresh d6: on a FIRST delivery the baseline recorded is the trunk tip the migration commit will descend from" \
-      "recorded '$(bl_key_of "$BLF")', wanted '$BLF_TIP': ${SCRIPT_OUT:-<empty>}"
+      "recorded '$(bl_id_of "$BLF")', wanted '$BLF_TIP': ${SCRIPT_OUT:-<empty>}"
 fi
 
 # d7: REPORT MODE promises exactly what apply does, and writes nothing.
@@ -1065,10 +1066,10 @@ case "$SCRIPT_OUT" in
   *"audit.baseline"*) ok "0157 refresh d7: report mode names the baseline it would record" ;;
   *) bad "0157 refresh d7: report mode names the baseline it would record" "no audit.baseline line: ${SCRIPT_OUT:-<empty>}" ;;
 esac
-if [[ "$(bl_key_of "$BLR2")" == "none" ]]; then
+if [[ "$(bl_id_of "$BLR2")" == "none" ]]; then
   ok "0157 refresh d8: report mode writes nothing"
 else
-  bad "0157 refresh d8: report mode writes nothing" "it recorded '$(bl_key_of "$BLR2")'"
+  bad "0157 refresh d8: report mode writes nothing" "it recorded '$(bl_id_of "$BLR2")'"
 fi
 
 # d9: a key that FAILS the audit's own tests is reported as a finding, with the
@@ -1076,12 +1077,12 @@ fi
 # the declarer's, and this script reports rather than deciding for them.
 jq '.audit.baseline = "main"' "$BLR2/.claude/sdd.json" > "$BLR2/t" && mv "$BLR2/t" "$BLR2/.claude/sdd.json"
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLR2"
-if [[ "$(bl_key_of "$BLR2")" == "main" ]] \
+if [[ "$(bl_id_of "$BLR2")" == "main" ]] \
    && printf '%s' "$SCRIPT_OUT" | grep -q "$(bl_added_pre_push "$BLR2")"; then
   ok "0157 refresh d9: a malformed baseline is reported with the value this refresh would write, and left as the instance declared it"
 else
   bad "0157 refresh d9: a malformed baseline is reported with the value this refresh would write, and left as the instance declared it" \
-      "key now '$(bl_key_of "$BLR2")': ${SCRIPT_OUT:-<empty>}"
+      "key now '$(bl_id_of "$BLR2")': ${SCRIPT_OUT:-<empty>}"
 fi
 
 # d10: a SKIP state delivers no boundary, so it records no baseline about one.
@@ -1090,11 +1091,11 @@ instance_fixture "$BLS2/sub" 1.0.9 current
 git -C "$BLS2" add -A >/dev/null 2>&1
 git -C "$BLS2" commit -qm "the instance sits below this repository's top" >/dev/null 2>&1
 run_script bash "$SCRIPTS/refresh-instance.sh" --apply "$BLS2/sub"
-if [[ "$(bl_key_of "$BLS2/sub")" == "none" ]]; then
+if [[ "$(bl_id_of "$BLS2/sub")" == "none" ]]; then
   ok "0157 refresh d10: an instance below the worktree top gets no boundary and no baseline"
 else
   bad "0157 refresh d10: an instance below the worktree top gets no boundary and no baseline" \
-      "it recorded '$(bl_key_of "$BLS2/sub")' while the boundary was skipped"
+      "it recorded '$(bl_id_of "$BLS2/sub")' while the boundary was skipped"
 fi
 
 # d11: the write is VALIDATED by the same read-back that validates the version.
@@ -1539,35 +1540,35 @@ mp_result() { # mp_result <file> <served-id> [<aux-id-listed-first>] [is_error]
 }
 mp_run() { rm -f "$MP_W/plan.rc" "$MP_W/exec.rc"; run_script env PATH="$MP_W/bin:$PATH" bash "$SCRIPTS/model-probe.sh" "$@"; }
 
-mp_result "$MP_W/plan.json" claude-opus-5-5; mp_result "$MP_W/exec.json" claude-sonnet-5-5
+mp_result "$MP_W/plan.json" claude-opus-test; mp_result "$MP_W/exec.json" claude-sonnet-test
 mp_run
 expect_script "model probe a: both phases on tier read rc 0 and print the model each served" 0 \
-  "plan: claude-opus-5-5" "execution: claude-sonnet-5-5"
+  "plan: claude-opus-test" "execution: claude-sonnet-test"
 
-mp_result "$MP_W/plan.json" claude-sonnet-5-5
+mp_result "$MP_W/plan.json" claude-sonnet-test
 mp_run
 expect_script "model probe b: every Opus excluded (plan mode served Sonnet) is named, never a silent fallback" 1 \
-  "[MP-PLAN-OFF-TIER]" "claude-sonnet-5-5" "availableModels"
+  "[MP-PLAN-OFF-TIER]" "claude-sonnet-test" "availableModels"
 
-mp_result "$MP_W/plan.json" claude-opus-5
+mp_result "$MP_W/plan.json" claude-opus-test-older
 mp_run
 expect_script "model probe c: an older Opus an exact allowlist permits keeps the tier, and the version is printed" 0 \
-  "plan: claude-opus-5"
+  "plan: claude-opus-test-older"
 
-mp_result "$MP_W/plan.json" claude-opus-5-5; mp_result "$MP_W/exec.json" claude-haiku-4-5-20251001
+mp_result "$MP_W/plan.json" claude-opus-test; mp_result "$MP_W/exec.json" claude-haiku-test
 mp_run
 expect_script "model probe d: the execution phase served off its tier is named" 1 \
-  "[MP-EXEC-OFF-TIER]" "claude-haiku-4-5-20251001"
+  "[MP-EXEC-OFF-TIER]" "claude-haiku-test"
 
-mp_result "$MP_W/plan.json" claude-opus-5-5 claude-haiku-4-5-20251001; mp_result "$MP_W/exec.json" claude-sonnet-5-5
+mp_result "$MP_W/plan.json" claude-opus-test claude-haiku-test; mp_result "$MP_W/exec.json" claude-sonnet-test
 mp_run
 expect_script "model probe e: an auxiliary Haiku entry listed first is not read as the served model" 0 \
-  "plan: claude-opus-5-5"
+  "plan: claude-opus-test"
 
-mp_result "$MP_W/plan.json" claude-opus-5-5 "" true
+mp_result "$MP_W/plan.json" claude-opus-test "" true
 mp_run
 expect_script "model probe f: a result with is_error is unavailable, never a pass" 2 "[MP-PROBE-UNAVAILABLE]"
-mp_result "$MP_W/plan.json" claude-opus-5-5
+mp_result "$MP_W/plan.json" claude-opus-test
 rm -f "$MP_W/plan.rc"; printf '1\n' > "$MP_W/plan.rc"
 run_script env PATH="$MP_W/bin:$PATH" bash "$SCRIPTS/model-probe.sh"
 expect_script "model probe f: a probe that exits non-zero is unavailable, never a pass" 2 "[MP-PROBE-UNAVAILABLE]"
@@ -1583,3 +1584,38 @@ expect_script "model probe h: a claude binary that is not there is unavailable a
 
 fi; shard_region_end
 # <<< SHARD-END model-probe-0177
+
+# =============================================================================
+# THE EDITION IN THREE FILES (spec 0191). The edition is setlist.md (the core),
+# setlist-operations.md (Parts 7 to 10, Appendices A to C) and
+# setlist-changelog.md (the Changelog). The upgrade skill reads the delta where
+# the Changelog now lives and writes all three into an upgrading instance (Q1:
+# the skill's replace step is the one writer, not the refresh); validate counts
+# the three. Pinned by substring in each skill's own step, so a skill that
+# still names the one file reads red by name.
+# =============================================================================
+# >>> SHARD-BEGIN edition-split-0191 cost=1
+if shard_region edition-split-0191; then
+ES_UP1="$(awk '/^## 1\. Establish old and new/{f=1; next} /^## 2\./{f=0} f' "$ROOT/skills/upgrade/SKILL.md" | tr -s ' \n' '  ')"
+if grep -qF '"${CLAUDE_PLUGIN_ROOT}"/setlist-changelog.md' <<< "$ES_UP1" && grep -qF 'authoritative delta list' <<< "$ES_UP1"; then
+  ok "0191 split a: the upgrade skill reads the delta from setlist-changelog.md at the plugin root and says so"
+else
+  bad "0191 split a: the upgrade skill reads the delta from setlist-changelog.md at the plugin root and says so" \
+      "section 1 does not name \"\${CLAUDE_PLUGIN_ROOT}\"/setlist-changelog.md beside the authoritative delta list"
+fi
+ES_UP2="$(awk '/^## 2\. Run Part 8c as written/{f=1; next} /^## 3\./{f=0} f' "$ROOT/skills/upgrade/SKILL.md" | tr -s ' \n' '  ')"
+if grep -qF '`setlist-operations.md`' <<< "$ES_UP2" && grep -qF '`setlist-changelog.md`' <<< "$ES_UP2" && grep -qF '`setlist.md`' <<< "$ES_UP2"; then
+  ok "0191 split b: the upgrade skill's replace step writes the edition's three files in the migration commit"
+else
+  bad "0191 split b: the upgrade skill's replace step writes the edition's three files in the migration commit" \
+      "section 2 does not name setlist.md, setlist-operations.md and setlist-changelog.md"
+fi
+ES_VA="$(awk '/^4\. Required files exist/{f=1} /^5\. /{f=0} f' "$ROOT/skills/validate/SKILL.md" | tr -s ' \n' '  ')"
+if grep -qF '`setlist-operations.md`' <<< "$ES_VA" && grep -qF '`setlist-changelog.md`' <<< "$ES_VA" && grep -qF 'alone' <<< "$ES_VA"; then
+  ok "0191 split c: validate requires the edition's three files and reads a lone pre-split setlist.md as a finding"
+else
+  bad "0191 split c: validate requires the edition's three files and reads a lone pre-split setlist.md as a finding" \
+      "item 4 does not name the three files, or says nothing of a setlist.md standing alone"
+fi
+fi; shard_region_end
+# <<< SHARD-END edition-split-0191

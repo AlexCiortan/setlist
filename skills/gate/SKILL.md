@@ -21,25 +21,30 @@ evidence-gated, never time-gated.
    stage's table), and the DECISIONS.md index. Run /setlist:validate and
    report findings. Confirm the tree is clean and the trunk is green and
    integrable (invariant (a), Part 6). A gate asks whether the trunk is
-   HEALTHY, never whether it has been released: what users run is invariant
+   HEALTHY, never whether it has been released. What users run is invariant
    (b), it is allowed to lag the trunk by design, and failing a gate on it
    would block planning on a release that was never owed. Skim the
    Closing reports of specs closed since the last transition (deviations and
    follow-ups only). Where a design surface exists, run /insights over its
-   record (Part 5c). The repo as it exists is the ground truth, not the
-   roadmap's assumptions.
+   record (Part 5c). The repo as it exists is the ground truth, and the
+   roadmap's assumptions are not.
 2. **Verify the gate, leg by leg.** Quote each leg and state PASS or FAIL
-   with evidence, verified live this session (gates re-run, not taken on
-   faith). Usage and desire legs are answered by the human and taken as the
-   evidence; never self-certify them. If ANY leg fails: stop. A failed gate
-   is a finding, not an obstacle to argue with. Name the smallest work that
+   with evidence, verified live this session (gates re-run in this session).
+   Usage and desire legs are answered by the human and taken as the
+   evidence; never self-certify them. The runs that verify a leg (a gate
+   command, a test run, a health check) go to a subagent on the delegated
+   tier (the Agent tool with `model: haiku`, Part 2) that reports each
+   command's output and exit status; whether a leg PASSES is yours, and a
+   journal line names each delegated run, the model it resolved to, its
+   tokens, and its cost where the harness reports one. If ANY leg fails: stop. A failed gate
+   is a finding to act on, and arguing with it is no move. Name the smallest work that
    addresses the failing leg as the next action and end the session.
 3. **Reconcile the next stage's backlog.** For each row: keep, amend the
    one-line scope (citing what closed specs taught), reorder, demote to the
    parking lot, or add a row (only if it traces to a Closing-report follow-up
    or an open question; nothing speculative). Constitution-touching changes
    need an ADR; reordering and scope-line edits do not. ADR consolidation
-   (Part 4) happens here. One structured round for genuine forks only.
+   (Part 4) happens here. One structured round for real forks only.
 4. **Spec the first entry** of the new stage from specs/TEMPLATE.md, next
    sequential number. Design-heavy first entries route through the design
    intake (Part 5c) BEFORE this step.

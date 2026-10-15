@@ -200,8 +200,8 @@ fi
 #               the merge that was just refused.
 #
 # The oracle caught that: the completing commit was blocked in the probe only
-# because SLH-STATUS-MISSING happened to fire on unrelated grounds, which is a
-# pass nobody earned. Same reason a conflicted merge resolution reaches here.
+# because SLH-STATUS-MISSING happened to fire on unrelated grounds, which is
+# a pass nobody earned. Same reason a conflicted merge resolution reaches here.
 # ---------------------------------------------------------------------------
 GITDIR="$(git -C "$PROJ" rev-parse --absolute-git-dir 2>/dev/null || printf '')"
 LANDING=""

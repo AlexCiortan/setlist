@@ -149,7 +149,7 @@ assert_true "suite F4: every read of the suite's own file is rooted, not relativ
 # The STRUCTURAL half: the fields v1.7 actually added must sit after the QA Pass
 # 2 marker in Appendix C itself. The behavioural cases below pin the RULE; this
 # pins the EDITION obeying it, which is the thing a future edit would break.
-APXC="$(bash "$SCRIPTS/part.sh" appendix-c "$ROOT/setlist.md" 2>/dev/null)"
+APXC="$(bash "$SCRIPTS/part.sh" appendix-c 2>/dev/null)"  # the three edition files at the root (spec 0191)
 apxc_line() { printf '%s\n' "$APXC" | grep -nE "$1" | head -n1 | cut -d: -f1; }
 QA1_LN="$(apxc_line '^[-*+[:space:]]*QA Pass 1 report')"
 QA2_LN="$(apxc_line '^[-*+[:space:]]*QA Pass 2')"
@@ -275,7 +275,7 @@ else
     if ( SCRIPT_DIR="$PG" EDITION_V="v9.9" bash "$PG/gate.sh" ) >/dev/null 2>&1; then
       ok "public README gate: a README naming only the current edition is accepted"
     else
-      bad "public README gate: a README naming only the current edition is accepted" "it refused a clean file"
+      bad "public README gate: a README naming only the current edition is accepted" "it refused a clean file (rc $?)"
     fi
     # Stale: names a prior edition too, BARE. Must REFUSE.
     printf '%s\nBut this line still says edition v9.8.\n' "$SELF" > "$PG/README.public.md"

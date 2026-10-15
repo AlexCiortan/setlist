@@ -118,6 +118,9 @@ case "$FC_STUB_MODE" in
   unprotected) case "$1" in repos/*/rules/*) printf '200\n[]\n' ;; repos/*/protection) printf '404\n{"message":"Branch not protected"}\n' ;; *) printf '200\n{"allow_rebase_merge":true}\n' ;; esac ;;
   nocheck) case "$1" in repos/*/rules/*) printf '200\n[{"type":"pull_request","parameters":{"required_approving_review_count":1}}]\n' ;; repos/*/protection) printf '404\n{\"message\":\"Branch not protected\"}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
   noreview) case "$1" in repos/*/rules/*) printf '200\n[{"type":"pull_request","parameters":{"required_approving_review_count":0}},{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"setlist forge check"}]}}]\n' ;; repos/*/protection) printf '404\n{\"message\":\"Branch not protected\"}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
+  # Spec 0196, the 2.13.0 leg's F11: a review count that is not a whole number (an answers
+  # file the forge did not write) must refuse, never read as a verified custody.
+  reviewcount) case "$1" in repos/*/rules/*) printf '200\n%s\n' "${rules_ok/\"required_approving_review_count\":1/\"required_approving_review_count\":$FC_STUB_REVIEWS}" ;; repos/*/protection) printf '404\n{"message":"Branch not protected"}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
   ok) case "$1" in repos/*/rules/*) printf '200\n%s\n' "$rules_ok" ;; repos/*/protection) printf '404\n{"message":"Branch not protected"}\n' ;; *) printf '200\n{"allow_rebase_merge":false}\n' ;; esac ;;
   # AMENDMENTS 3 AND 4 (the owner's rulings of 2026-09-07, session 3): the
   # ruleset's allowed_merge_methods beside the repository's allow_rebase_merge,
@@ -135,12 +138,76 @@ esac
 STUB
 chmod +x "$FC_STUB"
 
+# THE REPLAY THROUGH THE FILE (spec 0193). The stamped workflow hands the check
+# the forge's answers as a file (--protection-file), and the suite's corpus is
+# written against the seam (--forge-query). So every seam case is run twice: once
+# through the seam, and once through the file the workflow would write for the
+# same answers (fc_answers_from_seam asks the seam every path the workflow asks:
+# the repository, the base's rules and classic protection, and with an author
+# the user record and the membership of every team the base's or the head's
+# CODEOWNERS names). The two runs must agree on the exit, the stdout and the
+# stderr (the scratch directory's name aside), one replay case per seam case.
+FC_REPLAY_N=0
+fc_answers_from_seam() { # fc_answers_from_seam <dir> <seam> <out-file> <check args...>
+  local d="$1" seam="$2" f="$3" repo="" base="" head="" author="" t org team p rev out st body
+  shift 3
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --repo) repo="${2:-}"; shift 2 ;; --base) base="${2:-}"; shift 2 ;;
+      --head) head="${2:-}"; shift 2 ;; --author) author="${2:-}"; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  base="${base#origin/}"
+  local -a paths=("repos/$repo" "repos/$repo/rules/branches/$base" "repos/$repo/branches/$base/protection")
+  if [[ -n "$author" ]]; then
+    paths+=("users/$author")
+    for t in $(for rev in "$base" "$head"; do for p in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do git -C "$d" show "$rev:$p" 2>/dev/null; done; done | grep -oE '@[A-Za-z0-9-]+/[A-Za-z0-9._-]+' | sort -u); do
+      org="${t#@}"; team="${org#*/}"; org="${org%%/*}"
+      paths+=("orgs/$org/teams/$team/memberships/$author")
+    done
+  fi
+  printf '{}' > "$f"
+  for p in "${paths[@]}"; do
+    if out="$("$seam" "$p" 2>/dev/null)" && st="$(printf '%s\n' "$out" | head -n1 | tr -d '[:space:]')" && [[ "$st" =~ ^[0-9]+$ ]]; then
+      body="$(printf '%s\n' "$out" | sed '1d')"
+      jq --arg p "$p" --argjson s "$st" --arg b "$body" '. + {($p): {status: $s, body: ($b | fromjson? // $b)}}' "$f" > "$f.n" && mv "$f.n" "$f"
+    else
+      jq --arg p "$p" '. + {($p): {status: null, body: null}}' "$f" > "$f.n" && mv "$f.n" "$f"
+    fi
+  done
+}
 FC_OUT=""; FC_ERR=""; FC_RC=0; FC_LAST=""
 fc_run() { # fc_run <dir> <args...> -> FC_OUT (stdout), FC_ERR, FC_RC, FC_LAST (the last stdout line)
   local d="$1"; shift
   FC_OUT="$(bash "$d/.claude/hooks/forge-check.sh" --instance "$d" "$@" 2>"$WORK/fc-err")"; FC_RC=$?
   FC_ERR="$(cat "$WORK/fc-err" 2>/dev/null)"
   FC_LAST="$(printf '%s\n' "$FC_OUT" | tail -n1)"
+  # The replay, when the run used the seam (the arguments after it rebuilt with
+  # --protection-file in its place).
+  local a seam="" r_out r_rc r_err
+  local -a fargs=()
+  while [[ $# -gt 0 ]]; do
+    a="$1"; shift
+    if [[ "$a" == "--forge-query" ]]; then seam="${1:-}"; shift; continue; fi
+    fargs+=("$a")
+  done
+  [[ -n "$seam" ]] || return 0
+  fc_answers_from_seam "$d" "$seam" "$WORK/fc-answers.json" "${fargs[@]}"
+  r_out="$(bash "$d/.claude/hooks/forge-check.sh" --instance "$d" "${fargs[@]}" --protection-file "$WORK/fc-answers.json" 2>"$WORK/fc-err-r")"; r_rc=$?
+  r_err="$(cat "$WORK/fc-err-r" 2>/dev/null)"
+  FC_REPLAY_N=$((FC_REPLAY_N + 1))
+  local rname="forge check replay (0193): the answers file the workflow writes gives the seam's verdict, exit, stdout and stderr (stub mode ${FC_STUB_MODE:-${T1_STUB_MODE:-none}}, $(basename "$seam"))"
+  # Both sides are today's check, so bash's own Broken-pipe diagnostic (the reader's
+  # `printf | head -n1` at forge-check.sh's status line, racing on a loaded host, on either
+  # side) is dropped from both before the comparison; every line the check itself prints stays.
+  if [[ "$r_rc" == "$FC_RC" && "$r_out" == "$FC_OUT" \
+        && "$(printf '%s\n' "$r_err" | grep -v ': printf: write error: Broken pipe$' | sed -E 's/setlist-forge-check\.[A-Za-z0-9]+/SCRATCH/g')" == "$(printf '%s\n' "$FC_ERR" | grep -v ': printf: write error: Broken pipe$' | sed -E 's/setlist-forge-check\.[A-Za-z0-9]+/SCRATCH/g')" ]]; then
+    ok "$rname"
+  else
+    bad "$rname" "seam rc=$FC_RC last=[$FC_LAST]; file rc=$r_rc last=[$(printf '%s\n' "$r_out" | tail -n1)]; stderr diff: $(diff <(printf '%s\n' "$FC_ERR") <(printf '%s\n' "$r_err") | grep '^[<>]' | head -4 | cut -c1-160 | tr '\n' ' ')"
+  fi
+  return 0
 }
 fc_case() { # fc_case <name> <want-rc> <want-last-line-prefix> [want-stderr-code...]
   local name="$1" rc="$2" last="$3"; shift 3
@@ -365,6 +432,10 @@ FC_STUB_MODE=nocheck fc_run "$FCF" --base main --head spec/0002-other --forge gi
 fc_case "row 5: a protected trunk that does not require this check is FC-CHECK-NOT-REQUIRED" 1 "CHECK-NOT-REQUIRED" FC-CHECK-NOT-REQUIRED
 FC_STUB_MODE=noreview fc_run "$FCF" --base main --head spec/0002-other --forge github --repo owner/repo --forge-query "$FC_STUB"
 fc_case "row 6: a protected trunk requiring no approving review is FC-NO-REVIEW-REQUIRED" 1 "FORGE-UNPROTECTED" FC-NO-REVIEW-REQUIRED
+for FC_STUB_REVIEWS in 0.5 1e-9 '[1]'; do
+  FC_STUB_MODE=reviewcount FC_STUB_REVIEWS="$FC_STUB_REVIEWS" fc_run "$FCF" --base main --head spec/0002-other --forge github --repo owner/repo --forge-query "$FC_STUB"
+  fc_case "row 6 (0196 F11): a review count of $FC_STUB_REVIEWS is no approving review, FC-NO-REVIEW-REQUIRED" 1 "FORGE-UNPROTECTED" FC-NO-REVIEW-REQUIRED
+done
 FC_STUB_MODE=ok fc_run "$FCF" --base main --head spec/0002-other --forge github --repo owner/repo --forge-query "$FC_STUB"
 fc_case "custody C pass: rules requiring a review and this check PASS naming the custody" 0 "PASS (custody: forge, verified at the forge)" FC-CUSTODY-VERIFIED
 # THE SENTENCE, VERBATIM (design section 5, ratification decision 4), for the
@@ -394,8 +465,8 @@ FC_STUB_MODE=ok fc_run "$FCF2" --base main --head spec/0002-other --forge github
 fc_case "row 8: a document introduced on the pull request's own branch is FC-FLIP-NOT-ON-TRUNK, whatever the forge says" 1 "ATTEST-REFUSED" FC-FLIP-NOT-ON-TRUNK
 
 # --- THE REPORT CELLS (rows 4 through 6 under a custody that is not C) ---------
-# Asserted as a REPORT LINE plus a PASS on the other predicates, never as a
-# pass on absence: under signer or none the trunk's protection is not part of
+# Asserted as a REPORT LINE plus a PASS on the other predicates, never as
+# a pass on absence: under signer or none the trunk's protection is not part of
 # any claim the instance makes.
 FCR="$WORK/fc-report"; fc_fixture "$FCR" off; fc_close_branch "$FCR"
 FC_STUB_MODE=unprotected fc_run "$FCR" --base main --head spec/0001-thing --forge github --repo owner/repo --forge-query "$FC_STUB"
@@ -541,6 +612,20 @@ if printf '%s' "$SCRIPT_OUT" | grep -q '^  \.github/workflows/setlist-forge-chec
 else
   bad "delivery (ruling 2): the edited workflow's divergence is reported BY FILE in report mode and on --apply" "report: $(printf '%s' "$SCRIPT_OUT" | grep 'setlist-forge-check.yml' | cut -c1-120); apply: $(printf '%s' "$FCR2_APPLY_OUT" | grep 'setlist-forge-check.yml' | cut -c1-120)"
 fi
+# Spec 0196 (the 2.13.0 leg's F3, the cold run's M-1): a workflow from before 2.13.0 hands the
+# refreshed check no --protection-file, so the check asks the forge nothing. Such a workflow is
+# reported STALE with the one re-stamp edit printed, the exit status unchanged (0194 decision 10's
+# shape); the workflow is still never edited by the refresh.
+grep -vF -- '--protection-file' "$ROOT/templates/root/.github/workflows/setlist-forge-check.yml" > "$FCR2/.github/workflows/setlist-forge-check.yml"
+run_script bash "$SCRIPTS/refresh-instance.sh" "$FCR2"
+FCR2_STALE_RC="$SCRIPT_RC"
+if printf '%s' "$SCRIPT_OUT" | grep -q '^  \.github/workflows/setlist-forge-check\.yml: is STALE' \
+   && printf '%s' "$SCRIPT_OUT" | grep -qF "    cp \"$ROOT/templates/root/.github/workflows/setlist-forge-check.yml\" .github/workflows/setlist-forge-check.yml" \
+   && ! grep -qF -- '--protection-file' "$FCR2/.github/workflows/setlist-forge-check.yml"; then
+  ok "delivery (0196): a workflow that hands the check no --protection-file is reported STALE with the re-stamp edit, and is not edited"
+else
+  bad "delivery (0196): a workflow that hands the check no --protection-file is reported STALE with the re-stamp edit, and is not edited" "rc $FCR2_STALE_RC: $(printf '%s' "$SCRIPT_OUT" | grep -A1 'setlist-forge-check.yml' | cut -c1-160 | tr '\n' ' ')"
+fi
 
 # --- AMENDMENTS 3 AND 4 (the owner's rulings of 2026-09-07, session 3) ----------
 #
@@ -635,6 +720,58 @@ fi
 
 fi; shard_region_end
 # <<< SHARD-END forge-check-0132
+
+# =============================================================================
+# THE FORGE'S ANSWERS FROM A FILE, AND NO NETWORK CALL OF THE CHECK'S OWN (spec
+# 0193, item 1). The check reads no credential: the stamped workflow writes the
+# forge's answers to a file and the check reads it. With neither the file nor the
+# seam, a forge question is unanswered and refuses under forge custody; the check
+# never reaches for the network (a curl stub on PATH records any call). The seam
+# corpus itself is replayed through the file by fc_run, one case per seam case.
+# Watched RED on the unedited check first (spec 0193's Progress).
+# =============================================================================
+# >>> SHARD-BEGIN forge-answers-0193 cost=4
+if shard_region forge-answers-0193; then
+
+FAF="$WORK/fa-forge"; fc_forge_fixture "$FAF" trunk
+FA_BIN="$WORK/fa-bin"; mkdir -p "$FA_BIN"
+printf '#!/usr/bin/env bash\nprintf "called %%s\\n" "$*" >> "%s/curl-calls"\nexit 7\n' "$WORK" > "$FA_BIN/curl"; chmod +x "$FA_BIN/curl"
+rm -f "$WORK/curl-calls"
+FC_OUT="$(PATH="$FA_BIN:$PATH" bash "$FAF/.claude/hooks/forge-check.sh" --instance "$FAF" --base main --head spec/0002-other --forge github --repo owner/repo 2>"$WORK/fc-err")"; FC_RC=$?
+FC_ERR="$(cat "$WORK/fc-err" 2>/dev/null)"; FC_LAST="$(printf '%s\n' "$FC_OUT" | tail -n1)"
+if [[ ! -f "$WORK/curl-calls" ]]; then
+  fc_case "answers a: with no answers file and no seam, every forge question is unanswered and forge custody refuses FC-FORGE-UNREACHABLE, with no network call" 1 "FORGE-UNREACHABLE" FC-FORGE-UNREACHABLE
+else
+  bad "forge check answers a: with no answers file and no seam, every forge question is unanswered and forge custody refuses FC-FORGE-UNREACHABLE, with no network call" "the check called curl: $(head -n2 "$WORK/curl-calls" | tr '\n' ' ')"
+fi
+# (a2) Spec 0196, the 2.13.0 leg's F3: the refusal names the missing answers file, never the forge,
+# because a workflow from before 2.13.0 hands the check no file and the forge was never asked.
+if [[ "$FC_ERR" == *"no --protection-file"* && "$FC_ERR" != *"the forge did not answer whether"* ]]; then
+  ok "forge check answers a2: with no answers file the refusal names the missing --protection-file, not the forge"
+else
+  bad "forge check answers a2: with no answers file the refusal names the missing --protection-file, not the forge" "$(printf '%s' "$FC_ERR" | grep -m1 'FC-FORGE-UNREACHABLE' | cut -c1-220)"
+fi
+# A file that lacks the protection path is "no answer" for it, never absence.
+printf '%s' '{"repos/owner/repo":{"status":200,"body":{"allow_rebase_merge":false}},"repos/owner/repo/rules/branches/main":{"status":200,"body":[{"type":"pull_request","parameters":{"required_approving_review_count":1}}]}}' > "$WORK/fa-partial.json"
+FC_OUT="$(bash "$FAF/.claude/hooks/forge-check.sh" --instance "$FAF" --base main --head spec/0002-other --forge github --repo owner/repo --protection-file "$WORK/fa-partial.json" 2>"$WORK/fc-err")"; FC_RC=$?
+FC_ERR="$(cat "$WORK/fc-err" 2>/dev/null)"; FC_LAST="$(printf '%s\n' "$FC_OUT" | tail -n1)"
+fc_case "answers b: a file that does not carry the protection answer refuses FC-FORGE-UNREACHABLE under forge custody, never read as an unprotected branch" 1 "FORGE-UNREACHABLE" FC-FORGE-UNREACHABLE
+# A file that is not JSON is no answer at all.
+printf 'not json\n' > "$WORK/fa-bad.json"
+FC_OUT="$(bash "$FAF/.claude/hooks/forge-check.sh" --instance "$FAF" --base main --head spec/0002-other --forge github --repo owner/repo --protection-file "$WORK/fa-bad.json" 2>"$WORK/fc-err")"; FC_RC=$?
+FC_ERR="$(cat "$WORK/fc-err" 2>/dev/null)"; FC_LAST="$(printf '%s\n' "$FC_OUT" | tail -n1)"
+fc_case "answers c: an answers file that is not JSON refuses FC-FORGE-UNREACHABLE under forge custody" 1 "FORGE-UNREACHABLE" FC-FORGE-UNREACHABLE
+# The stamped workflow writes the file and hands it over; no workflow hands the check a token.
+if grep -qF -- '--protection-file "$RUNNER_TEMP/setlist-forge-answers.json"' "$ROOT/templates/root/.github/workflows/setlist-forge-check.yml" \
+   && grep -qE 'uses: actions/github-script@[0-9a-f]{40} # v9\.[0-9]+\.[0-9]+$' "$ROOT/templates/root/.github/workflows/setlist-forge-check.yml" \
+   && ! grep -qE 'github\.token|GITHUB_''TOKEN' "$ROOT/templates/root/.github/workflows/setlist-forge-check.yml" "$ROOT/.github/workflows/setlist-forge-check.yml" "$ROOT/scripts/forge-check.sh"; then
+  ok "forge check answers d: the stamped workflow writes the answers through the forge's own action pinned by commit and passes the file; no workflow and not the check names the job's token"
+else
+  bad "forge check answers d: the stamped workflow writes the answers through the forge's own action pinned by commit and passes the file; no workflow and not the check names the job's token" "$(grep -nE 'github-script|protection-file|github\.token|GITHUB_''TOKEN' "$ROOT/templates/root/.github/workflows/setlist-forge-check.yml" "$ROOT/scripts/forge-check.sh" | head -5 | tr '\n' ' ')"
+fi
+
+fi; shard_region_end
+# <<< SHARD-END forge-answers-0193
 
 # =============================================================================
 # THE CODE-OWNER SETTING AND THE ENFORCEMENT PATHS (spec 0160, built to spec
@@ -1692,13 +1829,15 @@ else
 fi
 
 # --- the two public bullets that named the run ------------------------------------
-# The public README lives at publish/README.public.md in the source and ships as
-# README.md; the export carries no publish/. These two cases READ the shipped
-# text in both places rather than skipping in one: the first cut read the source
-# path unguarded and the public repository's CI was the first thing to execute
-# it (the 2.6.0 walk's macOS gate, fix round 2, 2026-09-08; RP23).
-AR_README="$ROOT/publish/README.public.md"
-[[ -f "$AR_README" ]] || AR_README="$ROOT/README.md"
+# The public README lives at publish/README.public.md in the source and ships at
+# the public repository's root; the export carries no publish/. The first cut read
+# the source path unguarded and the public repository's CI was the first thing to
+# execute it (the 2.6.0 walk's macOS gate, fix round 2, 2026-09-08; RP23), so the
+# absence is guarded, and since 0192 the guard is a skip printed by name.
+# Since spec 0192 the README is read by its source name only (public_readme, the prelude), and
+# the export prints the README half SKIPPED by name; LIMITATIONS.md and the ledger are read in
+# both places.
+AR_README="$PUBLIC_README"
 # The list is two layers since spec 0134 (2.6.1): the README carries each hole as its
 # title plus one sentence, LIMITATIONS.md the full text. The title is read from the
 # README (the ledger keys on it); the sentence inside a bullet is read from the full text.
@@ -1708,11 +1847,15 @@ AR_LIM="$ROOT/publish/LIMITATIONS.md"
 # 2.8.0 (spec 0146): the heredoc bullet LEFT with its subject, the close gate's command
 # parser, so this pins its absence from both layers and from the ledger instead of its
 # wording; a bullet re-added without its subject is the stale-claim class this watches.
-if ! grep -qF -- 'heredoc body is read as code' "$AR_README" && ! grep -qF -- 'heredoc body is read as code' "$AR_LIM" \
+AR_README_HIT=""
+if public_readme "advisory ruling: the heredoc bullet's absence from the README layer"; then
+  AR_README_HIT="$(grep -F -- 'heredoc body is read as code' "$AR_README")"
+fi
+if [[ -z "$AR_README_HIT" ]] && ! grep -qF -- 'heredoc body is read as code' "$AR_LIM" \
    && ! sed -n '/LEDGER-BEGIN/,/LEDGER-END/p' "$ROOT/test/run-tests.sh" | grep -qF -- 'heredoc body is read as code'; then
   ok "advisory ruling: the heredoc bullet left with the close gate in 2.8.0, from both layers and the ledger"
 else
-  bad "advisory ruling: the heredoc bullet left with the close gate in 2.8.0, from both layers and the ledger" "$(grep -n 'heredoc body' "$AR_README" "$AR_LIM" | cut -c1-120)"
+  bad "advisory ruling: the heredoc bullet left with the close gate in 2.8.0, from both layers and the ledger" "$(grep -n 'heredoc body' "$AR_LIM" | cut -c1-120) ${AR_README_HIT:0:120}"
 fi
 if grep -q '300 seconds for each Bash hook since 2.6.0' "$AR_LIM" && ! grep -q '30 minutes for the close gate, which re-runs' "$AR_LIM"; then
   ok "advisory ruling: the timed-out-hook bullet names 300 and no longer promises a 30-minute suite run in the hook"
@@ -1774,10 +1917,10 @@ gb_merge_case() {
 if shard_region gates-block-0132; then
 
 GB_TMPL="$ROOT/templates/claude/sdd.json.tmpl"
-if jq -e '.gates == {commit: "", close: "", push: ""}' "$GB_TMPL" >/dev/null 2>&1 && jq -e 'keys_unsorted | index("gates") > index("release")' "$GB_TMPL" >/dev/null 2>&1; then
+if jq -e '.gates == {commit: "", close: "", push: ""}' "$GB_TMPL" >/dev/null 2>&1 && jq -e '[to_entries[].key] | index("gates") > index("release")' "$GB_TMPL" >/dev/null 2>&1; then
   ok "gates template: sdd.json.tmpl stamps the block with three empty string tiers, appended after release"
 else
-  bad "gates template: sdd.json.tmpl stamps the block with three empty string tiers, appended after release" "$(jq -c '{gates, keys: keys_unsorted}' "$GB_TMPL" 2>/dev/null | cut -c1-160)"
+  bad "gates template: sdd.json.tmpl stamps the block with three empty string tiers, appended after release" "$(jq -c '{gates, keys: [to_entries[].key]}' "$GB_TMPL" 2>/dev/null | cut -c1-160)"
 fi
 if grep -q 'The `gates`' "$ROOT/templates/STAMP-TREE.md" && grep -q 'slh_gate_command_for' "$ROOT/templates/STAMP-TREE.md"; then
   ok "gates template: STAMP-TREE.md names the block as the third framework block and its one reader"
@@ -1824,11 +1967,11 @@ else
 fi
 GB_APPLY_OUT="$(bash "$SCRIPTS/refresh-instance.sh" --apply "$GB_R" 2>&1)"
 if [[ "$(jq -c '.gates' "$GB_R/.claude/sdd.json" 2>/dev/null)" == '{"commit":"","close":"npm test","push":"npm test"}' ]] \
-   && jq -e 'keys_unsorted | index("gates") > index("release")' "$GB_R/.claude/sdd.json" >/dev/null 2>&1 \
+   && jq -e '[to_entries[].key] | index("gates") > index("release")' "$GB_R/.claude/sdd.json" >/dev/null 2>&1 \
    && printf '%s' "$GB_APPLY_OUT" | grep -q 'wrote the gates block'; then
   ok "gates migration: --apply writes the block after release, close and push the single command, commit empty, and says so"
 else
-  bad "gates migration: --apply writes the block after release, close and push the single command, commit empty, and says so" "gates=$(jq -c '.gates' "$GB_R/.claude/sdd.json" 2>/dev/null) keys=$(jq -c 'keys_unsorted' "$GB_R/.claude/sdd.json" 2>/dev/null) out: $(printf '%s' "$GB_APPLY_OUT" | grep -i 'gates' | head -1 | cut -c1-120)"
+  bad "gates migration: --apply writes the block after release, close and push the single command, commit empty, and says so" "gates=$(jq -c '.gates' "$GB_R/.claude/sdd.json" 2>/dev/null) fields=$(jq -c '[to_entries[].key]' "$GB_R/.claude/sdd.json" 2>/dev/null) out: $(printf '%s' "$GB_APPLY_OUT" | grep -i 'gates' | head -1 | cut -c1-120)"
 fi
 if [[ "$(jq -r '.gate_command' "$GB_R/.claude/sdd.json" 2>/dev/null)" == "npm test" && "$(jq -r '.plugin.version' "$GB_R/.claude/sdd.json" 2>/dev/null)" == "$PLUGIN_VERSION" ]]; then
   ok "gates migration: the single command and the recorded version survive the write"
@@ -2202,7 +2345,7 @@ if [[ "${#shk_r}" -lt 480 && "$shk_r" != *'SYSTEM: all specs'* && "$shk_r" != *$
 else
   bad "stop hook 0171 i16s: the name is bounded, its characters outside the path set replaced, the edit said, under 480" "${#shk_r}: $(printf '%s' "$shk_r" | tr '\n' '|' | cut -c1-240)"
 fi
-if [[ "$(printf '%s' "$shk_r" | grep -o 'outside a path set' | wc -l | tr -d ' ')" == 1 ]]; then ok "stop hook 0171 i16s: the edit is said once per reason"
+if [[ "$(printf '%s' "$shk_r" | grep -o 'outside a path set replaced' | wc -l | tr -d ' ')" == 1 ]]; then ok "stop hook 0171 i16s: the edit is said once per reason"
 else bad "stop hook 0171 i16s: the edit is said once per reason" "$(printf '%s' "$shk_r" | cut -c1-240)"; fi
 rm -f "$SHK/specs/$shk_i16"; git -C "$SHK" checkout -q -- specs/ 2>/dev/null
 else
@@ -2310,7 +2453,7 @@ fi
 # the stamp writes, so the Read rules now name the conventional secret-bearing files. Red first.
 SH_DENY_WANT='["Read(.env)","Read(.env.local)","Read(.env.*.local)","Read(.env.production)","Read(.env.development)","Read(.env.staging)","Read(.env.test)","Bash(cat .env*)"]'
 if [[ "$(printf '%s' "$SH_TMPL" | jq -c '.permissions.deny' 2>/dev/null)" == "$SH_DENY_WANT" ]]; then
-  ok ".env deny: the template denies the conventional secret files by name and the one Bash spelling (measured 2026-09-07: cat .env and cat .env.local refused, cat env.txt allowed)"
+  ok ".env deny: the template denies the conventional secret files by name and the one Bash spelling (measured 2026-09-07: both reads of an environment file refused, a file named env.txt allowed)"
 else
   bad ".env deny: the template denies the conventional secret files by name and the one Bash spelling" "$(printf '%s' "$SH_TMPL" | jq -c '.permissions.deny' 2>/dev/null)"
 fi
@@ -2318,16 +2461,16 @@ fi
 # pattern is read as a shell glob here, which is the reading the deny list's own note gives it.
 SH_EXAMPLE_HIT=""
 while IFS= read -r sh_rule; do
-  sh_pat="${sh_rule#Read(}"; sh_pat="${sh_pat%)}"
+  sh_glob="${sh_rule#Read(}"; sh_glob="${sh_glob%)}"
   # shellcheck disable=SC2053 # the pattern is a glob on purpose
-  [[ ".env.example" == $sh_pat ]] && SH_EXAMPLE_HIT="$SH_EXAMPLE_HIT $sh_rule"
+  [[ ".env.example" == $sh_glob ]] && SH_EXAMPLE_HIT="$SH_EXAMPLE_HIT $sh_rule"
 done < <(printf '%s' "$SH_TMPL" | jq -r '.permissions.deny[] | select(startswith("Read("))' 2>/dev/null)
 if [[ -z "$SH_EXAMPLE_HIT" ]] && grep -q '\.env\.example' "$ROOT/scripts/stamp.sh"; then
   ok ".env deny: the .env.example the stamp writes is matched by no Read rule"
 else
   bad ".env deny: the .env.example the stamp writes is matched by no Read rule" "matched by:${SH_EXAMPLE_HIT:- none (or the stamp no longer writes it)}"
 fi
-if printf '%s' "$SH_TMPL" | jq -e '.permissions._comment | test("SPELLING list") and test("Bash\\(cat \\.env\\*\\)") and test("less, head") and test("\\.env\\.example") and (test("Read\\(\\.env\\.\\*\\)") | not)' >/dev/null 2>&1 && ! grep -q '^[[:space:]]*//' "$ROOT/templates/claude/settings.json.tmpl"; then
+if printf '%s' "$SH_TMPL" | jq -e '.permissions._comment | test("SPELLING list") and test("Bash deny for reading environment files") and test("less, head") and test("\\.env\\.example") and (test("Read\\(\\.env\\.\\*\\)") | not)' >/dev/null 2>&1 && ! grep -q '^[[:space:]]*//' "$ROOT/templates/claude/settings.json.tmpl"; then
   ok ".env deny: the spelling-list note lives in the _comment key the harness tolerates, and no // comment is in the file (measured: a // comment drops every rule)"
 else
   bad ".env deny: the spelling-list note lives in the _comment key the harness tolerates, and no // comment is in the file" "$(printf '%s' "$SH_TMPL" | jq -r '.permissions._comment // "<none>"' | cut -c1-120)"
@@ -2457,12 +2600,13 @@ lt_branch_close() { # lt_branch_close <dir> <spec-text> : the close on spec/0001
 }
 LT6="$WORK/lt-squash"; rp1_fixture "$LT6"; lt_branch_close "$LT6" "$(lt_spec 'Tier: lite' 6)"
 git -C "$LT6" merge --squash spec/0001-thing >/dev/null 2>&1
-if git -C "$LT6" commit -qm "squash close" >"$WORK/lt-squash.out" 2>&1; then
+git -C "$LT6" commit -qm "squash close" >"$WORK/lt-squash.out" 2>&1; LT_F_RC=$?
+if [[ "$LT_F_RC" -eq 0 ]]; then
   bad "lite f: the squash landing of a six-file lite spec is refused at pre-commit" "the landing succeeded"
 elif grep -q 'SLH-LITE-OVERSIZED' "$WORK/lt-squash.out"; then
   ok "lite f: the squash landing of a six-file lite spec is refused at pre-commit"
 else
-  bad "lite f: the squash landing of a six-file lite spec is refused at pre-commit" "refused for another reason: $(tr '\n' ' ' < "$WORK/lt-squash.out" | cut -c1-200)"
+  bad "lite f: the squash landing of a six-file lite spec is refused at pre-commit" "refused for another reason (rc $LT_F_RC): $(tr '\n' ' ' < "$WORK/lt-squash.out" | cut -c1-200)"
 fi
 LT7="$WORK/lt-squash5"; rp1_fixture "$LT7"; lt_branch_close "$LT7" "$(lt_spec 'Tier: lite' 5)"
 git -C "$LT7" merge --squash spec/0001-thing >/dev/null 2>&1
@@ -2473,12 +2617,13 @@ else
 fi
 # (g) the --no-ff merge at pre-merge-commit refuses: the tier is a claim about the spec, not the route
 LT8="$WORK/lt-merge"; rp1_fixture "$LT8"; lt_branch_close "$LT8" "$(lt_spec 'Tier: lite' 6)"
-if ( cd "$LT8" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m "merge 0001" spec/0001-thing ) >"$WORK/lt-merge.out" 2>&1; then
+( cd "$LT8" && GIT_MERGE_AUTOEDIT=no GIT_EDITOR=true git merge --no-ff -m "merge 0001" spec/0001-thing ) >"$WORK/lt-merge.out" 2>&1; LT_G_RC=$?
+if [[ "$LT_G_RC" -eq 0 ]]; then
   bad "lite g: the --no-ff merge of a six-file lite spec is refused at pre-merge-commit" "the merge landed"
 elif grep -q 'SLH-LITE-OVERSIZED' "$WORK/lt-merge.out"; then
   ok "lite g: the --no-ff merge of a six-file lite spec is refused at pre-merge-commit"
 else
-  bad "lite g: the --no-ff merge of a six-file lite spec is refused at pre-merge-commit" "refused for another reason: $(tr '\n' ' ' < "$WORK/lt-merge.out" | cut -c1-200)"
+  bad "lite g: the --no-ff merge of a six-file lite spec is refused at pre-merge-commit" "refused for another reason (rc $LT_G_RC): $(tr '\n' ' ' < "$WORK/lt-merge.out" | cut -c1-200)"
 fi
 # (h) the audit's merge arm refuses the same landing when the hooks were bypassed
 LT9="$WORK/lt-merge-audit"; rp1_fixture "$LT9"; lt_branch_close "$LT9" "$(lt_spec 'Tier: lite' 6)"
@@ -2504,7 +2649,7 @@ fc_run "$LT10" --base main --head spec/0001-thing --forge none
 fc_case "lite i: the forge check refuses a six-file lite spec at its close verification" 1 "CLOSE-REFUSED" SLH-LITE-OVERSIZED
 # The edition and the derived surfaces (rule 6) say the same thing.
 if grep -q 'at most five files under `Owns:`' "$ROOT/setlist.md" && grep -q '^| a spec declared `Tier: lite`.*`SLH-LITE-OVERSIZED` |' "$ROOT/setlist.md" \
-   && grep -q '^Tier: full ' "$ROOT/setlist.md" && grep -q 'SLH-LITE-OVERSIZED' "$ROOT/skills/checkpoint/SKILL.md" && grep -q 'Tier: lite' "$ROOT/skills/spec-authoring/SKILL.md"; then
+   && grep -q '^Tier: full ' "$ROOT/setlist-operations.md" && grep -q 'SLH-LITE-OVERSIZED' "$ROOT/skills/checkpoint/SKILL.md" && grep -q 'Tier: lite' "$ROOT/skills/spec-authoring/SKILL.md"; then
   ok "lite edition: Part 3 states the five-file threshold, Part 6's table carries the code, Appendix C's template carries the Tier line, and the checkpoint and spec-authoring skills know the tier"
 else
   bad "lite edition: Part 3 states the five-file threshold, Part 6's table carries the code, Appendix C's template carries the Tier line, and the checkpoint and spec-authoring skills know the tier" "one of the five surfaces is silent"

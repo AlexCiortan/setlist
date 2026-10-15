@@ -250,7 +250,7 @@ fi
 # reader to ignore the report.
 if [[ -z "$SINCE" ]]; then
   SINCE="$(git -C "$INSTANCE" log --format=%H --diff-filter=A -- .claude/sdd.json | tail -n1)"
-  [[ -n "$SINCE" ]] || die "cannot find the commit that introduced .claude/sdd.json; pass --since <ref>"
+  [[ -n "$SINCE" ]] || die "cannot find the commit that introduced .claude/sdd.json; give --since <ref>"
 fi
 
 # The baseline must RESOLVE. Since an empty range now reports clean, a --since

@@ -356,7 +356,9 @@ elif [[ "$REMOTE_UNREACHABLE" -eq 1 ]]; then
   printf 'setlist pre-push [SLH-REMOTE-UNRESOLVED]: cannot reach %s to ask which branch\n' "${1:-the remote}" >&2
   printf 'is its trunk, so this push cannot be audited. A check that cannot run has not\n' >&2
   printf 'passed. Fix connectivity.\n' >&2
-  RC=1
+  # The refusal ends on its own reason (spec 0196, the 2.13.0 leg's F12): falling through
+  # printed the trunk-violation trailer below, which is false when nothing was audited.
+  exit 1
 else
   # HISTORY: ruling PP-14 (undated): No line named the trunk, or stdin was empty because a caller invoked this hook by hand.
   bash "$AUDIT" "$REPO" ${CFG_FROM:+--config-from "$CFG_FROM"} || RC=$?

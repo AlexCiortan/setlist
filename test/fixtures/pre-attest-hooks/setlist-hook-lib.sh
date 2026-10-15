@@ -179,7 +179,7 @@ EOF
 # rendered while every object still reaches the remote. Treat a secret that
 # reached a commit as compromised regardless of what any layer here reported.
 SLH_EMDASH="$(printf '\342\200\224')"
-SLH_SECRET_RE='(api[_-]?key|secret|passw(or)?d|token)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{16,}|[a-z][a-z0-9+.-]*://[^/@[:space:]]+:[^@[:space:]]+@'
+SLH_SHAPED_VALUE_RE='(api[_-]?key|secret|passw(or)?d|token)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{16,}|[a-z][a-z0-9+.-]*://[^/@[:space:]]+:[^@[:space:]]+@'
 
 # ===========================================================================
 # PATH-SCOPED SCANS: THE DECLARED EXCLUSION SET, NAMED OUT LOUD (KL4, spec 0122).
@@ -312,7 +312,7 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
   # So each entry now arrives as ">" plus its text, which survives the strip
   # because it is never empty, and the verdict carries the DECLARED COUNT so the
   # reader can assert it read as many as jq wrote rather than assuming.
-  local proj="$1" raw verdict pat lit out="" declared="" seen=0
+  local proj="$1" raw verdict glob_rule lit out="" declared="" seen=0
   if [ -n "$SLH_SCAN_EXCLUSIONS_STATE" ]; then
     [ "$SLH_SCAN_EXCLUSIONS_STATE" = "ok" ] && return 0
     return 1
@@ -359,12 +359,12 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
       return 1
       ;;
   esac
-  while IFS= read -r pat; do
+  while IFS= read -r glob_rule; do
     # An empty line here is the heredoc's own trailing newline, never an entry:
     # a real entry always carries the ">" prefix, including an empty one.
-    [ -n "$pat" ] || continue
-    case "$pat" in
-      ">"*) pat="${pat#>}" ;;
+    [ -n "$glob_rule" ] || continue
+    case "$glob_rule" in
+      ">"*) glob_rule="${glob_rule#>}" ;;
       *)
         SLH_SCAN_EXCLUSIONS_STATE="bad"
         slh_refuse "SLH-UNREADABLE-CONFIG" "the scan exclusion set in .claude/sdd.json was read in a form this hook does not recognise, so which paths the scans may skip is not established. Refusing rather than proceeding on a partial read."
@@ -376,18 +376,18 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
     # this file. A set recorded as "./vendor", "/vendor" or "vendor/" names the
     # same directory a human means, and four spellings of one value is how the
     # guarantee layer went blind on "./src" once already.
-    pat="$(printf '%s' "$pat" | tr -s '/')"
-    pat="${pat#/}"
-    while [ "${pat#./}" != "$pat" ]; do pat="${pat#./}"; done
-    while [ "${pat%/}" != "$pat" ]; do pat="${pat%/}"; done
-    case "$pat" in
+    glob_rule="$(printf '%s' "$glob_rule" | tr -s '/')"
+    glob_rule="${glob_rule#/}"
+    while [ "${glob_rule#./}" != "$glob_rule" ]; do glob_rule="${glob_rule#./}"; done
+    while [ "${glob_rule%/}" != "$glob_rule" ]; do glob_rule="${glob_rule%/}"; done
+    case "$glob_rule" in
       *$SLH_SCAN_GLOB_BAD*)
         SLH_SCAN_EXCLUSIONS_STATE="bad"
         slh_refuse "SLH-SCAN-EXCLUSION-INVALID" ".claude/sdd.json declares a scan exclusion containing a character a repo-relative path glob does not use. A glob here is letters, digits and . _ - / * ?; anything else is refused rather than sanitised, because these patterns are matched as shell globs and a value carrying shell syntax would be configuration deciding what this hook runs. A path that needs one of those characters cannot be excluded and will be scanned."
         return 1
         ;;
     esac
-    case "/$pat/" in
+    case "/$glob_rule/" in
       *//*|*/./*|*/../*)
         SLH_SCAN_EXCLUSIONS_STATE="bad"
         slh_refuse "SLH-SCAN-EXCLUSION-INVALID" ".claude/sdd.json declares a scan exclusion that is empty, or that contains a . or .. path segment. Git paths are repo-relative and carry neither, so such a pattern can never match anything: it would sit in the config reading as coverage while excluding nothing. Write the path as git records it, for example \"vendor/**\"."
@@ -400,13 +400,13 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
     # pattern IS rather than by a list of spellings: "*", "**", "*/*" and "?" all
     # fail this one test, and any pattern carrying a single literal character
     # passes it.
-    lit="$(printf '%s' "$pat" | tr -d '*?/')"
+    lit="$(printf '%s' "$glob_rule" | tr -d '*?/')"
     if [ -z "$lit" ]; then
       SLH_SCAN_EXCLUSIONS_STATE="bad"
       slh_refuse "SLH-SCAN-EXCLUSION-CATCHALL" ".claude/sdd.json declares a scan exclusion made only of wildcards, which matches every path in the repository and would switch the em-dash and secret scans off entirely while looking like a scoping decision. The exclusion set scopes these scans to make foreign content committable; it is not an off switch. Name the tree you mean, for example \"vendor/**\"."
       return 1
     fi
-    out="$out$pat
+    out="$out$glob_rule
 "
   done <<EOF
 $(printf '%s\n' "$raw" | tail -n +2)
@@ -562,7 +562,7 @@ slh_scan_added() {
   if printf '%s\n' "$added" | grep -q "$SLH_EMDASH"; then
     slh_refuse "SLH-EMDASH" "$where contains an em-dash; replace it with a comma, colon, parentheses, or separate sentences."
   fi
-  if printf '%s\n' "$added" | grep -qiE "$SLH_SECRET_RE"; then
+  if printf '%s\n' "$added" | grep -qiE "$SLH_SHAPED_VALUE_RE"; then
     slh_refuse "SLH-SECRET" "$where contains a secret-shaped string; move the value to the environment, reference it, and stage .env.example instead."
   fi
 }
@@ -1211,7 +1211,7 @@ slh_run_gate_command() { # slh_run_gate_command <proj>
   # refusal into a silent no-op in any caller that sets it. The shipped hooks do
   # not, today. Making the function safe anyway costs nothing and removes a trap
   # from whoever adds `set -e` later.
-  out="$( ( cd "$proj" && eval "$cmd" ) 2>&1 )" && rc=0 || rc=$?
+  out="$( ( cd "$proj" && bash -c "$cmd" ) 2>&1 )" && rc=0 || rc=$?
   [ "$rc" = "0" ] && return 0
   last="$(printf '%s\n' "$out" | tail -3)"
   # 127 is "a command in the gate was not found", which is a DIFFERENT fact from

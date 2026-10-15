@@ -5,8 +5,9 @@
 # Usage: model-probe.sh [--claude <bin>]     (default: `claude` on PATH)
 #
 # Why this exists. `/setlist:new` and `/setlist:retrofit` verify `opusplan` by a
-# live probe at bootstrap and record `opusplan_verified` as a yes or a no. That
-# answer names no version, and it is never asked again. Since Claude Code
+# live probe at bootstrap. Through 2.11.0 they recorded `opusplan_verified` as a
+# yes or a no, which names no version; since 2.12.0 they record this script's
+# served ids (below), and validate compares them with a later run. Since Claude Code
 # 2.1.283 a managed allowlist can pin exact versions (`availableModelsMatch:
 # "exact"`) or deny one (`deniedModels`), and the harness does not REFUSE a
 # blocked planning model: it substitutes, the plan phase falling to the newest
@@ -36,13 +37,19 @@
 # keeps the planning phase on an older Opus holds the tier and is a line, not a
 # finding.
 #
+# THE MACHINE LINES (2.12.0, spec 0185): beside each phase's human line the probe
+# prints `served planning <id>` or `served execution <id>`, which /setlist:new and
+# /setlist:retrofit write into the answers and the stamp records in
+# .claude/sdd.json as "models"; /setlist:validate compares them with the live run.
+# Additive: the human lines and the exit codes below are unchanged.
+#
 # Exit codes:
 #   0  both phases served a model of their tier's family (each printed).
 #   1  a phase was served off its tier: [MP-PLAN-OFF-TIER] or [MP-EXEC-OFF-TIER].
 #   2  no reading: [MP-PROBE-UNAVAILABLE] (the probe did not run, errored, or
 #      named no unique served model) or [MP-FAMILY-UNREADABLE] (the served id
-#      names no model family, as a gateway's own deployment name can). Never a
-#      pass: a check that could not look has not seen the tier hold.
+#      names no model family, as a gateway's own deployment name can). Never
+#      a pass: a check that could not look has not seen the tier hold.
 
 set -u
 
@@ -119,6 +126,10 @@ probe_phase() { # <label> <expected family> <code> [claude args...]
   fi
   cost="$(jq -r '.total_cost_usd // empty' "$out" 2>/dev/null)"
   printf '%s: %s%s\n' "$label" "$id" "${cost:+ (cost $cost USD)}"
+  # The machine line (spec 0185): one per phase read, so a caller records the
+  # served id without parsing the line above; the bootstrap writes it into the
+  # answers as planning_model or execution_model.
+  printf 'served %s %s\n' "$([[ "$label" == plan ]] && printf planning || printf '%s' "$label")" "$id"
   fam="$(family_of "$id")"
   if [[ -z "$fam" ]]; then
     printf '[MP-FAMILY-UNREADABLE] %s: %s names no model family, so this probe cannot say whether the %s tier holds; read it against your provider'"'"'s model list.\n' \

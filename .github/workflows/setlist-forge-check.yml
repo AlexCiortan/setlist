@@ -42,8 +42,8 @@ jobs:
       - name: ensure jq
         run: command -v jq >/dev/null 2>&1 || (sudo apt-get update -qq && sudo apt-get install -y -qq jq)
       # THE MERMAID PARSER, AT A PINNED VERSION, AS ITS OWN STEP (edition v1.15,
-      # D14a). It either succeeds or FAILS THE JOB: the check must never report a
-      # pass on a renderer it could not install, which is the whole reason the
+      # D14a). It either succeeds or FAILS THE JOB: the check must never report
+      # a pass on a renderer it could not install, which is the whole reason the
       # forge is where render validation lives. `set -e` plus the explicit
       # verification below is what makes that true rather than intended.
       #
@@ -95,12 +95,67 @@ jobs:
             exit 1
           fi
           echo "setlist forge check: mermaid 11.14.0 parser installed and verified in both directions"
+      # THE FORGE'S ANSWERS, READ HERE AND HANDED TO THE CHECK AS A FILE (spec
+      # 0193). The check itself reads no credential and makes no network call:
+      # this step asks the forge, through the action's own client and the job's
+      # own token, the questions the check would ask (the repository's merge
+      # flags, the rules and the classic protection of the pull request's base,
+      # the author's user record, and the author's membership of every team the
+      # merged CODEOWNERS names), and writes each answer as the forge gave it:
+      # its HTTP status and its body. A question the forge did not answer is
+      # written with no status, which the check reads as UNVERIFIABLE, never as
+      # absence; a question the file does not carry reads the same way.
+      - name: read the forge's answers for the check
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const { owner, repo } = context.repo;
+            const branch = process.env.GITHUB_BASE_REF || '';
+            const pr = context.payload.pull_request;
+            const username = (pr && pr.user && pr.user.login) || '';
+            // Each question is the forge's route and its parameters; no request path is
+            // written here. The answers file is keyed by the path the client itself builds.
+            const asks = [
+              ['GET /repos/{owner}/{repo}', { owner, repo }],
+              ['GET /repos/{owner}/{repo}/rules/branches/{branch}', { owner, repo, branch }],
+              ['GET /repos/{owner}/{repo}/branches/{branch}/protection', { owner, repo, branch }],
+            ];
+            if (username) {
+              asks.push(['GET /users/{username}', { username }]);
+              const teams = new Map();
+              for (const file of ['.github/CODEOWNERS', 'CODEOWNERS', 'docs/CODEOWNERS']) {
+                let text = '';
+                try { text = fs.readFileSync(file, 'utf8'); } catch (e) { continue; }
+                for (const m of text.matchAll(/@([A-Za-z0-9-]+)\/([A-Za-z0-9._-]+)/g)) teams.set(m[0], { org: m[1], team_slug: m[2] });
+              }
+              for (const t of [...teams.values()].slice(0, 50)) {
+                asks.push(['GET /orgs/{org}/teams/{team_slug}/memberships/{username}', { org: t.org, team_slug: t.team_slug, username }]);
+              }
+            }
+            const basePath = new URL(github.request.endpoint.DEFAULTS.baseUrl).pathname.replace(/\/+$/, '');
+            const answers = {};
+            for (const [route, params] of asks) {
+              const key = decodeURIComponent(new URL(github.request.endpoint(route, params).url).pathname).slice(basePath.length).replace(/^\/+/, '');
+              let answer;
+              try {
+                const r = await github.request(route, params);
+                answer = { status: r.status, body: r.data };
+              } catch (e) {
+                answer = (e && typeof e.status === 'number')
+                  ? { status: e.status, body: (e.response && e.response.data) || {} }
+                  : { status: null, body: null };
+              }
+              answers[key] = answer;
+              core.info(['setlist forge answers:', key, answer.status === null ? 'no answer' : answer.status].join(' '));
+            }
+            fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'setlist-forge-answers.json'), JSON.stringify(answers));
       - name: setlist forge check
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
           out="$(bash .claude/hooks/forge-check.sh \
+            --protection-file "$RUNNER_TEMP/setlist-forge-answers.json" \
             --base "$GITHUB_BASE_REF" \
             --head "${{ github.event.pull_request.head.sha }}" \
             --forge github \

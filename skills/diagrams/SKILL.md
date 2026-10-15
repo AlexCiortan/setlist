@@ -13,7 +13,7 @@ demand, only when you are drawing that type:
 `${CLAUDE_PLUGIN_ROOT}/skills/diagrams/references/er-and-class.md`,
 `${CLAUDE_PLUGIN_ROOT}/skills/diagrams/references/comparison.md`.
 
-**The switch, first, because everything mechanical below depends on it.** A
+The switch, first, because everything mechanical below depends on it. A
 project is opted in when `docs/diagrams/` exists in the tree; then the close
 checks in "At close" run. Absent, they do not run at all and the project
 behaves exactly as it did before the diagram half existed. Opting in is a chore
@@ -36,7 +36,7 @@ of its own, never a side effect of an upgrade.
   paraphrase. Label every arrow, and drop a label only when both endpoints
   already state everything the label would (the protocol, the action, the
   direction, whether the call is synchronous, and any boundary crossed). **One
-  sense per ARROW, named in its label**, not one sense per figure: any honest
+  sense per ARROW, named in its label**, not one sense per figure: any truthful
   container view mixes an invocation with a read, and what is forbidden is an
   arrow whose sense the reader has to guess. Line
   ranges are not evidence: they are true at one commit and false at the next. A
@@ -97,15 +97,15 @@ header** in `${CLAUDE_PLUGIN_ROOT}/templates/root/DIAGRAM-HEADER.md`:
 `Shows:` one sentence, `Altitude:` L1, L2 or L3, `Synced by:` the spec that last
 changed it, `Encodes:` the constraints the picture asserts.
 
-**L2's home is the document a reader of this system actually opens.** For an
+L2's home is the document a reader of this system actually opens. For an
 ordinary application that is the bottom of `steering/structure.md`, with the
 core-model diagram beside its prose. For a project whose readers are not its
 maintainers, a library or a tool whose own README is the front door, L2 belongs
 in that README instead, and every rule here is unchanged by the move. One
 container view exists, in one place; every other document links to it.
 
-**A diagram inline in a document that is not a diagram file has no place to put
-four header lines, so it folds them into the prose around the block.** The
+A diagram inline in a document that is not a diagram file has no place to put
+four header lines, so it folds them into the prose around the block. The
 sentences before the block say what it shows and at what altitude; the sentences
 after say what it encodes, which is the line that separates a claim from
 decoration; `Synced by:` is carried by the Closing report's diagram field, which
@@ -126,7 +126,7 @@ wrong: text between the pipes of an edge label is never a node however it is
 spelled, so `-->|"reads (src/gone.json), sync"| b` draws no node called
 `src/gone.json`; and text after `%%` is a comment, so it draws nothing either.
 
-**When a project draws the software it STAMPS rather than the software it runs**,
+When a project draws the software it STAMPS rather than the software it runs,
 the nodes are the paths of a stamped instance, and the evidence behind them is
 the stamp contract, never `git ls-tree` of the tree that carries the drawing. A
 plugin, a generator or a scaffolding tool draws what its output looks like; the
@@ -150,7 +150,7 @@ them by being believed when you should not have been: the rhombus and hexagon
 (`a ["src/a"]`). Use the shapes the type references show, with the bracket
 against the id.
 
-**The pipe form is the rule for edge labels** (the opening list above): the
+The pipe form is the rule for edge labels (the opening list above): the
 inline `a -- text --> b` spelling is read as an edge label since edition v1.18,
 and the pipe form stays the one the references teach.
 
@@ -178,7 +178,7 @@ check alike:
   `steering/structure.md`.
 - `SLH-DIAGRAM-STALE-NODE`: a node whose path does not exist in the tree under
   review. It REFUSES when `%% spec NNNN` names a spec this commit closes, and
-  REPORTS otherwise, with the two honest exits for an older node: redraw it in
+  REPORTS otherwise, with the two legitimate exits for an older node: redraw it in
   this close and name the file in the field, or retire it with a note.
 - With a `diagram_command` declared in `.claude/sdd.json`, `SLH-DIAGRAM-DRIFT`
   when the committed file under `docs/diagrams/generated/` differs from what the
@@ -187,7 +187,7 @@ check alike:
 - At the forge, `FC-DIAGRAM-RENDER` when a block does not parse under the pinned
   Mermaid version. Local hooks never render.
 
-A flow worth keeping is promoted to `docs/diagrams/flows/` with `Synced by:` set;
+A flow worth keeping is promoted to `docs/diagrams/flows/` with `Synced by:` filled in;
 a sketch that was only the change's scaffolding stays in the closed spec as the
 record of what was intended.
 

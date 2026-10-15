@@ -7,7 +7,7 @@
 # Usage:
 #   forge-check.sh --base <ref-or-sha> --head <sha> [--instance <dir>]
 #                  [--forge github|none] [--repo <owner/name>] [--author <login>]
-#                  [--api <url>] [--forge-query <command>]
+#                  [--protection-file <path>] [--forge-query <command>]
 # stdout: exactly ONE token, the last line
 # stderr: every refusal in the hooks' register, codes bracketed
 # exit:   0 on PASS, 1 on any refusal, 2 when the check could not run at all
@@ -31,8 +31,9 @@
 #      rulesets and classic protection, as the union the forge enforces;
 #      the merge method from the repository's flag AND the ruleset's
 #      allowed_merge_methods; the code-owner review setting from BOTH
-#      endpoints as a union, spec 0160; and the CODEOWNERS bridge), asked with
-#      the job's own identity (ratification amendments 3 and 4, 2026-09-07)
+#      endpoints as a union, spec 0160; and the CODEOWNERS bridge), read from
+#      the answers the workflow wrote with the job's own identity (ratification
+#      amendments 3 and 4, 2026-09-07; spec 0193)
 #  10. PASS, once, on stdout, naming the declared custody
 #
 # IT READS THE CHECKOUT'S OWN STAMPED BYTES, measured against how pre-push
@@ -61,21 +62,32 @@
 #
 # NEVER A PASS ON ABSENCE (design section 6). A forge that does not answer
 # refuses under custody C; a check that died prints nothing, which the workflow
-# refuses by construction; the one "pass on nothing" is a pull request whose
+# refuses by construction; the one verdict on nothing is a pull request whose
 # base is not the recorded trunk, and that is a statement that the predicate has
 # no subject, said out loud.
 #
+# THE FORGE'S ANSWERS COME FROM A FILE (spec 0193). This check reads no
+# credential and makes no network call. The stamped workflow asks the forge, in
+# a step before this one, every question this check asks it (through the
+# forge's own action and the job's own token) and passes the answers as
+# --protection-file <path>: one JSON object keyed by the API path, each value
+# {"status": <the HTTP status, or null when the forge did not answer>, "body":
+# <the body as the forge gave it>}. A path the file does not carry, a null
+# status, or a file that is absent or not JSON is "no answer", which every
+# caller below reads as UNVERIFIABLE, never as absence. With neither a file nor
+# the seam below, every forge question is unanswered.
+#
 # --forge-query <command> is the SUITE's seam and nothing else's: it replaces
-# the curl the check would run with a command that is handed the API path and
-# prints the HTTP status on its first line and the body after it. The stamped
-# workflow never passes it; a workflow that does is a reviewed edit under the
+# the file with a command that is handed the API path and prints the HTTP
+# status on its first line and the body after it. The stamped workflow never
+# passes it; a workflow that does is a reviewed edit under the
 # same CODEOWNERS that governs skipping the check outright, so it is not a
 # second escape, it is the same one, and it is named here rather than hidden.
 
 set -u
 
 FC_BASE=""; FC_HEAD=""; FC_INSTANCE=""; FC_FORGE="none"; FC_REPO=""; FC_AUTHOR=""
-FC_API="https://api.github.com"; FC_QUERY_CMD=""
+FC_ANSWERS=""; FC_QUERY_CMD=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --base)        FC_BASE="${2:-}"; shift 2 || { printf 'forge-check.sh: --base needs a value\n' >&2; exit 2; } ;;
@@ -84,7 +96,7 @@ while [[ $# -gt 0 ]]; do
     --forge)       FC_FORGE="${2:-}"; shift 2 || { printf 'forge-check.sh: --forge needs a value\n' >&2; exit 2; } ;;
     --repo)        FC_REPO="${2:-}"; shift 2 || { printf 'forge-check.sh: --repo needs a value\n' >&2; exit 2; } ;;
     --author)      FC_AUTHOR="${2:-}"; shift 2 || { printf 'forge-check.sh: --author needs a value\n' >&2; exit 2; } ;;
-    --api)         FC_API="${2:-}"; shift 2 || { printf 'forge-check.sh: --api needs a value\n' >&2; exit 2; } ;;
+    --protection-file) FC_ANSWERS="${2:-}"; shift 2 || { printf 'forge-check.sh: --protection-file needs a value\n' >&2; exit 2; } ;;
     --forge-query) FC_QUERY_CMD="${2:-}"; shift 2 || { printf 'forge-check.sh: --forge-query needs a value\n' >&2; exit 2; } ;;
     -h|--help)     sed -n '2,12p' "$0"; exit 0 ;;
     *) printf 'forge-check.sh: unknown argument %s\n' "$1" >&2; exit 2 ;;
@@ -92,6 +104,7 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -n "$FC_BASE" && -n "$FC_HEAD" ]] || { printf 'forge-check.sh: --base and --head are required\n' >&2; exit 2; }
 case "$FC_FORGE" in github|none) ;; *) printf 'forge-check.sh: --forge must be github or none\n' >&2; exit 2 ;; esac
+[[ -z "$FC_ANSWERS" || -z "$FC_QUERY_CMD" ]] || { printf 'forge-check.sh: give --protection-file or --forge-query, not both\n' >&2; exit 2; }
 
 # --- the two exits that are not verdicts ------------------------------------
 #
@@ -106,10 +119,10 @@ fc_cleanup() { [[ -n "$FC_TMP" ]] && rm -rf "$FC_TMP"; FC_TMP=""; return 0; }
 # refuse: one token on stdout, exit 1, after every reason has been printed.
 # The custody verifier runs inside the library's command substitution (a
 # subshell), so the token it chooses travels through a FILE in the scratch
-# directory rather than a variable: fc_set_token writes it, fc_token reads it.
-fc_set_token() { [[ -n "$FC_TMP" ]] && printf '%s' "$1" > "$FC_TMP/token"; return 0; }
-fc_token() { cat "$FC_TMP/token" 2>/dev/null; return 0; } # fail-open-ok: no token file means the caller's default token, which is the step's own refusal
-fc_clear_token() { rm -f "$FC_TMP/token" 2>/dev/null; return 0; }
+# directory rather than a variable: fc_set_verdict writes it, fc_verdict reads it.
+fc_set_verdict() { [[ -n "$FC_TMP" ]] && printf '%s' "$1" > "$FC_TMP/verdict"; return 0; }
+fc_verdict() { cat "$FC_TMP/verdict" 2>/dev/null; return 0; } # fail-open-ok: no verdict file means the caller's default token, which is the step's own refusal
+fc_clear_verdict() { rm -f "$FC_TMP/verdict" 2>/dev/null; return 0; }
 refuse() { # refuse <token>
   printf '%s\n' "$1"
   fc_cleanup
@@ -334,21 +347,17 @@ FC_RULES_DETAIL=""
 FC_PROTECTED=0; FC_REVIEWS=0; FC_CHECK_REQUIRED=0; FC_REBASE=""; FC_RULESET_REBASE=""; FC_STRICT=0; FC_CODEOWNER=0
 FC_HTTP=""; FC_BODY=""
 
-fc_forge_get() { # fc_forge_get <api-path> -> FC_HTTP and FC_BODY set; 1 when the forge did not answer at all
+fc_forge_get() { # fc_forge_get <api-path> -> FC_HTTP and FC_BODY assigned; 1 when the forge did not answer at all
   local out
   FC_HTTP=""; FC_BODY=""
   if [[ -n "$FC_QUERY_CMD" ]]; then
     out="$($FC_QUERY_CMD "$1" 2>/dev/null)" || return 1
+  elif [[ -n "$FC_ANSWERS" && -f "$FC_ANSWERS" ]]; then
+    # The file's answer for this path, in the seam's shape: the status, then the
+    # body. A path it does not carry, or a null status, prints nothing: no answer.
+    out="$(jq -r --arg p "$1" 'if type == "object" and (.[$p] | type) == "object" and (.[$p].status | type) == "number" then "\(.[$p].status)\n\(.[$p].body | tojson)" else empty end' "$FC_ANSWERS" 2>/dev/null)" || return 1
   else
-    command -v curl >/dev/null 2>&1 || return 1
-    out="$(curl -sS --max-time 20 -w '\n%{http_code}' \
-            -H "Accept: application/vnd.github+json" \
-            ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
-            "$FC_API/$1" 2>/dev/null)" || return 1
-    # curl prints the body then the status; the seam prints the status then the
-    # body. Normalise to status-first.
-    out="$(printf '%s\n' "$out" | tail -n1)
-$(printf '%s\n' "$out" | sed '$d')"
+    return 1
   fi
   FC_HTTP="$(printf '%s\n' "$out" | head -n1 | tr -d '[:space:]')"
   FC_BODY="$(printf '%s\n' "$out" | sed '1d')"
@@ -380,7 +389,15 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
   [[ -n "$FC_REPO" ]] || { FC_RULES_STATE="no-forge"; FC_RULES_DETAIL="no --repo given"; return 0; }
   # The repository's merge methods first: one query, and it also proves the
   # forge answers at all.
-  if ! fc_forge_get "repos/$FC_REPO"; then FC_RULES_STATE="unreachable"; FC_RULES_DETAIL="no answer"; return 0; fi
+  if ! fc_forge_get "repos/$FC_REPO"; then
+    FC_RULES_STATE="unreachable"; FC_RULES_DETAIL="no answer"
+    # Spec 0196 (the 2.13.0 leg's F3): with no answers file and no seam the forge was never
+    # asked, which is a workflow from before 2.13.0, not a forge that failed to answer.
+    if [[ -z "$FC_QUERY_CMD" && ( -z "$FC_ANSWERS" || ! -f "$FC_ANSWERS" ) ]]; then
+      FC_RULES_DETAIL="no --protection-file was given, so the forge was never asked; the workflow running this check predates 2.13.0 and must be replaced with the template's"
+    fi
+    return 0
+  fi
   case "$FC_HTTP" in
     200) FC_REBASE="$(printf '%s' "$FC_BODY" | jq -r 'if .allow_rebase_merge == true then "1" elif .allow_rebase_merge == false then "0" else "" end' 2>/dev/null || true)" ;; # fail-open-ok: an unreadable answer leaves the rebase fact unknown, and unknown prints no report line; the rebase line is a REPORT under every custody (decision 3), never a verdict
     429) FC_RULES_STATE="rate-limited"; return 0 ;;
@@ -412,6 +429,9 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
   if [[ "$rules_n" -gt 0 ]]; then
     # fail-open-ok: both extractions yield 0 when unreadable, and 0 is the REFUSING value for each (no review required, this check not required); an unreadable rule can only refuse here
     rs_reviews="$(printf '%s' "$FC_BODY" | jq -r '[.[] | select(.type == "pull_request") | (.parameters.required_approving_review_count // 0)] | max // 0' 2>/dev/null || printf 0)"
+    # A count that is not a whole number is no approving review (spec 0196, the 2.13.0 leg's F11):
+    # bash arithmetic on 0.5 or 1e-9 errors, the test reads false, and the refusal arm was skipped.
+    [[ "$rs_reviews" =~ ^[0-9]+$ ]] || rs_reviews=0
     rs_checks="$(printf '%s' "$FC_BODY" | jq -r '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]? | .context] | index("setlist forge check") | if . == null then "0" else "1" end' 2>/dev/null || printf 0)"
     # THE STRICT SETTING (TE4, ruled D15 2026-09-10): "require branches to be up
     # to date before merging". On a ruleset it is the required_status_checks
@@ -464,6 +484,7 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
       200)
         # fail-open-ok: as above, 0 is the refusing value for both facts
         cl_reviews="$(printf '%s' "$FC_BODY" | jq -r '.required_pull_request_reviews.required_approving_review_count // 0' 2>/dev/null || printf 0)"
+        [[ "$cl_reviews" =~ ^[0-9]+$ ]] || cl_reviews=0
         cl_checks="$(printf '%s' "$FC_BODY" | jq -r '((.required_status_checks.contexts // []) + [(.required_status_checks.checks // [])[] | .context]) | index("setlist forge check") | if . == null then "0" else "1" end' 2>/dev/null || printf 0)"
         cl_strict="$(printf '%s' "$FC_BODY" | jq -r 'if .required_status_checks.strict == true then "1" else "0" end' 2>/dev/null || printf 0)" # fail-open-ok: as above, 0 is the refusing value
         cl_co="$(printf '%s' "$FC_BODY" | jq -r 'if .required_pull_request_reviews.require_code_owner_reviews == true then "1" else "0" end' 2>/dev/null || printf 0)" # fail-open-ok: as above, 0 is the refusing value
@@ -501,7 +522,8 @@ fc_query_rules() { # fills FC_RULES_STATE and the five facts; idempotent
 # that refuses on them under custody C and by step 9 as reports otherwise.
 fc_forge_state_sentence() { # fc_forge_state_sentence -> prints "<code>|<sentence>" for a non-ok state, or "" when ok
   case "$FC_RULES_STATE" in
-    unreachable)  printf '[FC-FORGE-UNREACHABLE]|the forge did not answer whether %s is protected (%s), so this check cannot establish that the approval reached the trunk through a review. A check that could not run has not passed. Re-run the check when the forge answers; nothing about this pull request is wrong.' "$TRUNK_NAME" "${FC_RULES_DETAIL:-no answer}" ;;
+    unreachable)  if [[ "${FC_RULES_DETAIL:-}" == "no --protection-file"* ]]; then printf '[FC-FORGE-UNREACHABLE]|this check could not ask whether %s is protected: %s. A check that could not run has not passed.' "$TRUNK_NAME" "$FC_RULES_DETAIL"; return 0; fi
+                  printf '[FC-FORGE-UNREACHABLE]|the forge did not answer whether %s is protected (%s), so this check cannot establish that the approval reached the trunk through a review. A check that could not run has not passed. Re-run the check when the forge answers; nothing about this pull request is wrong.' "$TRUNK_NAME" "${FC_RULES_DETAIL:-no answer}" ;;
     forbidden)
       # SPEC 0160, the review's item 5: the CLASSIC protection endpoint needs
       # repository administration read, which no workflow permissions key
@@ -532,7 +554,7 @@ fc_verify_custody_forge() { # fc_verify_custody_forge <proj> <spec-path> <num> <
   flip="$(git -C "$proj" log --root --format=%H --diff-filter=A "${rev:-HEAD}" -- "specs/attest/$num.json" 2>/dev/null | tail -n1)"
   if [[ -z "$flip" ]] || ! git -C "$proj" merge-base --is-ancestor "$flip" "$BASE_SHA" 2>/dev/null; then
     fc_say "[FC-FLIP-NOT-ON-TRUNK]" "specs/attest/$num.json was added in this pull request's own history and is not on $TRUNK_NAME; under forge custody an approval is a flip the trunk has already accepted through review. Land the planning change first."
-    fc_set_token ATTEST-REFUSED
+    fc_set_verdict ATTEST-REFUSED
     printf 'FLIP-NOT-ON-TRUNK'; return 0
   fi
   # 2. The trunk is protected such that a review and this check are required.
@@ -540,22 +562,22 @@ fc_verify_custody_forge() { # fc_verify_custody_forge <proj> <spec-path> <num> <
   if [[ "$FC_RULES_STATE" != "ok" ]]; then
     line="$(fc_forge_state_sentence)"; code="${line%%|*}"; sentence="${line#*|}"
     fc_say "$code" "$sentence"
-    fc_set_token FORGE-UNREACHABLE
+    fc_set_verdict FORGE-UNREACHABLE
     printf 'FORGE-UNREACHABLE'; return 0
   fi
   if [[ "$FC_PROTECTED" != "1" ]]; then
     fc_say "[FC-FORGE-UNPROTECTED]" "$TRUNK_NAME is not protected on this forge: nothing requires a review or this check to land on it, so under forge custody there is no notary and no approval can be verified. Protect the trunk (require a pull request with one approving review, and require the check named \"setlist forge check\"), or declare a custody this layer can verify without a forge."
-    fc_set_token FORGE-UNPROTECTED
+    fc_set_verdict FORGE-UNPROTECTED
     printf 'FORGE-UNPROTECTED'; return 0
   fi
   if [[ "${FC_REVIEWS:-0}" -lt 1 ]]; then
     fc_say "[FC-NO-REVIEW-REQUIRED]" "$TRUNK_NAME requires no approving review, so a flip can land with no second person, which is not the custody this instance declares."
-    fc_set_token FORGE-UNPROTECTED
+    fc_set_verdict FORGE-UNPROTECTED
     printf 'FORGE-UNPROTECTED'; return 0
   fi
   if [[ "$FC_CHECK_REQUIRED" != "1" ]]; then
     fc_say "[FC-CHECK-NOT-REQUIRED]" "$TRUNK_NAME is protected but does not require the check named \"setlist forge check\", so the merge button does not enforce what this check verifies. Add it to the required status checks; a required check that is not required is a report."
-    fc_set_token CHECK-NOT-REQUIRED
+    fc_set_verdict CHECK-NOT-REQUIRED
     printf 'CHECK-NOT-REQUIRED'; return 0
   fi
   # TE4, ruled D15 (2026-09-10): THE TRUNK MUST REQUIRE BRANCHES TO BE UP TO DATE.
@@ -572,7 +594,7 @@ fc_verify_custody_forge() { # fc_verify_custody_forge <proj> <spec-path> <num> <
   # never read. That is precisely the guarantee "forge" custody claims.
   if [[ "$FC_STRICT" != "1" ]]; then
     fc_say "[FC-STRICT-NOT-REQUIRED]" "$TRUNK_NAME requires this check but does not require branches to be up to date before merging (the setting is \"Require branches to be up to date before merging\", beside the required status checks; on a ruleset it is the required_status_checks rule's strict policy). Without it two pull requests can both be green against a stale base and the second lands on a trunk this check never read, so under forge custody the notary is not one. Turn the setting on."
-    fc_set_token STRICT-NOT-REQUIRED
+    fc_set_verdict STRICT-NOT-REQUIRED
     printf 'STRICT-NOT-REQUIRED'; return 0
   fi
   # SPEC 0160: THE TRUNK MUST REQUIRE REVIEW FROM CODE OWNERS. The check the
@@ -585,7 +607,7 @@ fc_verify_custody_forge() { # fc_verify_custody_forge <proj> <spec-path> <num> <
   # edits need reviewing, and one root cause is reported at a time.
   if [[ "$FC_CODEOWNER" != "1" ]]; then
     fc_say "[FC-NO-CODE-OWNER-REVIEW]" "$TRUNK_NAME requires this check but not review from Code Owners (the setting is \"Require review from Code Owners\", beside the required approving review; on a ruleset it is the pull_request rule's require_code_owner_review). The check this forge runs is the pull request's own copy, and the stamped CODEOWNERS makes an edit to it, to the hooks or to the workflow a reviewed change only under that setting, so under forge custody the notary could be rewritten by the pull request it judges. Turn the setting on."
-    fc_set_token FORGE-UNPROTECTED
+    fc_set_verdict FORGE-UNPROTECTED
     printf 'FORGE-UNPROTECTED'; return 0
   fi
   # THE SENTENCE, VERBATIM FROM THE RATIFIED DESIGN (section 5, decision 4).
@@ -603,18 +625,18 @@ SLH_CLOSE_SINGLE_PARENT=0
 # forge's identity and REFUSES (ruling 4), so the advisory pass is switched off.
 # shellcheck disable=SC2034  # read by the sourced library's close verification
 SLH_CODEOWNERS_MODE=""
-fc_clear_token
+fc_clear_verdict
 # The close verification re-verifies the closing spec's approval over its FINAL
 # bytes, so under custody C the forge is asked here first; a forge refusal
 # inside it carries its own token (FORGE-UNREACHABLE, FORGE-UNPROTECTED,
 # CHECK-NOT-REQUIRED, ATTEST-REFUSED) rather than the close's.
 slh_verify_close "$FC_CLONE" "$TRUNK_NAME" "the forge check" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided on the next line, so every reason prints before the one token
-FC_T="$(fc_token)"; [[ "$SLH_REFUSED" -eq 0 ]] || refuse "${FC_T:-CLOSE-REFUSED}"
+FC_T="$(fc_verdict)"; [[ "$SLH_REFUSED" -eq 0 ]] || refuse "${FC_T:-CLOSE-REFUSED}"
 
 # --- 5. the attestation walk over the range -----------------------------------
-fc_clear_token
+fc_clear_verdict
 slh_attest_walk "$FC_CLONE" "the history this pull request adds to $TRUNK_NAME" "$HEAD_SHA" "$BASE_SHA..$HEAD_SHA" || true # fail-open-ok: recorded in SLH_REFUSED and decided on the next line
-FC_T="$(fc_token)"; [[ "$SLH_REFUSED" -eq 0 ]] || refuse "${FC_T:-ATTEST-REFUSED}"
+FC_T="$(fc_verdict)"; [[ "$SLH_REFUSED" -eq 0 ]] || refuse "${FC_T:-ATTEST-REFUSED}"
 
 # --- 6. the content scan over the range ---------------------------------------
 slh_scan_walk "$FC_CLONE" "the history this pull request adds to $TRUNK_NAME" "$BASE_SHA..$HEAD_SHA" || true # fail-open-ok: recorded in SLH_REFUSED and decided on the next line
@@ -653,8 +675,14 @@ fi
 #
 # THE RENDERER IS AN EXTERNAL COMMAND ON PATH, and there are exactly two shapes
 # this step knows how to call. `setlist-mermaid-parse <file>` is what the stamped
-# workflow installs; `mmdc -i <file> -o <out>` is mermaid-cli, accepted so a
+# workflow installs; `mmdc -i <file> -o - -e pdf` is mermaid-cli, accepted so a
 # forge that already has it needs nothing new. Anything else is "no renderer".
+# mermaid-cli is asked the same question, does the block parse: its output goes to
+# standard output and is discarded, so no scratch file is written and no file name
+# is chosen (spec 0192), and only its standard error is kept as the words a
+# refusal quotes. The format flag names one explicitly, which keeps the "no output
+# format specified" notice out of those words; the verdict is the exit status
+# whatever the format.
 #
 # ABSENCE IS A REPORT HERE AND A FAILED JOB IN THE WORKFLOW (condition (a)).
 # Inside .github/workflows/setlist-forge-check.yml the install step succeeds or
@@ -687,7 +715,7 @@ else
       if [[ "$FC_RENDERER" == "parse" ]]; then
         fcout="$(setlist-mermaid-parse "$fctmp" 2>&1)" && fcok=1
       else
-        fcout="$(mmdc -i "$fctmp" -o "$fctmp.svg" 2>&1)" && fcok=1
+        fcout="$(mmdc -i "$fctmp" -o - -e pdf 2>&1 >/dev/null)" && fcok=1
       fi
       if [[ "$fcok" -ne 1 ]]; then
         # The file is a name and the renderer's words are free text: the parser

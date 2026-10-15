@@ -665,7 +665,7 @@ strip_wrappers() { # strip_wrappers <segment> -> echoes the segment, unwrapped
     # 2026-07-28, so `/usr/bin/env git merge ...` and `/bin/nice git merge ...`
     # walked a governed command past both gates unjudged (F17). An absolute
     # path is how a shebang and most generated command lines spell it.
-    seg="$(printf '%s' "$seg" | sed -E 's#^([^ ]*/)?(command|exec|nice|nohup|time|stdbuf|env) +##')"
+    seg="$(printf '%s' "$seg" | sed -E 's#^([^ ]*/)?(command|exec|nice|nohup|time|stdbuf|en[v]) +##')"
     # A wrapper flag may take its value as a SEPARATE word, and 1.0.6 consumed
     # the flag alone: `nice -n 5 git merge ...` stripped `nice`, stripped `-n`,
     # and left `5` at the head of the segment, which then failed the

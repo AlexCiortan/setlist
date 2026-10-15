@@ -32,9 +32,8 @@ line can.
   already owes.
 - Style: raw notes, no narrative smoothing, no em-dashes (as everywhere).
   Sections like "the actual session," "what surprised me," "what the spec got
-  right / was silent on," "what I'd change in the spec now." Honest about
-  what did not work. Audience: future-you and future sessions, not external
-  readers.
+  right / was silent on," "what I'd change in the spec now." Candid about
+  what did not work. Audience: future-you and future sessions only.
 - Historical text relocated into an entry moves verbatim under a dated
   provenance banner (Part 4, Historical text); never edit the moved text.
 - Update the STATUS.md pointer to the latest journal entry in the same
@@ -45,8 +44,8 @@ line can.
 - Session narratives are not evidence. Agent accounts of hook and gate
   interactions have confabulated (a whole-command deny narrated as a partial
   success). When an entry records an enforcement event, write what the repo
-  shows (branch, status, checksums), not what the session said happened.
-- Name the scanner honestly when an entry records one. A scan that matches
+  shows (branch, status, checksums) and leave out the session's own account.
+- Name the scanner accurately when an entry records one. A scan that matches
   token-shaped strings is a token-shape scan, not a secret scan; writing the
   stronger name into the record is how a later reader inherits a guarantee
   nobody made. The same goes for "the suite passed" when what ran was a subset.

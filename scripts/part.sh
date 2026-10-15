@@ -17,9 +17,15 @@
 # template inside a ```markdown fence, and the template's own "## " lines must
 # not terminate the range.
 #
-# The edition file defaults to setlist.md at the plugin root (one directory
-# above this script); the edition version lives inside the file. A missing file
-# fails loudly; an explicit second argument overrides (used by tests).
+# The edition is THREE files at the plugin root (one directory above this
+# script) since spec 0191, read in this order: setlist.md (the core, Parts 1 to
+# 6), setlist-operations.md (Parts 7 to 10 and Appendices A to C) and
+# setlist-changelog.md (the Changelog); the edition version lives inside each.
+# With no file argument an id is resolved across the three, each file read ON
+# ITS OWN: a Part never runs across a file boundary, so a file's opening lines
+# (its Edition header and the sentence naming its companions) never join the
+# previous file's last Part. A missing file fails loudly, by name. An explicit
+# second argument names ONE file and keeps its old meaning (used by tests).
 
 set -euo pipefail
 
@@ -29,19 +35,25 @@ die() { printf '%s\n' "part.sh: $*" >&2; exit 1; }
 TARGET="$1"
 EDITION="${2:-}"
 
+EDITIONS=()
 if [[ -z "$EDITION" ]]; then
   ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-  EDITION="$ROOT/setlist.md"
-  [[ -f "$EDITION" ]] || die "setlist.md not found at the plugin root ($ROOT)"
+  for f in setlist.md setlist-operations.md setlist-changelog.md; do
+    [[ -f "$ROOT/$f" ]] || die "$f not found at the plugin root ($ROOT); the edition is three files"
+    EDITIONS+=("$ROOT/$f")
+  done
+  EDITION="${EDITIONS[*]}"
+else
+  [[ -f "$EDITION" ]] || die "edition file not found: $EDITION"
+  EDITIONS=("$EDITION")
 fi
-[[ -f "$EDITION" ]] || die "edition file not found: $EDITION"
 
 # One awk program serves both modes. It walks the edition tracking fence state;
 # every unfenced "## Part <id>" or "## Appendix <letter>" heading is an
 # extractable unit. --list prints "id<TAB>heading" per unit; extract prints
 # from the matching heading up to (not including) the next unfenced "## "
 # heading and signals the match count through the exit status.
-run_awk() {
+run_awk() {  # run_awk <mode> <target> <file>: one file, never the three joined
   awk -v mode="$1" -v target="$2" '
     function heading_id(line,   parts, id) {
       split(line, parts, /[[:space:]]+/)
@@ -64,11 +76,12 @@ run_awk() {
     END {
       if (mode == "extract") exit (matches == 1 ? 0 : (matches == 0 ? 3 : 4))
     }
-  ' "$EDITION"
+  ' "$3"
 }
+list_all() { local f; for f in "${EDITIONS[@]}"; do run_awk list "" "$f"; done; }
 
 if [[ "$TARGET" == "--list" ]]; then
-  run_awk list ""
+  list_all
   exit 0
 fi
 
@@ -90,22 +103,35 @@ if [[ "$TARGET" == "lifecycle-states" ]]; then
     /<!-- SDD-LIFECYCLE-STATES:BEGIN -->/ { inblock = 1; next }
     /<!-- SDD-LIFECYCLE-STATES:END -->/   { inblock = 0 }
     inblock && !/^```/ && NF { print $1 }
-  ' "$EDITION")"
+  ' "${EDITIONS[@]}")"
   [[ -n "$STATES" ]] || die "no SDD-LIFECYCLE-STATES block found in $EDITION; the canonical lifecycle enumeration is missing or its markers were renamed"
   printf '%s\n' "$STATES"
   exit 0
 fi
 
-set +e
-OUTPUT="$(run_awk extract "$(printf '%s' "$TARGET" | tr '[:upper:]' '[:lower:]')")"
-STATUS=$?
-set -e
+# Each file is asked on its own; the id must match exactly one heading across
+# the three, so the found count is summed rather than taken from any one file.
+ID="$(printf '%s' "$TARGET" | tr '[:upper:]' '[:lower:]')"
+FOUND=0; OUTPUT=""; STATUS=3
+for f in "${EDITIONS[@]}"; do
+  set +e
+  out="$(run_awk extract "$ID" "$f")"; rc=$?
+  set -e
+  case $rc in
+    0) FOUND=$((FOUND + 1)); OUTPUT="$out" ;;
+    3) ;;
+    4) FOUND=$((FOUND + 2)) ;;
+    *) die "extraction failed with status $rc in $f" ;;
+  esac
+done
+[[ "$FOUND" -eq 1 ]] && STATUS=0
+[[ "$FOUND" -gt 1 ]] && STATUS=4
 
 case $STATUS in
   0) printf '%s\n' "$OUTPUT" ;;
   3)
     printf 'part.sh: no Part matches id "%s" in %s\navailable ids:\n' "$TARGET" "$EDITION" >&2
-    run_awk list "" | sed 's/^/  /' >&2
+    list_all | sed 's/^/  /' >&2
     exit 1
     ;;
   4)

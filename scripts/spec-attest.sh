@@ -34,10 +34,10 @@
 
 set -u
 
-SPEC=""; KEY=""; APPROVER=""
+SPEC=""; SIGNING_FILE=""; APPROVER=""
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --key)      KEY="${2:-}"; shift 2 || exit 1 ;;
+    --key)      SIGNING_FILE="${2:-}"; shift 2 || exit 1 ;;
     --approver) APPROVER="${2:-}"; shift 2 || exit 1 ;;
     -h|--help)  sed -n '2,32p' "$0"; exit 0 ;;
     -*)         printf 'spec-attest.sh: unknown option %s\n' "$1" >&2; exit 1 ;;
@@ -150,8 +150,8 @@ fi
 # THE SIGNATURE IS NAMESPACED. A signature made with the same key for some
 # other purpose must not verify as an approval, and the namespace is what makes
 # that true rather than hoped.
-if [ -n "$KEY" ]; then
-  set -- -f "$KEY"
+if [ -n "$SIGNING_FILE" ]; then
+  set -- -f "$SIGNING_FILE"
 else
   set --
 fi

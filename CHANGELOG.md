@@ -9,6 +9,107 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.13.0
+
+Edition v1.21, the delegation edition. Part 2 binds each tier by its alias and never by a
+version. Mechanical work goes to a cheaper tier, and the close review never does. A fresh reader
+goes through each approved spec before the build. The bypass deny blocks a command when it fails
+to run. The commit-time hooks refuse by name when a git call they depend on fails. The edition is
+three files.
+
+- **The model rule.** Part 2's table names the alias and the tier. What an alias served, with the
+  model id, the CLI version and the date, is a dated reading beside it, re-read on Claude Code
+  2.1.299. "Opus 5", "Sonnet 5" and "Haiku 5" name the latest version of that tier.
+- **The delegated tier.** A fourth row binds `haiku` for bounded mechanical work: a checkpoint's
+  survey and gate runs, a gate's leg checks, the health check, QA Pass 1 (`qa-verifier`, now on
+  `haiku`) and the `verify` run. Planning, the close review and every decision that closes a spec
+  stay on the stronger tiers. A delegating skill writes one journal line per phase: the model, the
+  tokens, and the cost where Claude Code reports one.
+- **The effort line.** The close-review block can record the effort level the review ran at, one
+  line per round, and the stamped agents name their default level.
+- **The spec reader.** At approval a read-only agent reads the spec as its Builder will and lists
+  the questions it would still ask, each tied to a line. It is advice, and no gate reads it.
+- **The bypass deny blocks when it fails to run.** From Claude Code 2.1.295 a bypass deny that
+  times out or cannot start blocks the command; an older Claude Code ignores the setting and runs
+  the hook as before. `/setlist:validate` reports a CLI below that version.
+- **The commit layer refuses a failed git call.** A commit-time hook that cannot read the index, a
+  tree or a merged branch refuses as `SLH-AUDIT-GIT-FAILED` and never reads the failure as an
+  empty answer.
+- **The edition's three files.** `setlist.md` holds Parts 1 to 6, `setlist-operations.md` Parts 7
+  to 10 and the appendices, and `setlist-changelog.md` the Changelog. Without the plugin, read them
+  in that order.
+- **The forge check reads no credential.** The stamped workflow asks the forge for the trunk's
+  protection and hands the answers to the check, which makes no network call of its own.
+
+The package carries no image but its icon; the README shows the demo from the repository.
+
+The Known-limitations list as it stands in this release: 21 design boundaries, 0 open
+limitations, 0 upstream conditions. It held 25 at 2.12.0, and nothing was added. Three titles
+left by a merge. The four bullets on how the session layer's one deny can be passed became one,
+[the session layer's bullet](LIMITATIONS.md#hard-deny-expansion). Since 2.11.0 that layer refuses
+nothing but that deny, so the four described a guarantee it no longer claims. Every claim they
+made stays in the merged bullet, under its old title. The upstream condition "A timed-out hook is
+a skipped gate." left too. The bypass deny now blocks a command when it times out or cannot start
+(Claude Code 2.1.295 and later). What still skips is in the same bullet.
+
+An upgraded instance receives the new agents, the changed hook library, the `verify` skill and the
+audit through the refresh's report of changed bytes, each differing copy kept beside it as
+`.setlist-backup`. The refresh prints the one edit that makes the bypass deny block on failure,
+and `/setlist:upgrade` offers it, with the new golden rule, for you to take or decline. A forge
+check workflow from before this release is reported stale with the one command that replaces it
+with the template's: the check reads the forge's answers from the file the new workflow writes,
+so until it is replaced the check asks the forge nothing and refuses under forge custody. No rule is
+dated by 2.13.0, so your history is judged as before.
+
+## 2.12.0
+
+Edition v1.20, the plain-English edition. The trunk audit now names every verdict by a code
+and refuses by name when a git call it depends on fails, so an audit that read nothing never
+passes as clean. Every instance gains a `verify` skill that Claude Code runs before a commit.
+The stamp records which model served each phase of `opusplan`, and the edition's Part 2 names
+both ways a turn can be served by another model. The public text was rewritten for plain
+English; a publish-time check holds it there. The Known-limitations list as it stands in this
+release: 24 design boundaries, 0 open limitations, 1 upstream condition. Nothing was added to
+it and nothing left it, because this release's capabilities are codes, a skill and prose, and
+none of them closes a boundary the list names.
+
+- **The audit's codes.** Every verdict the trunk audit prints carries a code a CI reader can
+  match, six of them new and three shared with the git hooks, and the sentence after each code
+  is unchanged. A configuration the audit cannot read, such as a `.claude/sdd.json` that does
+  not parse or a trunk that does not resolve, stops it at exit 2 with a message naming the
+  setting. A git call whose answer decides a verdict is read for its exit status, and a
+  failure refuses as `SLH-AUDIT-GIT-FAILED`, naming the command and saying the audit audited
+  nothing. A pushed octopus merge is refused with its remedy named: a recorded decision to
+  start the audit after it.
+- **The `verify` skill.** Every instance carries `.claude/skills/verify/SKILL.md`, which
+  Claude Code asks for before a commit. It runs your gate command once and reports what it
+  printed. It persuades the agent and refuses nothing, and the git hooks refuse whether or not
+  it ran.
+- **The `opusplan` probe records the served model.** A new instance records the model each
+  phase served, and `/setlist:validate` names a phase whose model has changed since.
+- **The stamped deny and ask rules have a version floor.** They hold under sandbox auto-allow
+  from Claude Code 2.1.289, and `/setlist:validate` reports a CLI below that.
+- **The close review** runs an agent whose tools list names no Write or Edit, and the harness
+  enforces that list. Its Bash entry is a declaration, which the
+  [close-review boundary](LIMITATIONS.md#close-review) states.
+- **The model ladder** names two ways a turn is served by another model: the fallback chain,
+  with a notice, and Claude Code's retry on the previous model of the same tier when a model is
+  refused. Its bindings were re-checked on Claude Code 2.1.292.
+
+Two boundaries gained a measured fact under their titles. A hook whose matcher is not a valid
+pattern is skipped like a timed-out hook, and a call whose input cannot reach a hook is
+blocked since Claude Code 2.1.288 ([the upstream condition](LIMITATIONS.md#hook-timeout)). The
+harness no longer asks before a sandboxed heredoc piped into another command, so the trunk
+audit is the catch for the spellings the frozen lexer does not read
+([the Bash escape hatch](LIMITATIONS.md#bash-escape)). Nothing in this release is disclosed
+rather than fixed.
+
+An upgraded instance receives the new audit, the `verify` skill and the changed close
+reviewer through the refresh's report of changed bytes, each differing copy kept beside it as
+`.setlist-backup`, and a backup an earlier refresh made is never overwritten. Nothing is left for you to edit by hand, and no rule is dated by 2.12.0, so
+your history is judged as before. Read the verdict delta before applying: refusals the old
+audit printed as a sentence now carry their codes.
+
 ## 2.11.0
 
 **Edition v1.19 (the boundary edition).** What a close must carry, what the audit computes, and
@@ -470,7 +571,7 @@ two digests.
   to end a turn with an unstaged spec or `specs/STATUS.md` change, once per turn. No
   refusal names the escape variables any more; a bypass spelled inside a `git`
   command is the one thing the advisory commit gate denies outright. The deny list
-  gains `Bash(cat .env*)` and says it is a spelling list.
+  gains the deny entry for reading environment files and says it is a spelling list.
 
 **The Known-limitations list as it leaves this release: 33 design boundaries, 2 open
 limitations, 2 upstream conditions.** The remote-merge bypass leaves Open limitations
@@ -745,8 +846,8 @@ verification it emits, including the ones that pass. `signer` custody (a key you
 which the build cannot read) is the model that addresses the problem.
 
 **Nothing changes unless you turn it on.** No `attestation` block means the feature is
-off, and off is byte-for-byte the behaviour you have today; an upgrade delivers the key
-set to `false` and migrates nothing. Turning it on is a decision about where your key
+off, and off is byte-for-byte the behaviour you have today; an upgrade delivers the
+key set to `false` and migrates nothing. Turning it on is a decision about where your key
 lives, not a migration step, and `/setlist:upgrade` will say so rather than doing it for
 you. **`forge` custody is designed and not built:** declaring it refuses and tells you
 why, and its verification arrives with the forge-side required check.
@@ -1102,15 +1203,15 @@ both found by an independent review of the shipped release, and both reachable
 by typing something ordinary. If you are on 1.0.6, this is the upgrade to take.
 
 **Wrapper flags that take a separate value no longer strand it.** 1.0.6 taught
-both gates to look past a wrapper like `nice` or `env`. It stripped the wrapper
+both gates to look past a wrapper like `nice` or env. It stripped the wrapper
 word and then stripped flags one word at a time, which is fine for a flag that
 carries its own value (`stdbuf -o0`) and wrong for one that does not: in
 `nice -n 5 git merge --no-ff spec/0001-x`, the `5` was left sitting at the
 front of the command, the gate no longer recognised the line as starting with
 git, and it was never judged at all. `env -u VAR git merge ...` went the same
 way. A flag is now consumed together with the value that follows it, with one
-exception that matters: the command word itself is never swallowed, so
-`env -i git merge ...` keeps its git.
+exception that matters: the command word itself is never swallowed, so a
+merge run through env with the environment cleared keeps its git.
 
 **Discarding working-tree changes no longer looks like switching branches.**
 `git checkout` is two commands sharing a name. With a branch it switches; with
@@ -1137,8 +1238,8 @@ runs and would otherwise scan an index that does not hold your content yet. It
 recognised `add`, `rm` and `mv`. Everything else that writes the index went
 through, so `git stash pop && git commit -m x` and
 `git restore --staged . && git commit -m x` committed content nothing had
-scanned. `git stage`, a plain synonym for `add`, was missing too. The full set
-is now recognised, and it is a generated corpus dimension checked against the
+scanned. `git stage`, a plain synonym for `add`, was missing too. The full
+set is now recognised, and it is a generated corpus dimension checked against the
 gate's own list, so the next verb cannot go missing quietly.
 
 **A single `&` separates commands.** The gates split a command line on `&&`,
@@ -1192,8 +1293,8 @@ anyone trying. The gate now resolves `-` and `@{-1}` (it runs before your
 command, so the previous branch is still there to resolve), and if it cannot,
 it refuses rather than assuming the merge is harmless.
 
-**Wrapper prefixes no longer escape either gate.** `command git merge ...`,
-`env git merge ...`, `nice`, `nohup`, `exec`, and a leading `VAR=value`
+**Wrapper prefixes no longer escape either gate.**
+`command git merge ...`, `env git merge ...`, `nice`, `nohup`, `exec`, and a leading `VAR=value`
 assignment all reached the trunk unchecked, and `command git commit -am x`
 walked past the commit gate the same way. Both gates now strip those prefixes
 before deciding whether a command is one they govern. That list is not a claim

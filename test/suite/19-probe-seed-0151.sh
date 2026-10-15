@@ -33,27 +33,34 @@ else
 # The library is sourced in a subshell per group, so a function it defines, or a
 # variable it sets, cannot reach any other region.
 PSL_W="$(mktemp -d "${TMPDIR:-/tmp}/probe-seed.XXXXXX")"
+# THE MODEL RULE (spec 0194): a served id is compared by its FAMILY, read with the
+# shipped probe's own family_of, never against a literal id; the next model
+# release moves no line here. The function is copied out of the script into a
+# file and sourced, because the script runs its probe when executed.
+sed -n '/^family_of() {/,/^}/p' "$ROOT/scripts/model-probe.sh" > "$PSL_W/family.sh"
+# shellcheck source=/dev/null
+source "$PSL_W/family.sh"
 
 # --- 1. served-model detection (E13) ------------------------------------------
 # The hazard first, so the matcher case measures something: in the recorded
 # auxiliary result the FIRST modelUsage key is the auxiliary Haiku entry, so any
 # reader that takes a key by position names the wrong model.
-psl_first_key="$(jq -r '.modelUsage | keys[0]' "$PSL_FIX/result-served-sonnet-aux-haiku.json" 2>/dev/null)"
-if [[ "$psl_first_key" == claude-haiku-* ]]; then
+psl_first_model="$(jq -r '.modelUsage | keys[0]' "$PSL_FIX/result-served-sonnet-aux-haiku.json" 2>/dev/null)"
+if [[ "$psl_first_model" == claude-haiku-* ]]; then
   ok "probe seed E13 control: the recorded result lists the auxiliary Haiku entry first, so position is not the served model"
 else
-  bad "probe seed E13 control: the recorded result lists the auxiliary Haiku entry first" "first key read '$psl_first_key'; the matcher cases below would not be discriminating"
+  bad "probe seed E13 control: the recorded result lists the auxiliary Haiku entry first" "first key read '$psl_first_model'; the matcher cases below would not be discriminating"
 fi
 psl_served="$( (source "$PSL_LIB" && probe_served_model "$PSL_FIX/result-served-sonnet-aux-haiku.json") 2>&1)"
-[[ "$psl_served" == "claude-sonnet-5" ]] \
+[[ "$(family_of "$psl_served")" == sonnet ]] \
   && ok "probe seed E13: the served model is the modelUsage entry whose tokens equal usage, not the auxiliary Haiku" \
-  || bad "probe seed E13: the served model is the entry matching usage" "read '$psl_served', wanted claude-sonnet-5"
+  || bad "probe seed E13: the served model is the entry matching usage" "read '$psl_served', wanted the sonnet family"
 psl_served="$( (source "$PSL_LIB" && probe_served_model "$PSL_FIX/result-error-max-turns.json") 2>&1)"
-[[ "$psl_served" == "claude-sonnet-5" ]] \
+[[ "$(family_of "$psl_served")" == sonnet ]] \
   && ok "probe seed E13: a turn-exhausted result still names its served model" \
   || bad "probe seed E13: a turn-exhausted result still names its served model" "read '$psl_served'"
 psl_served="$( (source "$PSL_LIB" && probe_served_model "$PSL_FIX/result-served-haiku-only.json") 2>&1)"
-[[ "$psl_served" == "claude-haiku-4-5-20251001" ]] \
+[[ "$(family_of "$psl_served")" == haiku ]] \
   && ok "probe seed E13: a session served by Haiku is read as Haiku" \
   || bad "probe seed E13: a session served by Haiku is read as Haiku" "read '$psl_served'"
 # AN UNEVALUABLE PREDICATE IS rc 1 AND NO NAME (spec 0164, fix round 2, F6 of
@@ -63,8 +70,8 @@ psl_served="$( (source "$PSL_LIB" && probe_served_model "$PSL_FIX/result-served-
 # served. The gate record's SERVED-MODEL line rests on this contract.
 psl_bad="$WORK/psl-unevaluable"; mkdir -p "$psl_bad"
 printf '{"type":"result","usage":{"output_tokens":10,"cache_read_input_tokens":0},"modelUsage":[0]}\n' > "$psl_bad/array.json"
-printf '{"type":"result","modelUsage":{"claude-fable-5":{"outputTokens":10,"cacheReadInputTokens":0}}}\n' > "$psl_bad/nousage.json"
-printf '{"type":"result","usage":{"output_tokens":"ten"},"modelUsage":{"claude-fable-5":{"outputTokens":"ten"}}}\n' > "$psl_bad/strings.json"
+printf '{"type":"result","modelUsage":{"claude-fable-test":{"outputTokens":10,"cacheReadInputTokens":0}}}\n' > "$psl_bad/nousage.json"
+printf '{"type":"result","usage":{"output_tokens":"ten"},"modelUsage":{"claude-fable-test":{"outputTokens":"ten"}}}\n' > "$psl_bad/strings.json"
 for psl_f in array nousage strings; do
   psl_out="$( (source "$PSL_LIB" && probe_served_model "$psl_bad/$psl_f.json") 2>&1 )"; psl_rc=$?
   if [[ "$psl_rc" -ne 0 && -z "$psl_out" ]]; then
@@ -75,7 +82,7 @@ for psl_f in array nousage strings; do
 done
 
 psl_served="$( (source "$PSL_LIB" && probe_served_model "$PSL_FIX/stream-served-sonnet.jsonl") 2>&1)"
-[[ "$psl_served" == "claude-sonnet-5" ]] \
+[[ "$(family_of "$psl_served")" == sonnet ]] \
   && ok "probe seed E13: a stream-json transcript is read at its result line" \
   || bad "probe seed E13: a stream-json transcript is read at its result line" "read '$psl_served'"
 jq '.usage.output_tokens = 1' "$PSL_FIX/result-served-sonnet-aux-haiku.json" > "$PSL_W/nomatch.json"
@@ -181,12 +188,12 @@ psl_o="$( (source "$PSL_LIB"
   && ok "probe seed outcomes: a SEEN twin or a failed deny control is CONTROL-FAILED, a BLOCKED anywhere is BLOCKED" \
   || bad "probe seed outcomes: the pair table" "read '$psl_o'"
 psl_o="$( (source "$PSL_LIB"
-  probe_result_line PRE SEEN 2.1.274 claude-sonnet-5 abc123; printf 'rc=%s;' "$?"
-  probe_result_line PRE MAYBE 2.1.274 claude-sonnet-5 abc123; printf 'rc=%s;' "$?"
-  probe_result_line PRE SEEN "" claude-sonnet-5 abc123; printf 'rc=%s;' "$?"
+  probe_result_line PRE SEEN 2.1.274 claude-sonnet-test abc123; printf 'rc=%s;' "$?"
+  probe_result_line PRE MAYBE 2.1.274 claude-sonnet-test abc123; printf 'rc=%s;' "$?"
+  probe_result_line PRE SEEN "" claude-sonnet-test abc123; printf 'rc=%s;' "$?"
   probe_result_line PRE SEEN 2.1.274 "" abc123; printf 'rc=%s;' "$?"
-  probe_result_line PRE SEEN 2.1.274 claude-sonnet-5 ""; printf 'rc=%s;' "$?") 2>/dev/null)"
-[[ "$psl_o" == "PROBE-RESULT: PRE SEEN harness=2.1.274 served=claude-sonnet-5 tree=abc123"$'\n'"rc=0;rc=2;rc=2;rc=2;rc=2;" ]] \
+  probe_result_line PRE SEEN 2.1.274 claude-sonnet-test ""; printf 'rc=%s;' "$?") 2>/dev/null)"
+[[ "$psl_o" == "PROBE-RESULT: PRE SEEN harness=2.1.274 served=claude-sonnet-test tree=abc123"$'\n'"rc=0;rc=2;rc=2;rc=2;rc=2;" ]] \
   && ok "probe seed outcomes: a result line carries harness, served model and tree digest, and refuses without them or with an unknown outcome" \
   || bad "probe seed outcomes: the result line" "read '$psl_o'"
 # The marks are read from what the MODEL said, never from what the hook injected:

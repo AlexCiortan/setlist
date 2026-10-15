@@ -2,7 +2,7 @@
 {{IF:OPUSPLAN}}  "model": "opusplan",
   "fallbackModel": ["default"],
   "permissions": {
-    "_comment": "A deny list is a SPELLING list. The Read rules stop the Read tool on the conventional secret-bearing names and on no others: .env, .env.local, .env.*.local, .env.production, .env.development, .env.staging and .env.test, so the .env.example the stamp writes stays readable and a secret file named any other way is not covered. Bash(cat .env*) stops one Bash spelling and nothing else: less, head, tail, sed, a $(<.env) expansion, a source or a grep read the same file and are not listed, and the scope hook watches the file-writing tools, not Bash. This key is where the note lives because it is what the harness tolerates: measured 2026-09-07 on Claude Code 2.1.259, a _comment key here left every rule in force, and a // comment made the file unreadable and silently dropped every rule in it. A key a newer Claude Code adds to this file can cost the whole file on an older one: 2.1.281's scalar attribution: false makes an older harness skip the file, these rules and the four session hooks with it, while its content still reads as wired. Nothing Setlist ships writes such a key, and the git hooks refuse regardless.",
+    "_comment": "A deny list is a SPELLING list. The Read rules stop the Read tool on the conventional secret-bearing names and on no others: .env, .env.local, .env.*.local, .env.production, .env.development, .env.staging and .env.test, so the .env.example the stamp writes stays readable and a secret file named any other way is not covered. The Bash deny for reading environment files stops one Bash spelling and nothing else: less, head, tail, sed, a $(<.env) expansion, a source or a grep read the same file and are not listed, and the scope hook watches the file-writing tools, not Bash. This key is where the note lives because it is what the harness tolerates: measured 2026-09-07 on Claude Code 2.1.259, a _comment key here left every rule in force, and a // comment made the file unreadable and silently dropped every rule in it. A key a newer Claude Code adds to this file can cost the whole file on an older one: 2.1.281's scalar attribution: false makes an older harness skip the file, these rules and the four session hooks with it, while its content still reads as wired. Nothing Setlist ships writes such a key, and the git hooks refuse regardless. The rules have a version floor: Claude Code 2.1.289 fixed a deny or ask rule being skipped under sandbox auto-allow when the command carries a variable-assignment prefix, so below 2.1.289 read the ask rules in front of git reset --hard and rm -rf as advisory (not reproduced headless at 2.1.288 in four spellings, 2026-10-07; the floor is the changelog's). The bypass deny's entry carries onFailure block, which has a floor of its own: from Claude Code 2.1.295 a bypass deny that times out or cannot start blocks the command instead of letting it through (measured 2026-10-14 at 2.1.299), and below 2.1.295 the key is ignored, the hook still runs and every rule in this file stays in force (measured at 2.1.292), so there a failed bypass deny is a skipped one. The scope hook and the Stop hook carry no such key: the scope hook is advice, and the key has no effect on Stop hooks.",
     "deny": [
       "Read(.env)",
       "Read(.env.local)",
@@ -38,7 +38,8 @@
           {
             "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/bypass-deny.sh",
-            "timeout": 300
+            "timeout": 300,
+            "onFailure": "block"
           }
         ]
       }

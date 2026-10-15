@@ -12,6 +12,14 @@ edition wins. Load the full Part when in doubt:
 Run any time; idempotent. Report findings as a list ordered by severity, and
 fix nothing without approval.
 
+The check list below is read-only and mechanical, so it runs on the delegated
+tier (Part 2, edition v1.21): hand it to a subagent through the Agent tool with
+`model: haiku`, with this file's path, and report what it returns; check 24's
+probe stays in the session, since it measures the session's own models and
+spends quota the user is told about first. What a finding means, and anything to fix, stays with you. A journal
+line names the delegated run, the model it resolved to, its tokens, and its
+cost where the harness reports one.
+
 Open the report by stating the plugin version you are operating from and
 whether it is the newest one available: run
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/plugin-skew.sh"` and quote its verdict. A
@@ -20,7 +28,7 @@ stale session is reporting on the wrong tree, and every check below inherits
 that. SKEW is a finding in its own right, above all the others, and its fix is
 to restart the session rather than to change anything in the repo.
 
-**Structural by design.** This check verifies shape: files in place, sections
+Structural by design. This check verifies shape: files in place, sections
 present, wiring intact, config coherent. It does not judge semantic consistency
 (a plan that contradicts its spec, criteria that miss the goal); that is
 Planner work at spec time. Domain checks an instance accumulates (a shellcheck
@@ -30,8 +38,8 @@ instance's own name, never in a copy of this command.
 Checks:
 
 1. `.claude/settings.json` parses as JSON and still carries the permission
-   rules (deny on .env reads, and since 2.6.0 the one Bash spelling
-   `Bash(cat .env*)` beside them; ask on push, hard reset, force push, rm -rf).
+   rules (deny on .env reads, and since 2.6.0 the one Bash spelling, the
+   deny entry for reading environment files, beside them; ask on push, hard reset, force push, rm -rf).
    The `_comment` key in the permissions block is the deny list's own note
    (a deny list is a spelling list) and is not a finding; a `//` comment
    anywhere in the file IS one, because the harness then drops every rule.
@@ -68,11 +76,12 @@ Checks:
    which `refresh-instance.sh` prints in its report, and recommend the real paths.
 4. Required files exist: CLAUDE.md, README.md, ROADMAP.md, RUNBOOK.md,
    DECISIONS.md, .gitignore, .env.example, specs/STATUS.md, specs/TEMPLATE.md,
-   the steering docs, and exactly ONE committed edition file at the repo root:
-   `setlist.md` (an instance not yet upgraded to the setlist cutover carries
-   the edition file under its original pre-cutover name instead; still
-   exactly one, and any name other than setlist.md is a finding recommending
-   /setlist:upgrade).
+   the steering docs, and the committed edition at the repo root:
+   `setlist.md`, `setlist-operations.md` and `setlist-changelog.md` (the
+   edition is three files since plugin 2.13.0). A `setlist.md` alone is an
+   edition from before that split, and an instance not yet upgraded to the
+   setlist cutover carries one edition file under its original pre-cutover
+   name instead; either is a finding recommending /setlist:upgrade.
 5. specs/STATUS.md has its five bounded sections (Current state, Spec
    inventory, Open chores, Open questions for the Planner, Pointers) AND
    passes row discipline: inventory notes and chore archive lines are single
@@ -88,7 +97,15 @@ Checks:
    slot means tailored generation skipped a file).
 9. DECISIONS.md has its index table, and no INFERRED row lingers past the flip
    ceremony (retrofits only).
-10. No stale generated skills linger: `.claude/skills/checkpoint/` and
+10. The `verify` skill is stamped (plugin 2.12.0): `.claude/skills/verify/SKILL.md`
+    exists. Compare it with `cmp -s` against
+    `${CLAUDE_PLUGIN_ROOT}/templates/claude/skills/verify/SKILL.md`. Absent is a
+    finding recommending `/setlist:upgrade`, whose refresh delivers it; a copy
+    that differs is information naming the file (a hand edit, or an older copy
+    the refresh replaces with a backup). Say what it is when you report it:
+    Claude Code asks for a skill of this name before a commit, and the skill runs
+    the gate command and reports. It persuades; the git hooks refuse.
+    No stale generated skills linger: `.claude/skills/checkpoint/` and
     `.claude/skills/validate/` were removed by the plugin-era migrations
     (their duties ship as /setlist:checkpoint and /setlist:validate);
     report any survivor with the removal step from the upgrade protocol.
@@ -106,15 +123,23 @@ Checks:
     rather than from memory, since that sentence is the one copy. Below the
     floor, name the update. Below 2.1.277, report that the re-grounding pointer
     may be partly dropped on a resumed, continued or cleared session (the
-    harness fixed that in 2.1.277), and name the update. Both are reports, not
-    findings.
+    harness fixed that in 2.1.277), and name the update. Below 2.1.289, report
+    that a deny or ask rule in `.claude/settings.json` can be skipped under
+    sandbox auto-allow when the command carries a variable-assignment prefix
+    (`X=1 rm -rf ...`), so the stamped ask rules in front of `git reset --hard`
+    and `rm -rf` are advisory there, and name the update. Below 2.1.295, report
+    that the bypass deny's `"onFailure": "block"` is ignored there, so a bypass
+    deny that times out or cannot start lets the command through, and name the
+    update. Where `.claude/settings.json`'s bypass-deny entry carries no
+    `onFailure` key, report the one edit the refresh prints for it. All four are
+    reports, not findings.
 12. The instance records which plugin stamped it: `.claude/sdd.json` carries
     `plugin.version`. An instance stamped before 1.0.2 records none, which is a
     finding recommending `/setlist:upgrade` (the refresh records it), not an
     error. When a version IS recorded and it is OLDER than the plugin this
     session runs, the instance is carrying stale enforcement files and the same
     recommendation applies. When it is NEWER, say so plainly and recommend
-    nothing yet: the instance was refreshed by a newer plugin than this session
+    nothing yet. The instance was refreshed by a newer plugin than this session
     holds, so this session is the stale party, and any refresh it ran would
     reinstall older hooks over newer ones.
 13. The `release` block is COHERENT (Part 6, the release rail). An absent block
@@ -136,7 +161,7 @@ Checks:
       path) is a finding rather than an absent marker: it is a declaration
       somebody started and did not finish.
 14. Every PARKED row in the STATUS inventory states BOTH a reason and a revisit
-    trigger in its note (Part 5). A PARKED row missing either is a finding: the
+    trigger in its note (Part 5). A PARKED row missing either is a finding. The
     state exists to record a decision, and a row with no trigger is an abandoned
     branch with a label on it, which is exactly what the state was introduced to
     stop being invisible. Report the row and what it is missing; do not invent
@@ -164,7 +189,7 @@ Checks:
     approved before the project turned it on acquires one on its next lifecycle
     transition. **Never write or re-sign one here.** That is checkpoint's job at
     an approval, in a session where a human is present, and a health check that
-    quietly produced an approval would be manufacturing the exact thing the
+    produced an approval unseen would be manufacturing the exact thing the
     mechanism exists to make somebody do deliberately.
 
 18. **The git-hook boundary is LIVE** (Part 6). The guarantee is the push-time
@@ -178,7 +203,7 @@ Checks:
       `.git/hooks` and every file above is inert.
     - `git config merge.ff` is `false`. Without it a fast-forward merge fires
       NO hook at all and walks unreviewed work onto the trunk.
-    Any of the three missing is a FINDING, not information: unlike the release
+    Any of the three missing is a FINDING, not information. Unlike the release
     block or the identity key, this is not opt-in, and an instance that has lost
     it is running with the advisory layer only while the edition says otherwise.
     Both config settings live in `.git/config`, which is not cloned, so a fresh
@@ -225,19 +250,19 @@ Checks:
     record against specs/STATUS.md: a spec whose record token and inventory
     row disagree, a chore done in one and open in the other. **Divergence is
     INFORMATION, never a finding that blocks**, matching item 16's posture and
-    for the load-bearing reason: the machine acts on the record, the page is
+    for the reason that decides it: the machine acts on the record, the page is
     for people, and a blocking sync check would make the human page
-    load-bearing again, which is the disease the record cures. Report each
+    essential again, which is the disease the record cures. Report each
     divergence with both values so the human can fix the page (or discover the
     hand edit). The record's ABSENCE is not information and not a finding:
     a legacy instance is a supported state. A record that is present and
-    MALFORMED is a FINDING: every gate that reads it refuses, so the instance
+    MALFORMED is a FINDING. Every gate that reads it refuses, so the instance
     cannot close anything until it is fixed, and this check is the friendly
     version of the message the hooks will deliver anyway.
 20. **Double declaration** (Part 6, edition v1.12): one file in two specs'
     `Owns:` sets, or in a spec's set and a chore's `files`. INFORMATION, never
-    a finding: the audit checks coverage per closing spec, so a double
-    declaration is legal and sometimes honest (a file that genuinely changed
+    a finding. The audit checks coverage per closing spec, so a double
+    declaration is legal and sometimes legitimate (a file that really changed
     hands), and refusing it at declaration time would need a cross-spec read
     whose cost nobody has measured. The one overlap the audit DOES refuse is
     at close time, two specs in flight at once (`SLH-OWNS-OVERLAP`, plugin
@@ -269,8 +294,8 @@ Checks:
 22. **The diagram reports** (projects with `docs/diagrams/`). Where the
     directory does not exist, report nothing: the project has not opted in, and
     check 6 above is the whole diagram check for it. Where it does exist, these
-    are REPORTS and never findings that block anything, because each has an
-    honest answer that is "not yet" and the close is where refusal belongs:
+    are REPORTS and never findings that block anything, because each has a
+    truthful answer that is "not yet" and the close is where refusal belongs:
     - **Over twelve nodes.** Any diagram file whose Mermaid block draws more
       than twelve primary nodes. Name the file and the count, and recommend the
       split (`docs/diagrams/components/<parent>/<child>.md`). Twelve is a
@@ -283,9 +308,9 @@ Checks:
     - **Stale nodes from earlier specs.** Node names that are path-shaped and do
       not resolve in the tree, whose `%% spec NNNN` is not the current work.
       Name the node, the file, and the spec that introduced it, with the two
-      honest exits: redraw it in a close that names the file in the diagram
+      legitimate exits: redraw it in a close that names the file in the diagram
       field, or retire it with a note. The close refuses only the CLOSING
-      spec's own stale nodes, so these are the ones that accumulate quietly.
+      spec's own stale nodes, so these are the ones that accumulate unnoticed.
     - **Generated edges no hand diagram draws**, where `diagram_command` is
       declared: edges present in `docs/diagrams/generated/` that appear in no
       hand-drawn file. Each is either a real dependency nobody drew or a
@@ -298,7 +323,7 @@ Checks:
     `~/.claude/skills/synced/<bucket>/` (synced from the account), the plugin
     keys in `~/.claude/plugins/installed_plugins.json`, and the directories
     under `~/.claude/plugins/synced/<bucket>/` (`$CLAUDE_CONFIG_DIR` in place of
-    `~/.claude` where it is set). The refresh's report prints the same list
+    `~/.claude` where it is configured). The refresh's report prints the same list
     (`refresh-instance.sh .`, under "outside this instance"). Names only: read
     no content, and say that no Setlist check compares these files, so a stale
     edition claim or a model binding living there is in no report. This is a
@@ -310,8 +335,14 @@ Checks:
     the pair on 2026-09-29), then run
     `bash "${CLAUDE_PLUGIN_ROOT}/scripts/model-probe.sh"` and quote its lines.
     It probes the plan phase and the execution phase of `opusplan` and prints
-    the model each served. The bootstrap probe's recorded answer is a yes or a
-    no and names no version; do not read it in place of this check. rc 1
+    the model each served, and a `served <phase> <id>` line per phase. Where
+    `.claude/sdd.json` records `models` (the ids the bootstrap probe read,
+    plugin 2.12.0 and later), compare each live id with the recorded one and
+    name a change ("planning: recorded <id>, served now <id>"): a report, not
+    a finding, unless the family left its tier (rc 1 below). Where nothing is
+    recorded (an instance stamped before 2.12.0, whose answer was a yes or a
+    no), say so and print the live ids; never read an old answer in place of
+    this check. rc 1
     (`[MP-PLAN-OFF-TIER]` or `[MP-EXEC-OFF-TIER]`) is a finding: a phase was
     served by a model outside its tier's family, which a managed allowlist
     changed after the stamp (exact version matching, or a denied model) or a

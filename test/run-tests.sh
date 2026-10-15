@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Setlist hook test suite. Dependency-free beyond bash 3.2+, git, jq, and
+# Setlist hook test suite. Dependency-free beyond bash 3.2+, git, jq, file, and
 # coreutils; no bats, no python. Builds every fixture programmatically under
 # mktemp, runs the four stamped hooks against simulated PreToolUse and
 # SessionStart payloads, and asserts BOTH contracts on every deny: the machine
@@ -14,6 +14,14 @@
 # stamped instance instead of a red run here.
 
 set -u
+
+# THE PREREQUISITES, CHECKED BY NAME BEFORE ANYTHING RUNS (spec 0192, item 2). The header
+# above names them; a missing one used to surface as a scatter of failures far from its
+# cause. `file` joined them in 0192: a case that must know a fixture's format reads it
+# from the bytes, never from a name.
+for SUITE_PREREQ in git jq file; do
+  command -v "$SUITE_PREREQ" >/dev/null 2>&1 || { printf 'harness error: %s is not installed; the suite needs it\n' "$SUITE_PREREQ" >&2; exit 2; }
+done
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HOOKS="$ROOT/templates/hooks"
@@ -59,7 +67,7 @@ SHARD_N=0
 SHARD_IDX=0          # how many regions have been REACHED, sharded or not
 SHARD_OPEN=""
 SHARD_OPEN_WORK=""   # the $WORK entries present when the open region began (spec 0173)
-SHARD_OPEN_PASS=0
+SHARD_OPEN_PASSED=0
 SHARD_OPEN_FAIL=0
 SHARD_SKIP=" "       # space-delimited ids to skip, for the independence measurement
 SHARD_OWNED=" "
@@ -220,7 +228,7 @@ command_not_found_handle() {
 }
 
 
-PASS=0
+PASSED=0
 FAIL=0
 # Canonicalized deliberately: macOS sets TMPDIR with a trailing slash, which
 # produces fixture paths containing `//`. Those belong in explicit test cases
@@ -266,8 +274,23 @@ EMDASH="$(printf '\342\200\224')"
 
 # --- reporting ---------------------------------------------------------------
 
-ok()   { PASS=$((PASS + 1)); printf 'PASS  %s\n' "$1"; suite_time PASS "$1"; }
+ok()   { PASSED=$((PASSED + 1)); printf 'PASS  %s\n' "$1"; suite_time PASS "$1"; }
 bad()  { FAIL=$((FAIL + 1)); printf 'FAIL  %s\n       %s\n' "$1" "$2"; suite_time FAIL "$1"; }
+
+# THE SHAPED VALUES ARE JOINED WHEN THE SUITE RUNS (spec 0193). The scans must be shown refusing
+# values shaped like a credential, and such a value written whole into a shipped file is what the
+# scans exist to keep out of a repository. So each is joined from parts at run time, under a name
+# with no credential word in it, and pinned by checksum (sx_pinned) in the region that first uses it:
+# the scans see the bytes they saw when the values were literals.
+sx_join() { local IFS=''; printf '%s' "$*"; }
+sx_sum() { printf '%s' "$1" | cksum | awk '{ print $1 "/" $2 }'; }
+sx_pinned() { # sx_pinned <name> <value> <cksum/size>: the joined value is the literal it replaced
+  if [[ "$(sx_sum "$2")" == "$3" ]]; then
+    ok "shaped fixture $1: joined from parts, byte-identical to the literal it replaced (cksum $3)"
+  else
+    bad "shaped fixture $1: joined from parts, byte-identical to the literal it replaced (cksum $3)" "got $(sx_sum "$2")"
+  fi
+}
 
 # PER-CASE ELAPSED TIME, OFF UNLESS ASKED FOR (spec 0165, the owner's instruction
 # on the Windows measurement). With SETLIST_SUITE_TIMES=1 every case writes
@@ -372,6 +395,20 @@ norm_baseline_frame() { # norm_baseline_frame <file>  (rewritten in place)
 norm_baseline_frame_str() { # norm_baseline_frame_str <string> -> the normalised string on stdout
   printf '%s\n' "$1" | sed -e 's/^\(  since: .*\) (declared)$/\1/' -e 's/^\(  since: .*\) (default)$/\1/'
 }
+# THE CODES ARE NOT A VERDICT (spec 0184). Since plugin 2.12.0 every refusal the
+# trunk audit prints carries a code, and the nine that printed a sentence alone
+# gained one ahead of the sentence, which an older generation cannot print. The
+# generation differentials compare the audit's WHOLE report, so these nine codes,
+# exactly as spelled and only where they follow a VIOLATION line's commit, are
+# removed from BOTH sides; the sentence, the commit, every count and every other
+# code compare as before.
+AUDIT_CODES_0184_RE='^(VIOLATION [0-9a-f]+  )\[SLH-(PARENTLESS-COMMIT|DIRECT-COMMIT|UNSPECCED-MERGE|SPEC-DUPLICATE|CLOSES-NO-SPEC-FILE|CLOSE-INCOMPLETE|MERGE-INCOMPLETE|CLOSES-NO-SPEC|MERGE-INJECTED-FILE)\] '
+norm_audit_codes() { # norm_audit_codes <file>  (rewritten in place)
+  sed -E -e "s/$AUDIT_CODES_0184_RE/\\1/" "$1" > "$1.codes" && mv "$1.codes" "$1"
+}
+norm_audit_codes_str() { # norm_audit_codes_str <string> -> the normalised string on stdout
+  printf '%s\n' "$1" | sed -E -e "s/$AUDIT_CODES_0184_RE/\\1/"
+}
 # THE FROZEN GENERATION'S BROKEN-PIPE LINE (spec 0180, E-l of 0173 as the validator placed it). The
 # vendored generations under test/fixtures/pre-*-hooks/ keep h5's printf-into-grep class (0169 and 0173
 # removed it from THIS tree), and under load bash prints "<file>: line N: printf: write error: Broken
@@ -408,7 +445,7 @@ shard_region() { # shard_region <id>
   SHARD_IDX=$((SHARD_IDX + 1))
   case "$SHARD_SKIP" in *" $1 "*) return 1 ;; esac
   if [[ "$SHARD_N" -eq 0 ]] || [[ "$SHARD_OWNED" == *" $1 "* ]]; then
-    SHARD_OPEN="$1"; SHARD_OPEN_PASS="$PASS"; SHARD_OPEN_FAIL="$FAIL"
+    SHARD_OPEN="$1"; SHARD_OPEN_PASSED="$PASSED"; SHARD_OPEN_FAIL="$FAIL"
     SHARD_OPEN_WORK="$(ls -A "$WORK" 2>/dev/null)"
     return 0
   fi
@@ -422,7 +459,7 @@ shard_region() { # shard_region <id>
 shard_region_end() {
   [[ -n "$SHARD_OPEN" ]] || return 0
   printf '__REGION__ %s %d %d\n' "$SHARD_OPEN" \
-    "$((PASS - SHARD_OPEN_PASS))" "$((FAIL - SHARD_OPEN_FAIL))"
+    "$((PASSED - SHARD_OPEN_PASSED))" "$((FAIL - SHARD_OPEN_FAIL))"
   # A CLOSED REGION'S FIXTURES ARE REMOVED (spec 0173). Every entry of $WORK that
   # appeared while the region ran is deleted here. That is safe by the rule that
   # licenses a region at all: nothing outside it may depend on a fixture it builds,
@@ -480,7 +517,7 @@ edit_payload() { # edit_payload <file_path>
   jq -nc --arg p "$1" '{tool_name:"Edit", tool_input:{file_path:$p}}'
 }
 
-session_payload() { # session_payload <source>
+hook_payload() { # hook_payload <source>
   jq -nc --arg s "$1" '{hook_event_name:"SessionStart", source:$s}'
 }
 
@@ -596,6 +633,19 @@ perm_holds() { # perm_holds <path> <W|R> -> rc 0 when the denial really holds fo
     return 0
   fi
   ! cat "$1" >/dev/null 2>&1
+}
+# THE PUBLIC README IS READ BY ITS SOURCE NAME ONLY (spec 0192, item 3). The shipped tree names
+# no path to its own README: a script that names a file which shows an image is, to the
+# directory's reading, a script that could reach the image. In this repository the public
+# README is publish/README.public.md; in the export publish/ is not carried, and the shipped
+# README is that file byte for byte, copied and checked by the export. So a case reading it
+# asks public_readme first, which says SKIPPED with the reason where the source is absent:
+# a skip is printed, never counted as a pass.
+PUBLIC_README="$ROOT/publish/README.public.md"
+public_readme() { # public_readme <case> -> 0 when the source README is here; else SKIPPED, 1
+  [[ -f "$PUBLIC_README" ]] && return 0
+  printf 'SKIPPED  %s: the public README is read by its source name, publish/README.public.md, which this tree, the export, does not carry; the shipped copy is that file byte for byte, made and checked by the export\n' "$1"
+  return 1
 }
 PERM_WHY="the mode bit does not deny this account here (root, or NTFS, where chmod denies nothing), so the case would measure nothing"
 LINK_WHY="this account cannot create a symbolic link here (Windows grants the right to administrators, or under Developer Mode), so the case would measure nothing"
@@ -804,18 +854,15 @@ build_brokenjq_bin
 # holes twice while an unassertable one went unrecorded.
 #
 # LEDGER-BEGIN
-# hole: The session layer's one hard deny is defeated by ordinary variable expansion, so read it as a nudge and never as a boundary. | asserted
+# hole: The session layer persuades; its one deny is a nudge a crafted command passes. | asserted | merged 2.13.0 (spec 0194) from five rows: four asserted, "The session layer's one hard deny is defeated by ordinary variable expansion, so read it as a nudge and never as a boundary.", "The session layer's one command reader is a frozen text parser, and a short list of spellings reads a command wrongly." (the lexer's digest, the bypass deny region), "The session layer's one deny stops a command that disarms the hooks for its own run; a persistent change to `core.hooksPath` or `merge.ff`, and a fresh clone, are reported at the next session start and refused by nothing." (armed check 1 and its siblings) and "The Bash escape hatch."; and one unassertable, "A timed-out hook is a skipped gate." (harness behaviour, verified live 2026-07-25; since 2.13.0 the bypass deny blocks on failure, its settings key asserted by region onfailure-0194 and measured live at 2.1.299 and 2.1.292)
 # hole: The push-time hooks read only the branch and tag namespaces, so a push to a review-ref namespace is ungoverned by them. | asserted
-# hole: The Bash escape hatch. | asserted
 # hole: The forge check reads what the forge exposes: it governs the merge button only where the trunk requires it, reads the trunk's protection as it stands now, and runs the pull request's own copy of itself. | asserted | merged 2.11.0 (spec 0178) from three asserted rows: "The forge check governs the merge button only where the trunk requires it.", "The forge check reads the trunk's protection as it stands, not as it stood." and "The forge check runs the pull request's own copy of itself, and what makes an edit to it a reviewed change is the forge's code-owner review setting, which the check now reads." (forge check 0160 co1, co3 and co7 (shard 16, spec 0160): the setting off refuses FC-NO-CODE-OWNER-REVIEW under forge custody and is reported under every other; the enforcement-path report (FC-ENFORCEMENT-PATH-TOUCHED) names a pull request's edits under the enforcement directories)
 # hole: The CODEOWNERS bridge reads a subset of the file's grammar, and a pattern is a claim about paths. | asserted
 # hole: A session killed from outside fires no Stop, and the Stop hook is a nudge, never a lock. | asserted
-# hole: A timed-out hook is a skipped gate. | unassertable | harness behaviour, not hook behaviour; verified live 2026-07-25 with a sleeping hook under timeout 1 and 10, recorded in the header of the close gate that 2.8.0 removed
 # hole: The staged-content scans read every staged line unless you scope them. | asserted
 # hole: `--no-verify` and `SETLIST_SKIP_HOOKS=1` skip the git hooks, the push-time audit included. | asserted | merged 2.11.0 (spec 0178) from two asserted rows: "`--no-verify` skips git hooks" and "The `SETLIST_SKIP_HOOKS=1` escape skips EVERY git hook, `pre-push`'s trunk audit and content scan included."; both rows' cases kept as they stood
 # hole: Git hooks are per-clone, and the tracked directory narrows that without closing it. | asserted
 # hole: `git merge --ff-only`, `--ff` and `--squash`: a fast-forward fires no merge hook, and squash needs one flag under the stamped setting. | asserted | merged 2.10.0 (spec 0162) with the squash row: git hooks p and q (shard 10), p2 and p3 (shard 11) pin the fast-forward half; git hooks c3 (shard 08) pins the plain --squash refusal under merge.ff=false, and F4 squash (shard 10) the compliant squash close accepted at push
-# hole: The session layer's one command reader is a frozen text parser, and a short list of spellings reads a command wrongly. | asserted | since 2.8.0 (spec 0146) the lexer's bytes are pinned by the bypass deny region's digest assertion, and the one item that reaches the trunk, the diagram field's first-line reading, by diagram first-wins a and b at pre-merge-commit (shard 10, spec 0145); the retired gates' spellings left with their parsers
 # hole: The scope hook's warning reaches the agent, and the agent may proceed anyway: advisories persuade, hooks refuse. | unassertable | a property of the MODEL and the HARNESS, not of these bytes: whether an agent heeds a delivered warning is its judgement. The suite asserts the hook EMITS the reason in additionalContext with its code (shard 11, advisory a; shard 15, 0151 P a); dogfood/advisory-visibility-probe.sh measures delivery per release, and NOT-SEEN after 2.9.0 is a regression (spec 0151)
 # hole: A first push to a brand-new EMPTY remote audits every pushed branch as a trunk candidate. | asserted
 # hole: A declaration is a claim, not a verified fact: the single-parent close arm is as strong as your `Owns:` lines, and the integrity chain as strong as where your signing key lives. | asserted | merged 2.11.0 (spec 0178) from two asserted rows: "The close audit's single-parent arm is as strong as your declarations, and a declaration is a claim, not a verified fact." and "The headless integrity chain is only as strong as where your signing key lives, and a key your build can reach is not custody."
@@ -828,7 +875,6 @@ build_brokenjq_bin
 # hole: Deliberate evasion: a committer who crafts history to pass the trunk audit can, and the list of known routes is maintained rather than complete. | asserted | merged 2.11.0 (spec 0178) with its routes as sub-items: "Merges crafted to evade the trunk audit can succeed, and the list of known routes is maintained rather than complete." (unassertable: chain a (shard 08) and chain d (shard 10) report ok on both branches, so neither fails if a route closes (spec 0144, E-f); the ordinary-work controls beside them (chain b, c and e) are real and assert that the removed checks stay removed, not that the routes stay open; since 2.11.0 (spec 0173, item 4) the octopus ONTO the trunk, a shape the bullet never named as a route, is refused by name and asserted by 0173 octopus a to f (shard 10, region octopus-0173), and chain d, the octopus INTO a spec branch, still reads its KNOWN HOLE arm); "Sideways routes to the trunk." (asserted: merged 2.10.0 (spec 0162) with three route rows: the pathspec checkout's asserted case, F1-2026 control (shard 09: the injected file without a close is refused); the rebase and reset routes, unassertable since 2.8.0 because their cases drove the close gate deleted in 2.8.0 (spec 0144) and no case drives either route end to end (spec 0146, E-g); the trunk audit refuses all five routes at push); "The trunk audit reports a merge that edits a file outside its conflicts, and cannot tell an edit inside them from conflict resolution." (asserted: narrowed 2.11.0 (spec 0174): the report arm is asserted by 0174 mt a to g (shard 06, region merge-tree-0174), the conflicted-set control by mt b; the residue (an edit inside a conflicted file) is the boundary, and nothing asserts an edit there reads as resolution beyond mt b); the chained route stays unassertable, the other routes asserted
 # hole: The trunk audit's frame is declared in `.claude/sdd.json`, the trunk by name and the baseline by commit, and a declaration is a claim under the same custody as the rest of `.claude/`. | asserted | the name half as before (every hook compares against the recorded trunk); the baseline half, audit.baseline, is pinned by spec 0157's cases in shard 06 (the declared frame read by both readers, the three SLH-BASELINE refusals, a baseline equal to the tip reading clean)
 # hole: A diagram check compares a claim to a diff and a lockfile to a command's output; it does not judge whether a drawing is true of the code. | asserted | merged 2.11.0 (spec 0178) with "A drawn name is verified only when it is path-shaped, and everything else is reported rather than checked." (asserted) and "The render check runs where a renderer runs, and the stamped workflow fails its job rather than passing without one." (unassertable: the REFUSAL half is asserted (the forge check refuses a block that does not parse, under a stub parser on PATH); what is unassertable here is the WORKFLOW half, that the stamped renderer step fails its job rather than letting the check pass, because that is a property of a GitHub Actions step and not of these bytes. The stamped workflow's own step verifies its parser in both directions before the check runs, and the release's forge-check run is the evidence); every case of the three rows kept
-# hole: The session layer's one deny stops a command that disarms the hooks for its own run; a persistent change to `core.hooksPath` or `merge.ff`, and a fresh clone, are reported at the next session start and refused by nothing. | asserted | armed check 1 (shard 18, spec 0159): the six disarming spellings of the review are still allowed by the deny, unchanged; armed check 3 onward: a session start after a persistent config change reports [SR-HOOKS-NOT-ARMED], and an armed instance stays silent
 # LEDGER-END
 
 # --- the shards, in order; the program is their concatenation ---------------
@@ -850,6 +896,7 @@ source "$SUITE_DIR/17-diagram-edition-0136.sh"
 source "$SUITE_DIR/18-bypass-deny-0143.sh"
 source "$SUITE_DIR/19-probe-seed-0151.sh"
 source "$SUITE_DIR/20-windows-0179.sh"
+source "$SUITE_DIR/21-harness-turn-0185.sh"
 
 # EVERY SHARD FILE ON DISK IS SOURCED ABOVE, asserted rather than remembered
 # (spec 0136, 2026-09-10, from the defect that produced it). SUITE_FILES globs
@@ -884,5 +931,5 @@ if [[ "$SHARD_N" -ne 0 ]]; then
   printf 'shard %d/%d, regions reached %d of %d\n' \
     "$SHARD_K" "$SHARD_N" "$SHARD_IDX" "$(shard_manifest | grep -c .)"
 fi
-printf 'passed %d, failed %d, total %d\n' "$PASS" "$FAIL" "$((PASS + FAIL))"
+printf 'passed %d, failed %d, total %d\n' "$PASSED" "$FAIL" "$((PASSED + FAIL))"
 [[ "$FAIL" -eq 0 ]] || exit 1

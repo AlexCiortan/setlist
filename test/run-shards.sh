@@ -165,12 +165,29 @@ if [[ "$RETRY_DEAD" -eq 1 ]]; then
     fi
     k=$((k + 1))
   done
+  # AN EXIT 139 INSIDE A CASE IS A SIGHTING TOO (spec 0188, 2.12.0's item 15). A child of a case
+  # (the stamp, the audit, a hook) can die of a segmentation fault while the shard runs on, and
+  # the case then reads red with "got 139" or "exited 139" and nothing else: the workflow's count
+  # of `DEAD-SHARD: ... died` lines read 0 beside two such cases in 0181's release-gate attempt 1.
+  # One line per case whose failure detail names an exit 139, spelled for that same count. It
+  # reads only; it changes no verdict, and a case red for any other status writes nothing here.
+  k=1
+  while [[ "$k" -le "$SHARDS" ]]; do
+    [[ -f "$W/log$k" ]] && awk -v k="$k" -v n="$SHARDS" '
+      /^FAIL  / { name = substr($0, 7); on = 1; seen = 0; next }
+      on && (/^PASS  / || /^__REGION__ / || /^__SHARD__ / || /^TIME / || /^HOOKTIME / || /^passed [0-9]+, failed [0-9]+, total [0-9]+/) { on = 0 }
+      on && !seen && /(got |exited |rc=|rc )139([^0-9]|$)/ {
+        printf "DEAD-SHARD: shard %d/%d: a process died of exit 139 inside case \"%s\"; the case is red and the shard ran on\n", k, n, name
+        seen = 1
+      }' "$W/log$k" >&2
+    k=$((k + 1))
+  done
 fi
 END="$(date +%s)"
 
 # --- aggregate ---------------------------------------------------------------
 fails=0
-sum_pass=0
+sum_passed=0
 sum_fail=0
 : > "$W/claimed"
 : > "$W/preludes"
@@ -208,14 +225,14 @@ while [[ "$k" -le "$SHARDS" ]]; do
   # the suite behaved differently in different shards, which is a finding in
   # itself and not something to average away.
   rp="$(awk '/^__REGION__ /{p+=$3; f+=$4} END{printf "%d %d", p+0, f+0}' "$W/log$k")"
-  reg_pass="${rp%% *}"; reg_fail="${rp##* }"
-  sum_pass=$((sum_pass + reg_pass))
+  reg_passed="${rp%% *}"; reg_fail="${rp##* }"
+  sum_passed=$((sum_passed + reg_passed))
   sum_fail=$((sum_fail + reg_fail))
-  printf '%d %d\n' "$((p - reg_pass))" "$((f - reg_fail))" >> "$W/preludes"
+  printf '%d %d\n' "$((p - reg_passed))" "$((f - reg_fail))" >> "$W/preludes"
 
   nreg="$(grep -c '^__REGION__ ' "$W/log$k" | tr -d ' ')"
   printf 'shard %d/%d: rc=%s, %s regions, passed %s, failed %s (regions %s, prelude %s)\n' \
-    "$k" "$SHARDS" "$rc" "$nreg" "$p" "$f" "$reg_pass" "$((p - reg_pass))"
+    "$k" "$SHARDS" "$rc" "$nreg" "$p" "$f" "$reg_passed" "$((p - reg_passed))"
 
   if [[ "$rc" -ne 0 ]]; then
     printf '  shard %d/%d is RED. Its failures:\n' "$k" "$SHARDS" >&2
@@ -254,9 +271,9 @@ if [[ "$(LC_ALL=C sort -u "$W/preludes" | grep -c .)" -gt 1 ]]; then
   LC_ALL=C sort -u "$W/preludes" | sed 's/^/                    /' >&2
   fails=$((fails + 1))
 fi
-prelude_pass="$(head -n 1 "$W/preludes" | cut -d' ' -f1)"
+prelude_passed="$(head -n 1 "$W/preludes" | cut -d' ' -f1)"
 prelude_fail="$(head -n 1 "$W/preludes" | cut -d' ' -f2)"
-sum_pass=$((sum_pass + prelude_pass))
+sum_passed=$((sum_passed + prelude_passed))
 sum_fail=$((sum_fail + prelude_fail))
 
 # --- the coverage invariant --------------------------------------------------
@@ -320,12 +337,12 @@ if [[ "$VERIFY" -eq 1 ]]; then
   fullp="$(printf '%s' "$fulltot" | sed -E 's/^passed ([0-9]+),.*/\1/')"
   fullf="$(printf '%s' "$fulltot" | sed -E 's/^passed [0-9]+, failed ([0-9]+).*/\1/')"
   printf 'unsharded: rc=%d, %s\n' "$fullrc" "$fulltot"
-  if [[ "$((sum_pass + sum_fail))" -ne "$((fullp + fullf))" ]]; then
-    printf 'run-shards REFUSED: the shards total %d assertions and the unsharded suite totals\n' "$((sum_pass + sum_fail))" >&2
+  if [[ "$((sum_passed + sum_fail))" -ne "$((fullp + fullf))" ]]; then
+    printf 'run-shards REFUSED: the shards total %d assertions and the unsharded suite totals\n' "$((sum_passed + sum_fail))" >&2
     printf '                    %d on this same host. The partition is losing or repeating work.\n' "$((fullp + fullf))" >&2
     fails=$((fails + 1))
   else
-    printf 'verify: sharded and unsharded agree at %d assertions on this host.\n' "$((sum_pass + sum_fail))"
+    printf 'verify: sharded and unsharded agree at %d assertions on this host.\n' "$((sum_passed + sum_fail))"
   fi
 fi
 
@@ -353,7 +370,7 @@ fi
 
 printf '\n%s\n' "-----------------------------------------------"
 printf 'shards %d, regions %d, wall-clock %ds\n' "$SHARDS" "$MANIFEST_N" "$((END - START))"
-printf 'passed %d, failed %d, total %d\n' "$sum_pass" "$sum_fail" "$((sum_pass + sum_fail))"
+printf 'passed %d, failed %d, total %d\n' "$sum_passed" "$sum_fail" "$((sum_passed + sum_fail))"
 
 if [[ "$fails" -ne 0 ]] || [[ "$sum_fail" -ne 0 ]]; then
   exit 1

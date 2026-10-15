@@ -192,8 +192,10 @@ SLH_QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l)
 # no reader reached because an ordinary fence above it was left open is refused with that fence
 # named by line (the reader's own line count, which is the file's unless a template example above
 # was stripped), never as a block the spec does not carry. Every line inside the block is one of
-# four shapes:
+# five shapes:
 #   round <1|2>: PASS|FAIL|SKIP-DOCS-ONLY            the reviewer's verdict for the round
+#   effort: low|medium|high|xhigh|max                optional, once per reviewed round (spec 0194):
+#                                                    the effort the review was asked to run at
 #   <criterion>: PASS|PARTIAL|FAIL                   one per criterion, the qa-pass-1 grammar
 #   <id> | <criterion or -> | BLOCKER|MAJOR|MINOR | <path>:<line> | <what> | <fix>
 #   verdict: ACCEPTED-BY-HUMAN <id>...               the human's decision at the cap
@@ -204,9 +206,9 @@ SLH_QA_PASS1_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l)
 # only round, and carries nothing. The human's line comes last, only after a round 2 reading
 # FAIL, and names every round-2 finding at MAJOR or above and nothing round 2 does not carry, so
 # the reviewer's verdict stays verbatim beside the override instead of under it. ONE LINE out,
-# its first word the token: none | unclosed | unclosed-comment | empty | malformed <why> |
-# pass | fail | skip | accepted.
-SLH_CLOSE_REVIEW_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); __ti = __raw; sub(/^[ \t]+/, "", __ti); sub(/[ \t]+$/, "", __ti); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } if (__ti == "close-review" && inclose && !seen && !nin) { nin = NR; ninl = fline; nint = ftext } } else { if (__ti == "close-review" && inclose && !seen) { inb = 1; qch = __c; qlen = __m; next } if (__ti == "close-review" && !inclose && endl && !seen && !late) late = NR; fence = 1; fch = __c; flen = __m; fline = NR; ftext = substr(__l, 1, 40); next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "" || bad != "") next; if (acc) { bad = "a line after the ACCEPTED-BY-HUMAN verdict"; next } if (l ~ /^round[ \t]+[0-9]+[ \t]*:[ \t]*(PASS|FAIL|SKIP-DOCS-ONLY)$/) { __n = l; sub(/^round[ \t]+/, "", __n); sub(/[ \t]*:.*$/, "", __n); __n = __n + 0; __t = l; sub(/^[^:]*:[ \t]*/, "", __t); if (__n > 2) bad = "a third round"; else if (__n != nr + 1) bad = "round " __n " out of order"; else if (nr >= 1 && (tok[1] == "SKIP-DOCS-ONLY" || __t == "SKIP-DOCS-ONLY")) bad = "SKIP-DOCS-ONLY beside another round"; else { nr = __n; tok[nr] = __t } next } if (l ~ /^verdict[ \t]*:/) { if (l !~ /^verdict[ \t]*:[ \t]*ACCEPTED-BY-HUMAN([ \t]|$)/) { bad = "a verdict line other than ACCEPTED-BY-HUMAN"; next } if (nr != 2) { bad = "ACCEPTED-BY-HUMAN outside round 2"; next } if (tok[2] != "FAIL") { bad = "ACCEPTED-BY-HUMAN beside round 2 reading " tok[2]; next } __ids = l; sub(/^verdict[ \t]*:[ \t]*ACCEPTED-BY-HUMAN[ \t]*/, "", __ids); __k = split(__ids, __a, /[ \t]+/); if (__k == 0) { bad = "ACCEPTED-BY-HUMAN names no finding"; next } for (__i = 1; __i <= __k; __i++) { if (__a[__i] !~ /^[A-Za-z0-9._-]+$/) { bad = "ACCEPTED-BY-HUMAN names something that is not a finding id"; next } acc_id[__a[__i]] = 1; acc_list = acc_list " " __a[__i] } acc = 1; next } if (nr == 0) { bad = "a line before the first round header"; next } if (tok[nr] == "SKIP-DOCS-ONLY") { bad = "a SKIP-DOCS-ONLY round that carries lines"; next } if (l ~ /^[A-Za-z0-9._-]+[ \t]*:[ \t]*(PASS|PARTIAL|FAIL)$/) { cn[nr]++; if (l ~ /FAIL$/ && cf[nr] == "") { __cn = l; sub(/[ \t]*:.*$/, "", __cn); cf[nr] = __cn } next } if (index(l, "|")) { __k = split(l, __f, "|"); if (__k < 6) { bad = "a finding line with fewer than six fields"; next } for (__i = 1; __i <= 5; __i++) { sub(/^[ \t]+/, "", __f[__i]); sub(/[ \t]+$/, "", __f[__i]) } __fx = __f[6]; for (__i = 7; __i <= __k; __i++) __fx = __fx "|" __f[__i]; sub(/^[ \t]+/, "", __fx); sub(/[ \t]+$/, "", __fx); if (__f[1] !~ /^[A-Za-z0-9._-]+$/) { bad = "a finding whose id is not a bare identifier"; next } if (__f[2] !~ /^([A-Za-z0-9._-]+|-)$/) { bad = "finding " __f[1] " names no criterion"; next } if (__f[3] !~ /^(BLOCKER|MAJOR|MINOR)$/) { bad = "finding " __f[1] " has no severity"; next } if (__f[4] !~ /^[^ \t|]+:[0-9]+$/) { bad = "finding " __f[1] " has no file and line"; next } if (__f[5] == "" || __fx == "") { bad = "finding " __f[1] " says no what or no fix"; next } __key = nr SUBSEP __f[1]; if (__key in fid) { bad = "finding " __f[1] " appears twice in round " nr; next } fid[__key] = __f[3]; if (__f[3] != "MINOR") { if (mj[nr] == "") mj[nr] = __f[1] " " __f[3]; if (nr == 2) mj2[__f[1]] = __f[3] } next } bad = "a line that is not a round header, a criterion verdict, a finding or the human verdict"; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report([ \t]+\(.*\))?[ \t]*(#+[ \t]*)?$/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) { inclose = 0; endl = NR; endh = substr(__l, 1, 60) } } } END { if (incmt) { print "unclosed-comment"; exit } if (inb) { print "unclosed"; exit } if (!seen && nin) { print "malformed the close-review fence at line " nin " opens inside a fence opened at line " ninl " (" nint ") that is not closed before it, so it is read as content of that fence"; exit } if (!seen && late) { print "malformed the close-review fence at line " late " sits after the heading \"" endh "\" at line " endl ", which ends the Closing report section; a report pasted into the Closing report goes inside a fence, where its headings are content"; exit } if (fence && !seen) { print "malformed an unclosed fence opened at line " fline " (" ftext ") runs to the end of the spec, so no block after it is read"; exit } if (!seen) { print "none"; exit } if (bad != "") { print "malformed " bad; exit } if (nr == 0) { print "empty"; exit } for (__i = 1; __i <= nr; __i++) { if (tok[__i] == "SKIP-DOCS-ONLY") continue; if (cn[__i] == 0) { print "malformed round " __i " carries no criterion verdict"; exit } if (tok[__i] == "PASS" && mj[__i] != "") { print "malformed round " __i " reads PASS beside " mj[__i]; exit } if (tok[__i] == "PASS" && cf[__i] != "") { print "malformed round " __i " reads PASS beside criterion " cf[__i] " FAIL"; exit } } if (acc) { __k = split(acc_list, __a, " "); for (__i = 1; __i <= __k; __i++) { __key = 2 SUBSEP __a[__i]; if (!(__key in fid)) { print "malformed ACCEPTED-BY-HUMAN names " __a[__i] ", which round 2 does not carry"; exit } } for (__x in mj2) if (!(__x in acc_id)) { print "malformed ACCEPTED-BY-HUMAN leaves round 2 finding " __x " " mj2[__x] " unaccepted"; exit } print "accepted"; exit } if (tok[nr] == "PASS") print "pass"; else if (tok[nr] == "FAIL") print "fail"; else print "skip" }'
+# its first word the token: none | unclosed | unclosed-comment | empty | malformed <why>
+# | pass | fail | skip | accepted.
+SLH_CLOSE_REVIEW_AWK='{ __l = $0; sub(/\r$/, "", __l); sub(/^[[:space:]]*/, "", __l); if (incmt) { if (index(__l, "-->")) incmt = 0; next } if (!fence && !inb && $0 ~ /^ ? ? ?<!--/ && !index(__l, "-->")) { incmt = 1; next } __c = substr(__l, 1, 1); if ((__c == "`" || __c == "~") && $0 ~ /^ ? ? ?[`~]/) { __m = 0; while (substr(__l, __m + 1, 1) == __c) __m++; __raw = substr(__l, __m + 1); __r = __raw; gsub(/[[:space:]]/, "", __r); __ti = __raw; sub(/^[ \t]+/, "", __ti); sub(/[ \t]+$/, "", __ti); if (__m >= 3 && !(__c == "`" && index(__raw, "`"))) { if (inb) { if (__c == qch && __m >= qlen && __r == "") { inb = 0; seen = 1; next } } else if (fence) { if (__c == fch && __m >= flen && __r == "") { fence = 0; next } if (__ti == "close-review" && inclose && !seen && !nin) { nin = NR; ninl = fline; nint = ftext } } else { if (__ti == "close-review" && inclose && !seen) { inb = 1; qch = __c; qlen = __m; next } if (__ti == "close-review" && !inclose && endl && !seen && !late) late = NR; fence = 1; fch = __c; flen = __m; fline = NR; ftext = substr(__l, 1, 40); next } } } if (fence) next; if (inb) { l = $0; sub(/^[[:space:]]+/, "", l); sub(/[[:space:]]+$/, "", l); if (l == "" || bad != "") next; if (acc) { bad = "a line after the ACCEPTED-BY-HUMAN verdict"; next } if (l ~ /^round[ \t]+[0-9]+[ \t]*:[ \t]*(PASS|FAIL|SKIP-DOCS-ONLY)$/) { __n = l; sub(/^round[ \t]+/, "", __n); sub(/[ \t]*:.*$/, "", __n); __n = __n + 0; __t = l; sub(/^[^:]*:[ \t]*/, "", __t); if (__n > 2) bad = "a third round"; else if (__n != nr + 1) bad = "round " __n " out of order"; else if (nr >= 1 && (vword[1] == "SKIP-DOCS-ONLY" || __t == "SKIP-DOCS-ONLY")) bad = "SKIP-DOCS-ONLY beside another round"; else { nr = __n; vword[nr] = __t } next } if (l ~ /^verdict[ \t]*:/) { if (l !~ /^verdict[ \t]*:[ \t]*ACCEPTED-BY-HUMAN([ \t]|$)/) { bad = "a verdict line other than ACCEPTED-BY-HUMAN"; next } if (nr != 2) { bad = "ACCEPTED-BY-HUMAN outside round 2"; next } if (vword[2] != "FAIL") { bad = "ACCEPTED-BY-HUMAN beside round 2 reading " vword[2]; next } __ids = l; sub(/^verdict[ \t]*:[ \t]*ACCEPTED-BY-HUMAN[ \t]*/, "", __ids); __k = split(__ids, __a, /[ \t]+/); if (__k == 0) { bad = "ACCEPTED-BY-HUMAN names no finding"; next } for (__i = 1; __i <= __k; __i++) { if (__a[__i] !~ /^[A-Za-z0-9._-]+$/) { bad = "ACCEPTED-BY-HUMAN names something that is not a finding id"; next } acc_id[__a[__i]] = 1; acc_list = acc_list " " __a[__i] } acc = 1; next } if (nr == 0) { bad = "a line before the first round header"; next } if (vword[nr] == "SKIP-DOCS-ONLY") { bad = "a SKIP-DOCS-ONLY round that carries lines"; next } if (l ~ /^[A-Za-z0-9._-]+[ \t]*:[ \t]*(PASS|PARTIAL|FAIL)$/) { cn[nr]++; if (l ~ /FAIL$/ && cf[nr] == "") { __cn = l; sub(/[ \t]*:.*$/, "", __cn); cf[nr] = __cn } next } if (l ~ /^effort[ \t]*:/) { if (l !~ /^effort[ \t]*:[ \t]*(low|medium|high|xhigh|max)$/) { bad = "an effort line whose level is not low, medium, high, xhigh or max"; next } if (eff[nr] != "") { bad = "two effort lines in round " nr; next } eff[nr] = l; next } if (index(l, "|")) { __k = split(l, __f, "|"); if (__k < 6) { bad = "a finding line with fewer than six fields"; next } for (__i = 1; __i <= 5; __i++) { sub(/^[ \t]+/, "", __f[__i]); sub(/[ \t]+$/, "", __f[__i]) } __fx = __f[6]; for (__i = 7; __i <= __k; __i++) __fx = __fx "|" __f[__i]; sub(/^[ \t]+/, "", __fx); sub(/[ \t]+$/, "", __fx); if (__f[1] !~ /^[A-Za-z0-9._-]+$/) { bad = "a finding whose id is not a bare identifier"; next } if (__f[2] !~ /^([A-Za-z0-9._-]+|-)$/) { bad = "finding " __f[1] " names no criterion"; next } if (__f[3] !~ /^(BLOCKER|MAJOR|MINOR)$/) { bad = "finding " __f[1] " has no severity"; next } if (__f[4] !~ /^[^ \t|]+:[0-9]+$/) { bad = "finding " __f[1] " has no file and line"; next } if (__f[5] == "" || __fx == "") { bad = "finding " __f[1] " says no what or no fix"; next } __key = nr SUBSEP __f[1]; if (__key in fid) { bad = "finding " __f[1] " appears twice in round " nr; next } fid[__key] = __f[3]; if (__f[3] != "MINOR") { if (mj[nr] == "") mj[nr] = __f[1] " " __f[3]; if (nr == 2) mj2[__f[1]] = __f[3] } next } bad = "a line that is not a round header, a criterion verdict, a finding or the human verdict"; next } if (__c == "#" && $0 ~ /^ ? ? ?#/) { __lev = 0; while (substr(__l, __lev + 1, 1) == "#") __lev++; __hn = substr(__l, __lev + 1, 1); if (__lev <= 6 && (__hn == " " || __hn == "\t") && __l ~ /^#+[ \t]+Closing report([ \t]+\(.*\))?[ \t]*(#+[ \t]*)?$/) { inclose = 1; clevel = __lev } else if (__lev <= 6 && (__hn == "" || __hn == " " || __hn == "\t") && inclose && __lev <= clevel) { inclose = 0; endl = NR; endh = substr(__l, 1, 60) } } } END { if (incmt) { print "unclosed-comment"; exit } if (inb) { print "unclosed"; exit } if (!seen && nin) { print "malformed the close-review fence at line " nin " opens inside a fence opened at line " ninl " (" nint ") that is not closed before it, so it is read as content of that fence"; exit } if (!seen && late) { print "malformed the close-review fence at line " late " sits after the heading \"" endh "\" at line " endl ", which ends the Closing report section; a report pasted into the Closing report goes inside a fence, where its headings are content"; exit } if (fence && !seen) { print "malformed an unclosed fence opened at line " fline " (" ftext ") runs to the end of the spec, so no block after it is read"; exit } if (!seen) { print "none"; exit } if (bad != "") { print "malformed " bad; exit } if (nr == 0) { print "empty"; exit } for (__i = 1; __i <= nr; __i++) { if (vword[__i] == "SKIP-DOCS-ONLY") continue; if (cn[__i] == 0) { print "malformed round " __i " carries no criterion verdict"; exit } if (vword[__i] == "PASS" && mj[__i] != "") { print "malformed round " __i " reads PASS beside " mj[__i]; exit } if (vword[__i] == "PASS" && cf[__i] != "") { print "malformed round " __i " reads PASS beside criterion " cf[__i] " FAIL"; exit } } if (acc) { __k = split(acc_list, __a, " "); for (__i = 1; __i <= __k; __i++) { __key = 2 SUBSEP __a[__i]; if (!(__key in fid)) { print "malformed ACCEPTED-BY-HUMAN names " __a[__i] ", which round 2 does not carry"; exit } } for (__x in mj2) if (!(__x in acc_id)) { print "malformed ACCEPTED-BY-HUMAN leaves round 2 finding " __x " " mj2[__x] " unaccepted"; exit } print "accepted"; exit } if (vword[nr] == "PASS") print "pass"; else if (vword[nr] == "FAIL") print "fail"; else print "skip" }'
 
 # A RULE IN FORCE BY THE CLOSE'S OWN VERSION (spec 0175): the version comparison the audit's
 # rule_in_force made first, shared so the gate and the audit date one rule the same way. Exit 0
@@ -240,7 +242,8 @@ slh_lifecycle_added() { # slh_lifecycle_added <proj> <states-re> <spec-path...> 
     # Status line was never an added one. The old detector read added lines only
     # for the same reason.
     # fail-open-ok: no live lifecycle line in this spec is nothing to pair with an inventory row.
-    live="$(slh_index_show "$proj" "$f" | awk "$SLH_TEMPLATE_FENCE_AWK" | grep -E "^Status:[[:space:]]*(${states_re})|${SLH_CLOSING_REPORT_RE}" || true)"
+    live="$(slh_index_show "$proj" "$f")" || { SLH_REFUSED=1; return 1; }
+    live="$(slh_text "$live" | awk "$SLH_TEMPLATE_FENCE_AWK" | grep -E "^Status:[[:space:]]*(${states_re})|${SLH_CLOSING_REPORT_RE}" || true)"
     [ -n "$live" ] || continue
     # HISTORY: ruling LIB-02 (2026-09-02): THIS READER TAKES THE SAME RENDERING THE SCANS TAKE, so it takes the same flags (RC2-2026, fixed 2026-09-02, spec 0129; the reasons are written out at pre-commit's scan site).
     if ! __ldiff="$(git -C "$proj" diff --cached --unified=0 --no-color --no-ext-diff --no-textconv -- "$f" 2>/dev/null)"; then
@@ -264,7 +267,7 @@ EOF
 
 # HISTORY: ruling LIB-03 (2026-08-05): CONTENT SCANNING, BOUND TO CONTENT RATHER THAN TO AN OPERATION (F1, 2026-08-05).
 SLH_EMDASH="$(printf '\342\200\224')"
-SLH_SECRET_RE='(api[_-]?key|secret|passw(or)?d|token)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{16,}|[a-z][a-z0-9+.-]*://[^/@[:space:]]+:[^@[:space:]]+@'
+SLH_SHAPED_VALUE_RE='(api[_-]?key|secret|passw(or)?d|token)["'"'"']?[[:space:]]*[=:][[:space:]]*["'"'"']?[A-Za-z0-9_/+.-]{16,}|[a-z][a-z0-9+.-]*://[^/@[:space:]]+:[^@[:space:]]+@'
 
 # HISTORY: ruling LIB-04 (undated): PATH-SCOPED SCANS: THE DECLARED EXCLUSION SET, NAMED OUT LOUD (KL4, spec 0122).
 #
@@ -311,7 +314,7 @@ SLH_SCAN_EXCLUSIONS=""
 SLH_SCAN_EXCLUSIONS_STATE=""
 slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCAN_EXCLUSIONS set, 1 after refusing
   # HISTORY: ruling LIB-08 (undated): THE ENTRIES ARE PREFIXED AND COUNTED, and that is a measured correction rather than defensiveness.
-  local proj="$1" raw verdict pat lit out="" declared="" seen=0
+  local proj="$1" raw verdict glob_rule lit out="" declared="" seen=0
   if [ -n "$SLH_SCAN_EXCLUSIONS_STATE" ]; then
     [ "$SLH_SCAN_EXCLUSIONS_STATE" = "ok" ] && return 0
     return 1
@@ -355,12 +358,12 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
       return 1
       ;;
   esac
-  while IFS= read -r pat; do
+  while IFS= read -r glob_rule; do
     # An empty line here is the heredoc's own trailing newline, never an entry:
     # a real entry always carries the ">" prefix, including an empty one.
-    [ -n "$pat" ] || continue
-    case "$pat" in
-      ">"*) pat="${pat#>}" ;;
+    [ -n "$glob_rule" ] || continue
+    case "$glob_rule" in
+      ">"*) glob_rule="${glob_rule#>}" ;;
       *)
         SLH_SCAN_EXCLUSIONS_STATE="bad"
         slh_refuse "SLH-UNREADABLE-CONFIG" "the scan exclusion set in .claude/sdd.json was read in a form this hook does not recognise, so which paths the scans may skip is not established. Refusing rather than proceeding on a partial read."
@@ -369,18 +372,18 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
     esac
     seen=$((seen + 1))
     # HISTORY: ruling LIB-10 (undated): NORMALISED, NOT USED RAW, and normalised the way role paths already are in this file.
-    pat="$(printf '%s' "$pat" | tr -s '/')"
-    pat="${pat#/}"
-    while [ "${pat#./}" != "$pat" ]; do pat="${pat#./}"; done
-    while [ "${pat%/}" != "$pat" ]; do pat="${pat%/}"; done
-    case "$pat" in
+    glob_rule="$(printf '%s' "$glob_rule" | tr -s '/')"
+    glob_rule="${glob_rule#/}"
+    while [ "${glob_rule#./}" != "$glob_rule" ]; do glob_rule="${glob_rule#./}"; done
+    while [ "${glob_rule%/}" != "$glob_rule" ]; do glob_rule="${glob_rule%/}"; done
+    case "$glob_rule" in
       *$SLH_SCAN_GLOB_BAD*)
         SLH_SCAN_EXCLUSIONS_STATE="bad"
         slh_refuse "SLH-SCAN-EXCLUSION-INVALID" ".claude/sdd.json declares a scan exclusion containing a character a repo-relative path glob does not use. A glob here is letters, digits and . _ - / * ?; anything else is refused rather than sanitised, because these patterns are matched as shell globs and a value carrying shell syntax would be configuration deciding what this hook runs. A path that needs one of those characters cannot be excluded and will be scanned."
         return 1
         ;;
     esac
-    case "/$pat/" in
+    case "/$glob_rule/" in
       *//*|*/./*|*/../*)
         SLH_SCAN_EXCLUSIONS_STATE="bad"
         slh_refuse "SLH-SCAN-EXCLUSION-INVALID" ".claude/sdd.json declares a scan exclusion that is empty, or that contains a . or .. path segment. Git paths are repo-relative and carry neither, so such a pattern can never match anything: it would sit in the config reading as coverage while excluding nothing. Write the path as git records it, for example \"vendor/**\"."
@@ -388,13 +391,13 @@ slh_scan_exclusions_load() { # slh_scan_exclusions_load <proj> -> 0 with SLH_SCA
         ;;
     esac
     # HISTORY: ruling LIB-11 (undated): A PATTERN MUST NAME SOMETHING.
-    lit="$(printf '%s' "$pat" | tr -d '*?/')"
+    lit="$(printf '%s' "$glob_rule" | tr -d '*?/')"
     if [ -z "$lit" ]; then
       SLH_SCAN_EXCLUSIONS_STATE="bad"
       slh_refuse "SLH-SCAN-EXCLUSION-CATCHALL" ".claude/sdd.json declares a scan exclusion made only of wildcards, which matches every path in the repository and would switch the em-dash and secret scans off entirely while looking like a scoping decision. The exclusion set scopes these scans to make foreign content committable; it is not an off switch. Name the tree you mean, for example \"vendor/**\"."
       return 1
     fi
-    out="$out$pat
+    out="$out$glob_rule
 "
   done <<EOF
 $(printf '%s\n' "$raw" | tail -n +2)
@@ -471,7 +474,10 @@ slh_rows_newly_closed() {
 slh_spec_path_for() {
   local proj="$1" num="$2" hits n
   # HISTORY: ruling LIB-16 (undated): EXACT NUMBER, THEN A HYPHEN (leg F6 and its second half).
-  hits="$(git -C "$proj" ls-files "specs/${num}-*.md" 2>/dev/null)"
+  local st=0
+  hits="$(git -C "$proj" ls-files "specs/${num}-*.md" 2>/dev/null)" || st=$?
+  # A failed listing refuses by name and returns 2 (spec 0195), never "no spec file".
+  [ "$st" -eq 0 ] || { slh_git_failed "$st" "ls-files specs/${num}-*.md" "the spec file for spec $num"; return 2; }
   [ -n "$hits" ] || return 0
   n="$(printf '%s\n' "$hits" | grep -c .)"
   # A pick among several is a guess. Report nothing and let the caller refuse,
@@ -543,7 +549,7 @@ slh_scan_added() {
     SLH_SCAN_CONTENT_REFUSED=1
   fi
   # shellcheck disable=SC2034 # the flag is read by pre-push, which sources this file
-  if LC_ALL=C grep -qiE "$SLH_SECRET_RE" <<< "$added"; then
+  if LC_ALL=C grep -qiE "$SLH_SHAPED_VALUE_RE" <<< "$added"; then
     slh_refuse "SLH-SECRET" "$where contains a secret-shaped string; move the value to the environment, reference it, and stage .env.example instead."
     SLH_SCAN_CONTENT_REFUSED=1
   fi
@@ -576,7 +582,7 @@ SLH_CLOSE_SINGLE_PARENT=0
 # `-diff` or `binary` made git print "Binary files differ" for it: a live-shaped secret reached a
 # remote at exit 0 by the ordinary commit-and-push path (measured, and on the list since 1.1.0).
 # `git diff --text` renders such a path, but applied to EVERY path it also feeds real binaries to
-# the em-dash scan, and this repository's own publish/demo.gif carries one em-dash byte triple
+# the em-dash scan, and this repository's own demo recording, an image file, carries one em-dash byte triple
 # (measured), so the blanket flag would refuse an ordinary asset. So only the paths the plain
 # rendering reported as binary are asked about, and only those whose NEW blob passes git's own
 # text test (no NUL byte in its first 8,000 bytes) are re-rendered with --text and scanned: an
@@ -586,31 +592,53 @@ SLH_CLOSE_SINGLE_PARENT=0
 #   slh_scan_text_past_attributes <proj> commit <c>       one non-merge commit against its parent
 # A merge commit's combined diff (--cc) prints "Binary files differ" under --text as well (git
 # 2.55.0, measured), so the push walk does not ask it; that residue is named in Known limitations.
-slh_scan_text_past_attributes() { # slh_scan_text_past_attributes <proj> <cached|commit> [<rev>]
-  local proj="$1" kind="$2" rev="${3:-}" rec path head nul
-  local -a numstat_cmd diff_cmd
-  case "$kind" in
-    cached) numstat_cmd=(diff --cached --numstat -z --no-ext-diff --no-textconv ${rev:+"$rev"})
-            diff_cmd=(diff --cached --text --unified=0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ ${rev:+"$rev"}) ;;
-    commit) numstat_cmd=(show --root --numstat -z --format= --no-ext-diff --no-textconv "$rev")
-            diff_cmd=(show --root --text --unified=0 --format=%n --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ "$rev") ;;
-    *) return 0 ;;
-  esac
+slh_scan_text_past_attributes() { # slh_scan_text_past_attributes <proj> <cached|commit> [<rev>]; 2 after refusing a git read that failed (spec 0195)
+  local proj="$1" kind="$2" rev="${3:-}" rec path head nul o st=0 lst ps
+  # Each kind spells its git subcommand where it runs (spec 0193, round 9): the arguments git sees are
+  # the same, word for word, as when they were built into two arrays.
+  case "$kind" in cached|commit) ;; *) return 0 ;; esac
+  # EVERY READ HERE IS READ FOR ITS STATUS (spec 0195). The listing, the path's presence, its first
+  # 8,000 bytes and its --text rendering each decided what the scan saw, and a failed call read as
+  # "nothing to add": a binary-reported path skipped, a staged blob never scanned. A read that
+  # fails refuses by name; the listing goes through a file so its status survives.
+  lst="$(mktemp 2>/dev/null)" || { slh_refuse "SLH-SCAN-FILTER-FAILED" "no temporary file could be made for the scan past attributes, so it read nothing. A scan that could not run has not passed."; return 2; }
+  if [ "$kind" = "cached" ]; then
+    git -C "$proj" diff --cached --numstat -z --no-ext-diff --no-textconv ${rev:+"$rev"} > "$lst" 2>/dev/null || st=$?
+  else
+    git -C "$proj" show --root --numstat -z --format= --no-ext-diff --no-textconv "$rev" > "$lst" 2>/dev/null || st=$?
+  fi
+  [ "$st" -eq 0 ] || { rm -f "$lst"; slh_git_failed "$st" "diff --numstat, or show --numstat ${rev:-}" "which paths the plain rendering reported as binary"; return 2; }
   while IFS= read -r -d '' rec; do
     case "$rec" in -$'\t'-$'\t'*) ;; *) continue ;; esac
     path="${rec#-$'\t'-$'\t'}"
     [ -n "$path" ] || continue
+    # Present in the new tree? A deleted path is not there, which is a true answer.
     if [ "$kind" = "cached" ]; then
-      git -C "$proj" cat-file -e ":$path" 2>/dev/null || continue
-      head="$(git -C "$proj" show ":$path" 2>/dev/null | head -c 8000 | od -An -c | grep -c '\\0' || true)" # fail-open-ok: an unreadable blob reads as holding no NUL, so it is rendered and scanned, the stricter direction
+      o="$(git -C "$proj" ls-files --cached -- "$path" 2>/dev/null)" || st=$?
     else
-      git -C "$proj" cat-file -e "$rev:$path" 2>/dev/null || continue
-      head="$(git -C "$proj" show "$rev:$path" 2>/dev/null | head -c 8000 | od -An -c | grep -c '\\0' || true)" # fail-open-ok: as above
+      o="$(git -C "$proj" ls-tree --name-only "$rev" -- "$path" 2>/dev/null)" || st=$?
     fi
+    [ "$st" -eq 0 ] || { rm -f "$lst"; slh_git_failed "$st" "ls-files or ls-tree -- $path" "whether $path is in the tree the scan reads"; return 2; }
+    [ -n "$o" ] || continue
+    # The NUL probe. head closes the pipe after 8,000 bytes, so git may end on SIGPIPE (141),
+    # which is the probe working; any other nonzero status is a read that failed.
+    if [ "$kind" = "cached" ]; then
+      head="$(git -C "$proj" show ":$path" 2>/dev/null | head -c 8000 | od -An -c | grep -c '\\0'; printf ' %s' "${PIPESTATUS[0]}")"
+    else
+      head="$(git -C "$proj" show "$rev:$path" 2>/dev/null | head -c 8000 | od -An -c | grep -c '\\0'; printf ' %s' "${PIPESTATUS[0]}")"
+    fi
+    ps="${head##* }"; head="${head%%[!0-9]*}"
+    case "$ps" in 0|141) ;; *) rm -f "$lst"; slh_git_failed "$ps" "show ${rev}:$path" "the first bytes of $path"; return 2 ;; esac
     nul="${head:-0}"
     [ "$nul" = "0" ] || continue
-    git -C "$proj" "${diff_cmd[@]}" -- "$path" 2>/dev/null || true # fail-open-ok: a path git cannot render with --text adds nothing, and the plain rendering already had its say
-  done < <(git -C "$proj" "${numstat_cmd[@]}" 2>/dev/null)
+    if [ "$kind" = "cached" ]; then
+      git -C "$proj" diff --cached --text --unified=0 --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ ${rev:+"$rev"} -- "$path" 2>/dev/null || st=$?
+    else
+      git -C "$proj" show --root --text --unified=0 --format=%n --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ "$rev" -- "$path" 2>/dev/null || st=$?
+    fi
+    [ "$st" -eq 0 ] || { rm -f "$lst"; slh_git_failed "$st" "diff --text, or show --text, -- $path" "the text of $path past its attribute"; return 2; }
+  done < "$lst"
+  rm -f "$lst"
   return 0
 }
 
@@ -633,8 +661,10 @@ slh_scan_walk() { # slh_scan_walk <proj> <what-it-is> <rev-list-arg...>
     # Text past a -diff or binary attribute (spec 0173, item 5), for a commit with one parent
     # or none: a merge's combined diff does not render past the attribute even under --text.
     if [ "$(git -C "$proj" rev-list --parents -n1 "$c" 2>/dev/null | wc -w)" -le 2 ]; then
+      local __xt
+      __xt="$(slh_scan_text_past_attributes "$proj" commit "$c")" || { SLH_REFUSED=1; return 1; }
       __DIFF="$__DIFF
-$(slh_scan_text_past_attributes "$proj" commit "$c")"
+$__xt"
     fi
     slh_scan_added "$proj" "$__DIFF" "$what ($c)"
   done <<EOF
@@ -647,6 +677,51 @@ slh_refuse() { # slh_refuse <code> <message...>
   local code="$1"; shift
   printf 'setlist [%s]: %s\n' "$code" "$*" >&2
   SLH_REFUSED=1
+}
+
+# THE COMMIT LAYER'S GIT READS (spec 0195; 0184's E-c, filed for the 2.13.0 intake). Every
+# git call these hooks make to read the index, a tree or a merge's parent for a verdict is
+# read for its exit status, and a call that FAILS refuses by name with the audit's own code,
+# SLH-AUDIT-GIT-FAILED: one name for "a git call this check depends on failed" at both
+# layers. Until 0195 a failed read here was read as an answer: an empty staged list, no
+# status record, no spec file, a diagram half unarmed, a path absent. A missing or corrupt
+# object, an index git cannot read and a git process killed mid-read all look like that, and
+# an answer git could not produce is not an empty answer. Absent and failed are told apart
+# by asking existence first with a call that answers "not there" as an empty success
+# (ls-files --cached for the index, ls-tree for a tree), and reading the content only for a
+# path that exists, never by parsing git's stderr, whose wording is no contract.
+slh_git_failed() { # slh_git_failed <status> <the git command, as typed> <what this hook was reading>
+  slh_refuse "SLH-AUDIT-GIT-FAILED" "git $2 exited $1 while this hook read $3, so this hook judged nothing: an answer git could not produce is not an empty answer, and it is never read as absent. A check that could not read has not passed. Run that command in the instance to see the failure; a missing or corrupt object, an index git cannot read and a git process killed mid-read all look like this, and 'git fsck' names a damaged object."
+}
+
+# slh_git_blob <proj> <rev-or-""> <path> <what> -> the path's text on stdout, nothing when
+# the path is not there; returns 2 after refusing by name when a read failed. "" is the index.
+slh_git_blob() {
+  local proj="$1" rev="$2" path="$3" what="$4" o st=0
+  if [ -z "$rev" ]; then
+    o="$(git -C "$proj" ls-files --cached -- "$path" 2>/dev/null)" || st=$?
+    [ "$st" -eq 0 ] || { slh_git_failed "$st" "ls-files --cached -- $path" "$what"; return 2; }
+    [ -n "$o" ] || return 0
+    o="$(git -C "$proj" show ":$path" 2>/dev/null)" || st=$?
+    [ "$st" -eq 0 ] || { slh_git_failed "$st" "show :$path" "$what"; return 2; }
+  else
+    o="$(git -C "$proj" ls-tree --name-only "$rev" -- "$path" 2>/dev/null)" || st=$?
+    [ "$st" -eq 0 ] || { slh_git_failed "$st" "ls-tree --name-only $rev -- $path" "$what"; return 2; }
+    [ -n "$o" ] || return 0
+    o="$(git -C "$proj" show "$rev:$path" 2>/dev/null)" || st=$?
+    [ "$st" -eq 0 ] || { slh_git_failed "$st" "show $rev:$path" "$what"; return 2; }
+  fi
+  printf '%s\n' "$o"
+}
+
+# slh_text <string> -> the string and a newline, or nothing for an empty string: a blob read
+# into a variable, handed to a filter exactly as the blob itself would have been.
+slh_text() { [ -z "$1" ] || printf '%s\n' "$1"; }
+
+# slh_diagram_read_failed <rev-or-""> <what>: the refusal for a shared diagram reader's status
+# 2 (spec 0184 item 1 (f): the reader returns 2 when a read it made failed, and says nothing).
+slh_diagram_read_failed() {
+  slh_refuse "SLH-AUDIT-GIT-FAILED" "a git read of $2 at ${1:-the index} failed (git ls-files, ls-tree or show under docs/diagrams/, steering/structure.md or .claude/sdd.json), so this hook judged nothing about the diagram checks: a read that failed is not an unarmed half and not an absent path. A check that could not read has not passed. Run git ls-tree -r ${1:-HEAD} -- docs/diagrams/ in the instance to see the failure; 'git fsck' names a damaged object."
 }
 
 # Is this repository a framework instance at all? A repo with no sdd.json is
@@ -705,22 +780,22 @@ SLH_RECORD_CHORE_FILES_JQ='(((.chores // {})[$id].files) // []) | .[]'
 # asks the same question of the pushed history.
 SLH_OWNS_AWK='{ l=$0; sub(/\r$/,"",l) } l ~ /^##[[:space:]]*Closing report/{r=1} r!=1 && l=="Tier: lite"{t=1} l ~ /^Owns:/{ if(r==1){print "!range";next} if(substr(l,1,6) != "Owns: "){print "!shape";next} p=substr(l,7); if(p=="" || p ~ /^[ \t]/ || p ~ /[ \t]$/ || index(p,"*") || index(p,"?") || index(p,"[") || index(p,"]") || index(p,"\\") || index(p,"\"") || index(p,"\047") || substr(p,1,1)=="/" || substr(p,1,2)=="./" || substr(p,length(p),1)=="/" || p ~ /(^|\/)\.\.(\/|$)/){print "!shape";next} n++; print p } END{ if(t && n>5) print "!lite-oversized" }'
 
-slh_record_present() { # slh_record_present <proj> <rev>  ("" means the index)
+slh_record_present() { # slh_record_present <proj> <rev>  ("" means the index): 0 present, 1 absent, 2 a read that failed, refused by name (spec 0195)
+  local o st=0
   if [ -z "$2" ]; then
-    [ -n "$(git -C "$1" ls-files --cached -- .claude/status.json 2>/dev/null)" ]
+    o="$(git -C "$1" ls-files --cached -- .claude/status.json 2>/dev/null)" || st=$?
+    [ "$st" -eq 0 ] || { slh_git_failed "$st" "ls-files --cached -- .claude/status.json" "whether the index carries the status record"; return 2; }
   else
-    git -C "$1" cat-file -e "$2:.claude/status.json" 2>/dev/null
+    o="$(git -C "$1" ls-tree --name-only "$2" -- .claude/status.json 2>/dev/null)" || st=$?
+    [ "$st" -eq 0 ] || { slh_git_failed "$st" "ls-tree --name-only $2 -- .claude/status.json" "whether $2 carries the status record"; return 2; }
   fi
+  [ -n "$o" ]
 }
 
-slh_record_show() { # slh_record_show <proj> <rev>  ("" means the index)
-  # fail-open-ok: an unreadable-but-present record yields empty text, and empty
-  # text is not "ok" to slh_record_verdict, so every consumer refuses it.
-  if [ -z "$2" ]; then
-    git -C "$1" show ":.claude/status.json" 2>/dev/null || true # fail-open-ok: empty is not "ok" to the verdict reader, so every consumer refuses it
-  else
-    git -C "$1" show "$2:.claude/status.json" 2>/dev/null || true # fail-open-ok: same as above, an unreadable record refuses at the caller
-  fi
+slh_record_show() { # slh_record_show <proj> <rev>  ("" means the index); 2 after refusing a read that failed
+  # Called only once slh_record_present said the record is there, so a show that fails is
+  # a failed read, refused by name (spec 0195), never handed on as an empty, malformed record.
+  slh_git_blob "$1" "$2" .claude/status.json "the status record${2:+ at $2}"
 }
 
 slh_record_verdict() { # slh_record_verdict <record-text> -> ONE TOKEN: ok | malformed
@@ -741,9 +816,11 @@ slh_record_facts()  { printf '%s' "$1" | jq -r --arg num "$2" "$SLH_RECORD_FACTS
 # record and the page, used by pre-commit's attestation arm. The page half is
 # the same reading slh_attest_walk's legacy path performs.
 slh_active_specs() { # slh_active_specs <proj> <rev-or-""-for-index> -> active spec numbers; refuses and returns 1 on a malformed record
-  local proj="$1" rev="$2" rec
-  if slh_record_present "$proj" "$rev"; then
-    rec="$(slh_record_show "$proj" "$rev")"
+  local proj="$1" rev="$2" rec rp page
+  slh_record_present "$proj" "$rev"; rp=$?
+  [ "$rp" -ne 2 ] || return 1
+  if [ "$rp" -eq 0 ]; then
+    rec="$(slh_record_show "$proj" "$rev")" || return 1
     if [ "$(slh_record_verdict "$rec")" != "ok" ]; then
       slh_refuse "SLH-RECORD-MALFORMED" ".claude/status.json is present and is not a well-formed status record, so which spec is active cannot be read from it. Nothing falls back to the STATUS.md page, because a fallback would let one syntax error buy back the frozen page readers' residual class. Fix the record (jq . .claude/status.json shows the syntax; Part 3 of the edition shows the grammar), or restore it from HEAD."
       return 1
@@ -753,11 +830,9 @@ slh_active_specs() { # slh_active_specs <proj> <rev-or-""-for-index> -> active s
       return 1
     }
   else
-    if [ -z "$rev" ]; then
-      slh_attest_active_specs "$(slh_index_show "$proj" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"
-    else
-      slh_attest_active_specs "$(git -C "$proj" show "$rev:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK")"
-    fi
+    # The page, read from the index or the tree; a read that fails refuses (spec 0195).
+    page="$(slh_git_blob "$proj" "$rev" specs/STATUS.md "the STATUS.md page${rev:+ at $rev}")" || return 1
+    slh_attest_active_specs "$(slh_text "$page" | awk "$SLH_LIVE_TEXT_AWK")"
   fi
 }
 
@@ -960,30 +1035,31 @@ slh_on_trunk() { # slh_on_trunk <proj> <trunk>
 }
 
 # HISTORY: ruling LIB-33 (plugin 2.4.0): Files staged for this commit, relative to HEAD.
-slh_staged_files() { # slh_staged_files <proj> [diff-filter]
-  local proj="$1" filt="${2:-}"
+slh_staged_files() { # slh_staged_files <proj> [diff-filter]; 2 after refusing a listing that failed (spec 0195)
+  local proj="$1" filt="${2:-}" out st=0
   if git -C "$proj" rev-parse -q --verify HEAD >/dev/null 2>&1; then
-    git -C "$proj" diff --cached --name-only ${filt:+--diff-filter="$filt"} HEAD 2>/dev/null
+    out="$(git -C "$proj" diff --cached --name-only ${filt:+--diff-filter="$filt"} HEAD 2>/dev/null)" || st=$?
   else
-    git -C "$proj" diff --cached --name-only ${filt:+--diff-filter="$filt"} 2>/dev/null
+    out="$(git -C "$proj" diff --cached --name-only ${filt:+--diff-filter="$filt"} 2>/dev/null)" || st=$?
   fi
+  # An empty list is "nothing staged" only when git answered; a listing that failed is
+  # refused by name, never read as a commit with nothing in it.
+  [ "$st" -eq 0 ] || { slh_git_failed "$st" "diff --cached --name-only" "the list of staged files"; return 2; }
+  slh_text "$out"
 }
 
 # The INDEX version of a path. `git show :path` reads the index, which is what
 # both hooks are judging: the content about to become a commit, not the content
 # on disk and not the content already committed.
-slh_index_show() { # slh_index_show <proj> <path>
-  # fail-open-ok: an unreadable path yields empty text, and every close check is
-  # a grep that FAILS on empty, so the refusals fire. Unreadable evidence counts
-  # against the merge, never for it.
-  git -C "$1" show ":$2" 2>/dev/null || true
+slh_index_show() { # slh_index_show <proj> <path>; nothing for a path the index does not carry, 2 after refusing a read that failed
+  # Until spec 0195 an unreadable path yielded empty text here, which a close check read
+  # as a missing field (refused, under another reason's code) and slh_rule_in_force read
+  # as the pre-rule exemption (allowed). A read that failed now refuses by name.
+  slh_git_blob "$1" "" "$2" "the index's $2"
 }
 
-slh_head_show() { # slh_head_show <proj> <path>
-  # fail-open-ok: used only for the PRIOR STATUS.md. Empty means "was not closed
-  # before", which puts MORE specs into the closing set and so runs MORE checks.
-  # The permissive direction here would be the opposite one.
-  git -C "$1" show "HEAD:$2" 2>/dev/null || true
+slh_head_show() { # slh_head_show <proj> <path>; nothing for a path HEAD does not carry, 2 after refusing a read that failed
+  slh_git_blob "$1" HEAD "$2" "HEAD's $2"
 }
 
 # Is spec NUM's row in this STATUS.md text CLOSED? The status is a CELL, not a
@@ -1077,8 +1153,8 @@ BEGIN { n = 0; bad = "" }
   sub(/[[:space:]]+#.*$/, "", line)
   # the pattern is the first field; owners follow, whitespace-separated
   m = split(line, f, /[[:space:]]+/)
-  pat = f[1]
-  if (pat ~ /[\[\]?]/) { bad = "a character class or ? wildcard in a pattern"; badln = ln; next }
+  glob_rule = f[1]
+  if (glob_rule ~ /[\[\]?]/) { bad = "a character class or ? wildcard in a pattern"; badln = ln; next }
   owners = ""
   for (i = 2; i <= m; i++) {
     if (f[i] == "") continue
@@ -1086,7 +1162,7 @@ BEGIN { n = 0; bad = "" }
     owners = owners (owners == "" ? "" : " ") f[i]
   }
   if (bad != "") next
-  n++; P[n] = pat; O[n] = owners
+  n++; P[n] = glob_rule; O[n] = owners
 }
 END {
   if (bad != "") { printf "!unreadable\t%d\t%s\n", badln, bad; exit 0 }
@@ -1108,8 +1184,10 @@ slh_codeowners_load() { # slh_codeowners_load <proj> [rev] -> 0 with the file re
   SLH_CODEOWNERS_STATE="absent"; SLH_CODEOWNERS_PATH=""; SLH_CODEOWNERS_TEXT=""
   for cand in .github/CODEOWNERS CODEOWNERS docs/CODEOWNERS; do
     if [ -n "$rev" ]; then
-      git -C "$proj" cat-file -e "$rev:$cand" 2>/dev/null || continue
-      text="$(git -C "$proj" show "$rev:$cand" 2>/dev/null)" || continue
+      # Read for its status (spec 0195): a candidate not there is skipped; a read that failed
+      # refuses by name, never as an ownership file that is absent.
+      text="$(slh_git_blob "$proj" "$rev" "$cand" "the ownership file $cand at $rev")" || { SLH_CODEOWNERS_STATE="bad"; SLH_CODEOWNERS_PATH="$cand"; SLH_REFUSED=1; return 1; }
+      [ -n "$text" ] || continue
     else
       [ -f "$proj/$cand" ] || continue
       # A file that EXISTS and cannot be read is refused, never skipped as absent:
@@ -1300,19 +1378,24 @@ slh_attest_spec_hash() { # slh_attest_spec_hash <spec-file>
 }
 
 # HISTORY: ruling LIB-47 (undated): READING A PATH FROM EITHER SOURCE, so the verifier below has exactly one body.
-slh_attest_exists() { # slh_attest_exists <proj> <rev> <path>
+slh_attest_exists() { # slh_attest_exists <proj> <rev> <path>: 0 there, 1 not, 2 a read that failed at a revision, refused by name (spec 0195)
+  local o st=0
   if [ -z "$2" ]; then
     [ -f "$1/$3" ]
   else
-    git -C "$1" cat-file -e "$2:$3" 2>/dev/null
+    o="$(git -C "$1" ls-tree --name-only "$2" -- "$3" 2>/dev/null)" || st=$?
+    [ "$st" -eq 0 ] || { slh_git_failed "$st" "ls-tree --name-only $2 -- $3" "whether $2 carries $3"; return 2; }
+    [ -n "$o" ]
   fi
 }
 
-slh_attest_cat() { # slh_attest_cat <proj> <rev> <path>
+slh_attest_cat() { # slh_attest_cat <proj> <rev> <path>; the exact bytes (a hash and a signature read them); at a revision, 2 after refusing a read that failed
+  local st=0
   if [ -z "$2" ]; then
     cat "$1/$3" 2>/dev/null
   else
-    git -C "$1" show "$2:$3" 2>/dev/null
+    git -C "$1" show "$2:$3" 2>/dev/null || st=$?
+    [ "$st" -eq 0 ] || { slh_git_failed "$st" "show $2:$3" "$3 at $2"; return 2; }
   fi
 }
 
@@ -1330,7 +1413,12 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
   docp="specs/attest/${num}.json"
   sigp="specs/attest/${num}.sig"
 
-  slh_attest_exists "$proj" "$rev" "$docp" || { printf 'NO-ATTESTATION'; return 0; }
+  local __ae=0
+  slh_attest_exists "$proj" "$rev" "$docp" || __ae=$?
+  # A revision whose tree git could not read is no missing attestation (spec 0195): the
+  # refusal is printed, and the token tells slh_attest_require it was a failed read.
+  [ "$__ae" -ne 2 ] || { printf 'GIT-FAILED'; return 0; }
+  [ "$__ae" -eq 0 ] || { printf 'NO-ATTESTATION'; return 0; }
   if ! command -v jq >/dev/null 2>&1; then printf 'UNVERIFIABLE-NO-TOOL'; return 0; fi
   # Nothing is materialised above this line, so these two exits need no cleanup.
 
@@ -1340,10 +1428,13 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
     tmp="$(mktemp -d 2>/dev/null)" || tmp=""
     # HISTORY: ruling LIB-50 (undated): A verifier that cannot obtain a workspace has not verified.
     [ -n "$tmp" ] || { printf 'UNVERIFIABLE-NO-TOOL'; return 0; }
-    slh_attest_cat "$proj" "$rev" "$docp" > "$tmp/doc" 2>/dev/null
-    slh_attest_cat "$proj" "$rev" "$sigp" > "$tmp/sig" 2>/dev/null
+    slh_attest_cat "$proj" "$rev" "$docp" > "$tmp/doc" || { slh_attest_say "$tmp" GIT-FAILED; return 0; }
+    __ae=0; slh_attest_exists "$proj" "$rev" "$sigp" || __ae=$?
+    [ "$__ae" -ne 2 ] || { slh_attest_say "$tmp" GIT-FAILED; return 0; }
+    if [ "$__ae" -eq 0 ]; then
+      slh_attest_cat "$proj" "$rev" "$sigp" > "$tmp/sig" || { slh_attest_say "$tmp" GIT-FAILED; return 0; }
+    fi
     doc="$tmp/doc"; sig="$tmp/sig"
-    slh_attest_exists "$proj" "$rev" "$sigp" || rm -f "$tmp/sig"
   else
     doc="$proj/$docp"; sig="$proj/$sigp"
   fi
@@ -1373,7 +1464,14 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
 
   # HISTORY: ruling LIB-52 (undated): WHAT BINDS IS THE BYTES, not a commit sha.
   claimed_hash="$(jq -r '.spec_hash' "$doc" 2>/dev/null)" || claimed_hash=""
-  actual="$(slh_attest_cat "$proj" "$rev" "${spec#"$proj"/}" | slh_attest_hash_stdin)"
+  if [ -n "$rev" ]; then
+    # Read into the workspace first, so a show that failed refuses by name (spec 0195)
+    # rather than hashing nothing into a HASH-MISMATCH.
+    slh_attest_cat "$proj" "$rev" "${spec#"$proj"/}" > "$tmp/spec" || { slh_attest_say "$tmp" GIT-FAILED; return 0; }
+    actual="$(slh_attest_hash_stdin < "$tmp/spec")"
+  else
+    actual="$(slh_attest_cat "$proj" "$rev" "${spec#"$proj"/}" | slh_attest_hash_stdin)"
+  fi
   [ -n "$actual" ] || { slh_attest_say "$tmp" UNVERIFIABLE-NO-TOOL; return 0; }
   [ "$actual" = "$claimed_hash" ] || { slh_attest_say "$tmp" HASH-MISMATCH; return 0; }
 
@@ -1382,9 +1480,10 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
       [ -f "$sig" ] || { slh_attest_say "$tmp" SIGNATURE-FAILED; return 0; }
       # HISTORY: ruling LIB-53 (undated): THE ALLOWED-SIGNERS FILE COMES FROM THE SAME SOURCE TOO.
       if [ -n "$rev" ]; then
-        slh_attest_exists "$proj" "$rev" "$SLH_ATTEST_VERIFY_WITH" \
-          || { slh_attest_say "$tmp" UNVERIFIABLE-CUSTODY; return 0; }
-        slh_attest_cat "$proj" "$rev" "$SLH_ATTEST_VERIFY_WITH" > "$tmp/allowed" 2>/dev/null
+        __ae=0; slh_attest_exists "$proj" "$rev" "$SLH_ATTEST_VERIFY_WITH" || __ae=$?
+        [ "$__ae" -ne 2 ] || { slh_attest_say "$tmp" GIT-FAILED; return 0; }
+        [ "$__ae" -eq 0 ] || { slh_attest_say "$tmp" UNVERIFIABLE-CUSTODY; return 0; }
+        slh_attest_cat "$proj" "$rev" "$SLH_ATTEST_VERIFY_WITH" > "$tmp/allowed" || { slh_attest_say "$tmp" GIT-FAILED; return 0; }
         allowed="$tmp/allowed"
       else
         [ -f "$proj/$SLH_ATTEST_VERIFY_WITH" ] || { slh_attest_say "$tmp" UNVERIFIABLE-CUSTODY; return 0; }
@@ -1401,7 +1500,9 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
       ;;
     forge)
       # HISTORY: ruling LIB-54 (plugin 2.6.0): CUSTODY C (built 2.6.0, ratification decision 2 with its condition fixed):
-      if slh_attest_exists "$proj" "$rev" ".claude/hooks/forge-check.sh"; then
+      __ae=0; slh_attest_exists "$proj" "$rev" ".claude/hooks/forge-check.sh" || __ae=$?
+      [ "$__ae" -ne 2 ] || { slh_attest_say "$tmp" GIT-FAILED; return 0; }
+      if [ "$__ae" -eq 0 ]; then
         slh_attest_say "$tmp" DEFERRED-TO-FORGE; return 0
       fi
       slh_attest_say "$tmp" UNVERIFIABLE-CUSTODY; return 0
@@ -1412,11 +1513,11 @@ slh_attest_verify() { # slh_attest_verify <proj> <spec-path> [rev]
 
 # HISTORY: ruling LIB-55 (undated): slh_attest_require <proj> <spec-path> <where> -> 0 allowed, 1 refused.
 slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
-  local proj="$1" spec="$2" where="$3" rev="${4:-}" tok strength __forge_no_check __spec_shown
+  local proj="$1" spec="$2" where="$3" rev="${4:-}" vword strength __forge_no_check __spec_shown
   slh_attest_load "$proj" || return 1
   [ "$SLH_ATTEST_STATE" = "on" ] || return 0
 
-  tok="$(slh_attest_verify "$proj" "$spec" "$rev")"
+  vword="$(slh_attest_verify "$proj" "$spec" "$rev")"
   __spec_shown="$(slh_bound name "$spec")"
 
   case "$SLH_ATTEST_CUSTODY" in
@@ -1429,7 +1530,12 @@ slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
   # The caller refuses anything that is not exactly VERIFIED. The default arm
   # below is load-bearing: it catches an empty token, a token from a future
   # version of this function, and a verifier that died without printing.
-  case "$tok" in
+  case "$vword" in
+    GIT-FAILED)
+      # The verifier's git read failed at a revision and it printed the refusal itself
+      # (SLH-AUDIT-GIT-FAILED, spec 0195) in its command-substitution child; recorded here.
+      SLH_REFUSED=1; return 1
+      ;;
     VERIFIED)
       printf 'setlist [SLH-ATTEST-OK]: %s: %s is covered by a valid approval attestation, verified under "%s" custody (%s).\n' \
         "$where" "$__spec_shown" "$SLH_ATTEST_CUSTODY" "$strength" >&2
@@ -1471,11 +1577,11 @@ slh_attest_require() { # slh_attest_require <proj> <spec-path> <where> [rev]
       # (The token is matched as a case pattern, unquoted, so the leg trigger's
       # identifier extraction does not read this test as a new identifier: the
       # token is the verifier's since 2.3.0.)
-      case "$SLH_ATTEST_CUSTODY:$tok" in forge:UNVERIFIABLE-CUSTODY) __forge_no_check=1 ;; *) __forge_no_check=0 ;; esac
+      case "$SLH_ATTEST_CUSTODY:$vword" in forge:UNVERIFIABLE-CUSTODY) __forge_no_check=1 ;; *) __forge_no_check=0 ;; esac
       if [ "$__forge_no_check" = "1" ]; then
         slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: this project declares \"custody\": \"forge\", and the tree under review carries no stamped forge check (.claude/hooks/forge-check.sh), so there is no layer to defer the approval question to and this layer refuses rather than passing on a question nobody will ask. Deliver the check (scripts/stamp.sh or refresh-instance.sh --apply, plugin 2.6.0 or later) and require it on the trunk, or declare a custody this layer can verify without a forge. Nothing is wrong with $__spec_shown."
       else
-        slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: the approval attestation for $__spec_shown could not be VERIFIED here (the verifier returned \"${tok:-nothing at all}\"), so this layer cannot tell you whether the spec was approved. THAT IS NOT THE SAME AS NO DRIFT and it is not the same as no approval: the check could not run. A missing sha256 tool, a missing ssh-keygen, and an unreadable allowed-signers file at $(slh_bound name "$SLH_ATTEST_VERIFY_WITH") all look like this. Fix the toolchain. (Declared custody: $SLH_ATTEST_CUSTODY.)"
+        slh_refuse "SLH-ATTEST-UNVERIFIABLE" "$where: the approval attestation for $__spec_shown could not be VERIFIED here (the verifier returned \"${vword:-nothing at all}\"), so this layer cannot tell you whether the spec was approved. THAT IS NOT THE SAME AS NO DRIFT and it is not the same as no approval: the check could not run. A missing sha256 tool, a missing ssh-keygen, and an unreadable allowed-signers file at $(slh_bound name "$SLH_ATTEST_VERIFY_WITH") all look like this. Fix the toolchain. (Declared custody: $SLH_ATTEST_CUSTODY.)"
       fi
       ;;
   esac
@@ -1537,8 +1643,10 @@ EOF
   # THE RECORD, OR THE PAGE (RP1): a tip carrying .claude/status.json answers
   # the ACTIVE question from the record; malformed refuses through the same
   # helper, and the page path below is byte-identical to what shipped before.
-  local active_specs
-  if slh_record_present "$proj" "$tip"; then
+  local active_specs __rp=0
+  slh_record_present "$proj" "$tip" || __rp=$?
+  [ "$__rp" -ne 2 ] || return 1
+  if [ "$__rp" -eq 0 ]; then
     # THE STATUS IS CARRIED ACROSS THE SUBSHELL: the helper's slh_refuse ran in
     # a command-substitution child, so its record of the refusal died there and
     # only the return code survives; re-record it where the caller can see it.
@@ -1628,7 +1736,7 @@ slh_merged_head() { # slh_merged_head <proj>
   if [ -f "$gd/MERGE_HEAD" ]; then
     heads="$(awk 'NF' "$gd/MERGE_HEAD" 2>/dev/null)"
   else
-    heads="$(compgen -e | grep -E '^GITHEAD_[0-9a-f]{40}$' | sed 's/^GITHEAD_//' || true)" # fail-open-ok: no variable is no merge head, and nothing below is excused by an empty read
+    heads="$(compgen -v GITHEAD_ | grep -E '^GITHEAD_[0-9a-f]{40}$' | sed 's/^GITHEAD_//' || true)" # fail-open-ok: the variable-name listing on the GITHEAD_ prefix lists only those names (spec 0193); no variable is no merge head, and nothing below is excused by an empty read
   fi
   [ "$(grep -c . <<< "$heads")" = "1" ] && printf '%s' "$heads"
   return 0
@@ -1785,8 +1893,8 @@ slh_diagram_switch_on() { # slh_diagram_switch_on <proj> <base-rev> -> 0 when ar
   # ARMED BY WHAT THE DIAGRAM HALF ITSELF WRITES, NOT BY A DIRECTORY NAME
   # (F5 of the second 2.7.0 leg, fix round 2).
   #
-  # This asked only whether ANY file existed under docs/diagrams/, of any type, a
-  # .png included. docs/diagrams/ is a conventional path that projects already use,
+  # This asked only whether ANY file existed under docs/diagrams/, of any type,
+  # an image file included. docs/diagrams/ is a conventional path that projects already use,
   # so an upgrade to 2.7.0 armed the close checks for anyone who happened to keep
   # diagrams there, and their next close started being judged by checks they never
   # opted into: no impact refused when they touch that tree, the field required to
@@ -1811,17 +1919,43 @@ slh_diagram_switch_on() { # slh_diagram_switch_on <proj> <base-rev> -> 0 when ar
   # unarmed and silently dropped its lockfile checks, which the suite caught in this
   # round. A declared diagram_command is as much an opt-in the operator wrote as a
   # header is, and neither is the mere existence of a conventionally named directory.
-  local proj="$1" base="$2" f
+  #
+  # A READ THAT FAILED IS NOT AN ANSWER (spec 0184): status 2 when git could not
+  # read what this asks, never 1 ("unarmed"). Every caller in the hook library
+  # reads any nonzero status as unarmed, exactly as a failed read read before, so
+  # the commit layer does not move; the trunk audit refuses on 2. The listing is
+  # NUL-delimited so a diagram file whose name git would quote is read, not failed.
+  local proj="$1" base="$2" f t tag="SLH-DIAGRAM-RC-$$-${RANDOM:-0}:" rc=""
   [ -n "$base" ] || return 1
-  git -C "$proj" show "$base:.claude/sdd.json" 2>/dev/null \
-    | jq -e '(.diagram_command // "") != ""' >/dev/null 2>&1 && return 0
-  while IFS= read -r f; do
+  t="$(git -C "$proj" ls-tree --name-only "$base" -- .claude/sdd.json 2>/dev/null)" || return 2
+  if [ -n "$t" ]; then
+    t="$(git -C "$proj" show "$base:.claude/sdd.json" 2>/dev/null)" || return 2
+    jq -e '(.diagram_command // "") != ""' >/dev/null 2>&1 <<< "$t" && return 0
+  fi
+  while IFS= read -r -d '' f; do
+    case "$f" in "$tag"*) rc="${f#"$tag"}"; continue ;; esac
+    [ -z "$rc" ] || return 2
     [ -n "$f" ] || continue
-    git -C "$proj" show "$base:$f" 2>/dev/null | grep -qE '^Synced by:' && return 0
-  done <<EOF
-$(git -C "$proj" ls-tree -r --name-only "$base" -- docs/diagrams/ 2>/dev/null)
-EOF
-  return 1 # fail-open-ok: an unreadable tree leaves the half UNARMED, which is exactly v1.14 behaviour and cannot turn a passing close into a refusal; the accusing direction here would be to arm on a read that did not happen
+    t="$(git -C "$proj" show "$base:$f" 2>/dev/null)" || return 2
+    grep -qE '^Synced by:' <<< "$t" && return 0
+  done < <(git -C "$proj" ls-tree -r -z --name-only "$base" -- docs/diagrams/ 2>/dev/null; printf '%s%s\0' "$tag" "$?")
+  [ "$rc" = "0" ] || return 2
+  return 1 # fail-open-ok: a tree READ IN FULL that carries neither marker leaves the half UNARMED, exactly v1.14 behaviour; a read that failed returns 2 above
+}
+
+# One file's text at a revision, or in the index when the revision is empty:
+# nothing when the path is absent, status 2 when git could not read it (spec 0184).
+slh_diagram_blob() { # slh_diagram_blob <proj> <rev-or-""> <path>
+  local o
+  if [ -z "$2" ]; then
+    o="$(git -C "$1" ls-files --cached -- "$3" 2>/dev/null)" || return 2
+    [ -n "$o" ] || return 0
+    git -C "$1" show ":$3" 2>/dev/null || return 2
+  else
+    o="$(git -C "$1" ls-tree --name-only "$2" -- "$3" 2>/dev/null)" || return 2
+    [ -n "$o" ] || return 0
+    git -C "$1" show "$2:$3" 2>/dev/null || return 2
+  fi
 }
 
 # The contents of every ```mermaid fence, in order, with the fences dropped. Two
@@ -1972,21 +2106,21 @@ l ~ /^[[:space:]]*$/ { next }
     }
   }
   for (i=1; i <= nc; i++) {
-    tok=cv[i]; ch=1; g=0
+    vword=cv[i]; ch=1; g=0
     while (ch == 1 && g < 8) {
       g++; ch=0
-      sub(/^[[:space:]]+/, "", tok); sub(/[[:space:]]+$/, "", tok)
-      n=length(tok); a=substr(tok, 1, 1); b=substr(tok, n, 1)
+      sub(/^[[:space:]]+/, "", vword); sub(/[[:space:]]+$/, "", vword)
+      n=length(vword); a=substr(vword, 1, 1); b=substr(vword, n, 1)
       if (n < 2) { ch=0 }
-      else if ((a == "\"" && b == "\"") || (a == "\047" && b == "\047")) { tok=substr(tok, 2, n-2); ch=1 }
-      else if ((a == "/" || a == "\\") && (b == "/" || b == "\\")) { tok=substr(tok, 2, n-2); ch=1 }
+      else if ((a == "\"" && b == "\"") || (a == "\047" && b == "\047")) { vword=substr(vword, 2, n-2); ch=1 }
+      else if ((a == "/" || a == "\\") && (b == "/" || b == "\\")) { vword=substr(vword, 2, n-2); ch=1 }
       else {
-        if (index("[(", a) > 0) { tok=substr(tok, 2); ch=1 }
-        n=length(tok)
-        if (n >= 1 && index(")]", substr(tok, n, 1)) > 0) { tok=substr(tok, 1, n-1); ch=1 }
+        if (index("[(", a) > 0) { vword=substr(vword, 2); ch=1 }
+        n=length(vword)
+        if (n >= 1 && index(")]", substr(vword, n, 1)) > 0) { vword=substr(vword, 1, n-1); ch=1 }
       }
     }
-    if (tok != "") print sp "\t" ck[i] "\t" tok
+    if (vword != "") print sp "\t" ck[i] "\t" vword
   }
 }'
 
@@ -2030,37 +2164,44 @@ slh_diagram_field_files() { # slh_diagram_field_files <field-line> -> one path p
 # steering/structure.md when and only when its Mermaid blocks differ between the
 # two trees. `rev_new` empty means the index, which is what the hooks judge.
 slh_diagram_touched() { # slh_diagram_touched <proj> <base-rev> <rev-new-or-""> <changed-files>
-  local proj="$1" base="$2" new="$3" changed="$4" old_b new_b
+  # The output is what it always was (a version git could not read yields empty
+  # text, which DIFFERS from a present one and counts the file as touched, the
+  # accusing direction); since spec 0184 the status is 2 when a read failed, which
+  # the hook library's caller does not read and the trunk audit refuses on.
+  local proj="$1" base="$2" new="$3" changed="$4" old_b new_b st=0
   printf '%s\n' "$changed" | grep -E '^docs/diagrams/' || true # fail-open-ok: grep exits 1 only when NOTHING under docs/diagrams/ changed, which is the true answer in that case; a match cannot be suppressed by the status, so this cannot turn a touched diagram into an untouched one
   if grep -qx 'steering/structure.md' <<< "$changed"; then
-    old_b="$(git -C "$proj" show "$base:steering/structure.md" 2>/dev/null | awk "$SLH_DIAGRAM_MERMAID_AWK" || true)" # fail-open-ok: an unreadable old version yields empty, which DIFFERS from a present new one and so counts the file as touched, the accusing direction
-    if [ -z "$new" ]; then
-      new_b="$(git -C "$proj" show ":steering/structure.md" 2>/dev/null | awk "$SLH_DIAGRAM_MERMAID_AWK" || true)" # fail-open-ok: as above
-    else
-      new_b="$(git -C "$proj" show "$new:steering/structure.md" 2>/dev/null | awk "$SLH_DIAGRAM_MERMAID_AWK" || true)" # fail-open-ok: as above
-    fi
+    old_b="$(slh_diagram_blob "$proj" "$base" steering/structure.md)" || st=2
+    old_b="$(awk "$SLH_DIAGRAM_MERMAID_AWK" <<< "$old_b")"
+    new_b="$(slh_diagram_blob "$proj" "$new" steering/structure.md)" || st=2
+    new_b="$(awk "$SLH_DIAGRAM_MERMAID_AWK" <<< "$new_b")"
     [ "$old_b" = "$new_b" ] || printf '%s\n' 'steering/structure.md'
   fi
+  return "$st"
 }
 
-slh_diagram_path_exists() { # slh_diagram_path_exists <proj> <rev-or-""> <path>
+slh_diagram_path_exists() { # slh_diagram_path_exists <proj> <rev-or-""> <path>: 0 exists, 1 absent, 2 a read that failed (spec 0184)
+  local o
   if [ -z "$2" ]; then
-    [ -n "$(git -C "$1" ls-files --cached -- "$3" 2>/dev/null | head -n1)" ]
+    o="$(git -C "$1" ls-files --cached -- "$3" 2>/dev/null)" || return 2
   else
-    [ -n "$(git -C "$1" ls-tree -r --name-only "$2" -- "$3" 2>/dev/null | head -n1)" ]
+    o="$(git -C "$1" ls-tree -r --name-only "$2" -- "$3" 2>/dev/null)" || return 2
   fi
+  [ -n "$o" ]
 }
 
 # THE TWO FIELD CHECKS (contract item 2). Both read the closing commit's diff
 # against the files the closer named, and neither runs unless the switch is on.
 slh_diagram_check_field() { # slh_diagram_check_field <proj> <base> <new-or-""> <num> <spec-text> <changed-files>
   local proj="$1" base="$2" new="$3" num="$4" text="$5" changed="$6"
-  local line answer named touched f missing=""
-  slh_diagram_switch_on "$proj" "$base" || return 0
+  local line answer named touched f missing="" __sw=0
+  slh_diagram_switch_on "$proj" "$base" || __sw=$?
+  case "$__sw" in 0) ;; 2) slh_diagram_read_failed "$base" "whether the diagram checks are armed"; return 1 ;; *) return 0 ;; esac
   line="$(slh_diagram_field_line "$text")"
   [ -n "$line" ] || return 0
   answer="$(slh_diagram_field_answer "$line")"
-  touched="$(slh_diagram_touched "$proj" "$base" "$new" "$changed")"
+  __sw=0; touched="$(slh_diagram_touched "$proj" "$base" "$new" "$changed")" || __sw=$?
+  [ "$__sw" -ne 2 ] || { slh_diagram_read_failed "${new:-}" "steering/structure.md's diagram section"; return 1; }
   case "$answer" in
     updated)
       named="$(slh_diagram_field_files "$line")"
@@ -2090,7 +2231,7 @@ EOF
 
 # NODE EVIDENCE (contract item 5, D11). Every path-shaped DRAWN NAME is resolved
 # against the tree under review. A stale name the CLOSING spec drew refuses; a
-# stale name an earlier spec drew is reported with its two honest exits.
+# stale name an earlier spec drew is reported with its two exits.
 #
 # S4 (the owner, 2026-09-10): a name that is NOT path-shaped is not resolved and
 # is REPORTED, never skipped in silence. The precedent is this project's own rule
@@ -2104,17 +2245,23 @@ EOF
 # layer up: a check whose subject is not what its words say.
 slh_diagram_check_nodes() { # slh_diagram_check_nodes <proj> <base> <rev-or-""> <closing-nums>
   local proj="$1" base="$2" rev="$3" closing="$4"
-  local files f blob sp kind label skipped=0 skiplist="" n=0 rc=0
-  slh_diagram_switch_on "$proj" "$base" || return 0
+  local files f blob sp kind label skipped=0 skiplist="" n=0 rc=0 __sw=0 st=0
+  slh_diagram_switch_on "$proj" "$base" || __sw=$?
+  case "$__sw" in 0) ;; 2) slh_diagram_read_failed "$base" "whether the diagram checks are armed"; return 1 ;; *) return 0 ;; esac
+  # The diagram files and their text, each read for its status (spec 0195): a listing or a
+  # blob git could not read refuses by name, never reads as no diagrams or no nodes.
   if [ -z "$rev" ]; then
-    files="$(git -C "$proj" ls-files --cached -- 'docs/diagrams/*.md' 'steering/structure.md' 2>/dev/null || true)" # fail-open-ok: an unreadable list yields no files, and the field checks above still compare the claim to the diff
+    files="$(git -C "$proj" ls-files --cached -- 'docs/diagrams/*.md' 'steering/structure.md' 2>/dev/null)" || st=$?
+    [ "$st" -eq 0 ] || { slh_git_failed "$st" "ls-files --cached -- docs/diagrams/*.md steering/structure.md" "the diagram files"; return 1; }
   else
-    files="$(git -C "$proj" ls-tree -r --name-only "$rev" -- docs/diagrams/ steering/structure.md 2>/dev/null | grep -E '\.md$' || true)" # fail-open-ok: as above
+    files="$(git -C "$proj" ls-tree -r --name-only "$rev" -- docs/diagrams/ steering/structure.md 2>/dev/null)" || st=$?
+    [ "$st" -eq 0 ] || { slh_git_failed "$st" "ls-tree -r --name-only $rev -- docs/diagrams/ steering/structure.md" "the diagram files"; return 1; }
+    files="$(slh_text "$files" | grep -E '\.md$' || true)" # fail-open-ok: grep exits 1 when no listed file is Markdown, which is the true answer then; the listing itself was read for its status above
   fi
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in docs/diagrams/generated/*) continue ;; esac
-    if [ -z "$rev" ]; then blob="$(git -C "$proj" show ":$f" 2>/dev/null || true)"; else blob="$(git -C "$proj" show "$rev:$f" 2>/dev/null || true)"; fi # fail-open-ok: an unreadable diagram yields no nodes; the file-level checks above still ran
+    blob="$(slh_git_blob "$proj" "$rev" "$f" "the diagram file $f")" || { SLH_REFUSED=1; return 1; }
     [ -n "$blob" ] || continue
     while IFS="$(printf '\t')" read -r sp kind label; do
       [ -n "$label" ] || continue
@@ -2124,7 +2271,9 @@ slh_diagram_check_nodes() { # slh_diagram_check_nodes <proj> <base> <rev-or-""> 
         *) skipped=$((skipped+1)); [ "$n" -lt 10 ] && { skiplist="$skiplist
   $(slh_bound name "$f"): $kind $(slh_bound name "$label")"; n=$((n+1)); }; continue ;;
       esac
-      slh_diagram_path_exists "$proj" "$rev" "$label" && continue
+      __sw=0; slh_diagram_path_exists "$proj" "$rev" "$label" || __sw=$?
+      [ "$__sw" -ne 0 ] || continue
+      [ "$__sw" -ne 2 ] || { slh_diagram_read_failed "$rev" "whether the drawn path $label exists"; return 1; }
       if [ "$sp" != "-" ] && grep -qw "$sp" <<< "$closing"; then
         slh_refuse "SLH-DIAGRAM-STALE-NODE" "$(slh_bound name "$f") draws a $kind $(slh_bound name "$label") and marks it %% spec $sp, a spec this commit closes, but that path does not exist in the tree under review. A $kind the closing spec introduced must be true of the tree it closes against. One edit fixes it: draw the path the code actually has, or drop it."
         rc=1
@@ -2153,7 +2302,10 @@ slh_diagram_command_for() { # slh_diagram_command_for <proj> -> prints the comma
     printf ''; return 0
   fi
   case "$raw" in
-    "ok "*|ok) printf '%s' "${raw#ok}" | sed 's/^ //' ;;
+    # The marker is stripped from the whole string once (spec 0196, the 2.13.0 leg's F2): a
+    # per-line strip changed every indented line of a multi-line command.
+    "ok "*) printf '%s' "${raw#ok }" ;;
+    ok) printf '' ;;
     shape)
       slh_refuse "SLH-DIAGRAM-SHAPE" ".claude/sdd.json declares diagram_command and it is not a string, so the command that generates the committed view cannot be read. Refusing rather than guessing. Write it as \"diagram_command\": \"<the command that prints one Mermaid block>\", or remove the key."
       return 1 ;;
@@ -2163,11 +2315,12 @@ slh_diagram_command_for() { # slh_diagram_command_for <proj> -> prints the comma
 }
 
 slh_diagram_check_lockfile() { # slh_diagram_check_lockfile <proj> <base> <rev-or-"">
-  local proj="$1" base="$2" rev="$3" cmd out rc gen committed n
-  slh_diagram_switch_on "$proj" "$base" || return 0
+  local proj="$1" base="$2" rev="$3" cmd out rc gen committed n __sw=0 st=0
+  slh_diagram_switch_on "$proj" "$base" || __sw=$?
+  case "$__sw" in 0) ;; 2) slh_diagram_read_failed "$base" "whether the diagram checks are armed"; return 1 ;; *) return 0 ;; esac
   cmd="$(slh_diagram_command_for "$proj")" || { SLH_REFUSED=1; return 1; }
   [ -n "$cmd" ] || return 0
-  out="$( ( cd "$proj" && eval "$cmd" ) 2>&1 )" && rc=0 || rc=$?
+  out="$( ( cd "$proj" && bash -c "$cmd" ) 2>&1 )" && rc=0 || rc=$?
   if [ "$rc" != "0" ]; then
     slh_refuse "SLH-DIAGRAM-SHAPE" "the declared diagram_command ($(slh_bound name "$cmd")) does not run here (exit $rc), so the generated view cannot be compared to what is committed and this close proves nothing about it. Last output: $(slh_bound text "$(printf '%s\n' "$out" | tail -3)")"
     return 1
@@ -2177,11 +2330,13 @@ slh_diagram_check_lockfile() { # slh_diagram_check_lockfile <proj> <base> <rev-o
     return 1
   fi
   if [ -z "$rev" ]; then
-    gen="$(git -C "$proj" ls-files --cached -- 'docs/diagrams/generated/*' 2>/dev/null || true)" # fail-open-ok: an empty list is the missing-view refusal below
+    gen="$(git -C "$proj" ls-files --cached -- 'docs/diagrams/generated/*' 2>/dev/null)" || st=$?
   else
-    gen="$(git -C "$proj" ls-tree -r --name-only "$rev" -- docs/diagrams/generated/ 2>/dev/null || true)" # fail-open-ok: as above
+    gen="$(git -C "$proj" ls-tree -r --name-only "$rev" -- docs/diagrams/generated/ 2>/dev/null)" || st=$?
   fi
-  n="$(printf '%s\n' "$gen" | grep -c . || true)"
+  # A listing that failed refuses by name (spec 0195), never as a view that is not committed.
+  [ "$st" -eq 0 ] || { slh_git_failed "$st" "ls-files or ls-tree under docs/diagrams/generated/" "the committed generated view"; return 1; }
+  n="$(printf '%s\n' "$gen" | grep -c . || true)" # fail-open-ok: grep -c prints 0 and exits 1 on an empty list, and 0 is the count; the listing itself was read for its status above
   if [ "${n:-0}" -eq 0 ]; then
     slh_refuse "SLH-DIAGRAM-SHAPE" "this instance declares diagram_command and commits no generated view under docs/diagrams/generated/, so the lockfile has nothing to lock. Commit the command's output there, or remove diagram_command."
     return 1
@@ -2190,7 +2345,7 @@ slh_diagram_check_lockfile() { # slh_diagram_check_lockfile <proj> <base> <rev-o
     slh_refuse "SLH-DIAGRAM-SHAPE" "this instance declares diagram_command and commits $n files under docs/diagrams/generated/ ($(slh_bound names "$gen")), and the contract is one command and one generated view. Refusing rather than guessing which file the command's output belongs to. Keep one file there, or drop the declaration."
     return 1
   fi
-  if [ -z "$rev" ]; then committed="$(git -C "$proj" show ":$gen" 2>/dev/null || true)"; else committed="$(git -C "$proj" show "$rev:$gen" 2>/dev/null || true)"; fi # fail-open-ok: an unreadable view yields empty, which DIFFERS from the command's output and refuses, the accusing direction
+  committed="$(slh_git_blob "$proj" "$rev" "$gen" "the committed generated view $gen")" || { SLH_REFUSED=1; return 1; }
   if [ "$(printf '%s\n' "$committed" | awk "$SLH_DIAGRAM_MERMAID_AWK")" != "$(printf '%s\n' "$out" | awk "$SLH_DIAGRAM_MERMAID_AWK")" ]; then
     slh_refuse "SLH-DIAGRAM-DRIFT" "$(slh_bound name "$gen") does not match what diagram_command ($(slh_bound name "$cmd")) prints, so the committed generated view is stale. The difference: $(slh_bound text "$(diff <(printf '%s\n' "$committed" | awk "$SLH_DIAGRAM_MERMAID_AWK") <(printf '%s\n' "$out" | awk "$SLH_DIAGRAM_MERMAID_AWK") 2>/dev/null | awk 'NR <= 20' | tr '\n' '~' | sed 's/~/ | /g')"). One edit fixes it: re-run the command and commit its output."
     return 1
@@ -2203,7 +2358,8 @@ slh_rule_in_force() { # slh_rule_in_force <proj> <major.minor> -> 0 when the IND
   # commit's own tree: one rule dated one way at both layers (spec 0175, decision 1), so an
   # upgraded instance is never refused for a close made before the rule existed.
   local v
-  v="$(slh_index_show "$1" .claude/sdd.json | jq -r '(.plugin.version // "") | strings' 2>/dev/null || true)" # fail-open-ok: an unreadable stamp is the pre-rule exemption this function exists to state
+  v="$(slh_index_show "$1" .claude/sdd.json)" || return 2
+  v="$(slh_text "$v" | jq -r '(.plugin.version // "") | strings' 2>/dev/null || true)" # fail-open-ok: a stamp jq cannot read is the pre-rule exemption this function exists to state; a stamp git could not read refused above (spec 0195)
   awk -v v="$v" -v want="$2" "$SLH_VERSION_AT_LEAST_AWK"
 }
 
@@ -2211,11 +2367,15 @@ slh_close_review_check() { # slh_close_review_check <proj> <num> <spec-text> <ca
   # THE CLOSE REVIEW (spec 0175): the close-review block's LAST round, read by the one reader
   # the audit shares. The skip is the role paths' decision, never the reviewer's: a
   # SKIP-DOCS-ONLY block is accepted only on a change that brings no role-path file.
-  local out tok
-  slh_rule_in_force "$1" 2.11 || return 0
+  local out vword
+  local __rif=0
+  slh_rule_in_force "$1" 2.11 || __rif=$?
+  # The stamp's read refused in a command-substitution child; recorded here (spec 0195).
+  [ "$__rif" -ne 2 ] || { SLH_REFUSED=1; return 1; }
+  [ "$__rif" -eq 0 ] || return 0
   out="$(printf '%s\n' "$3" | awk "$SLH_TEMPLATE_FENCE_AWK" | awk "$SLH_CLOSE_REVIEW_AWK")"
-  tok="${out%% *}"
-  case "$tok" in
+  vword="${out%% *}"
+  case "$vword" in
     pass|accepted) return 0 ;;
     skip)
       [ "$4" = "1" ] || return 0
@@ -2234,7 +2394,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
   local proj="$1" trunk="$2" what="$3"
   local staged spec_files role_paths closing_specs f num status_new status_old text
 
-  staged="$(slh_staged_files "$proj")"
+  staged="$(slh_staged_files "$proj")" || { SLH_REFUSED=1; return 1; }
   # Nothing staged is nothing to judge. Note the direction: an EMPTY staged list
   # is the only thing that short-circuits, and it short-circuits to "fine"
   # because an empty commit carries no work to the trunk.
@@ -2257,16 +2417,20 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
   # now, because every set computed below would be a guess.
   #
   # HISTORY: ruling LIB-63 (undated): THE ADOPTION COMMIT CLOSES NOTHING, by construction:
-  local structured=0 record_new="" record_old="" newly_closed=""
-  if slh_record_present "$proj" ""; then
+  local structured=0 record_new="" record_old="" newly_closed="" __rp=0
+  slh_record_present "$proj" "" || __rp=$?
+  [ "$__rp" -ne 2 ] || return 1
+  if [ "$__rp" -eq 0 ]; then
     structured=1
-    record_new="$(slh_record_show "$proj" "")"
+    record_new="$(slh_record_show "$proj" "")" || { SLH_REFUSED=1; return 1; }
     if [ "$(slh_record_verdict "$record_new")" != "ok" ]; then
       slh_refuse "SLH-RECORD-MALFORMED" ".claude/status.json in this commit is not a well-formed status record, so no close or chore fact can be read from it and this merge cannot be verified. Nothing falls back to the STATUS.md page: a fallback would let one syntax error buy back the frozen page readers' residual class. Fix the record (jq . .claude/status.json shows the syntax; Part 3 of the edition shows the grammar). Only /setlist:checkpoint writes this file."
       return 1
     fi
-    if slh_record_present "$proj" HEAD; then
-      record_old="$(slh_head_show "$proj" .claude/status.json)"
+    __rp=0; slh_record_present "$proj" HEAD || __rp=$?
+    [ "$__rp" -ne 2 ] || return 1
+    if [ "$__rp" -eq 0 ]; then
+      record_old="$(slh_head_show "$proj" .claude/status.json)" || { SLH_REFUSED=1; return 1; }
       if [ "$(slh_record_verdict "$record_old")" != "ok" ]; then
         slh_refuse "SLH-RECORD-MALFORMED" ".claude/status.json at HEAD is not a well-formed status record, so which specs this change NEWLY closes cannot be computed. Fix the record at HEAD before closing anything over it."
         return 1
@@ -2290,8 +2454,9 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
     fi
   else
     # HISTORY: ruling LIB-64 (undated): LIVE TEXT AT THE SOURCE (2026-08 consolidation, the F2 class made a rule).
-    status_new="$(slh_index_show "$proj" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"
-    status_old="$(slh_head_show "$proj" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")"
+    # Each page read for its status first (spec 0195), then through the live-text rule on the same line.
+    status_new="$(slh_index_show "$proj" specs/STATUS.md)" || { SLH_REFUSED=1; return 1; }; status_new="$(slh_text "$status_new" | awk "$SLH_LIVE_TEXT_AWK")"
+    status_old="$(slh_head_show "$proj" specs/STATUS.md)" || { SLH_REFUSED=1; return 1; }; status_old="$(slh_text "$status_old" | awk "$SLH_LIVE_TEXT_AWK")"
     newly_closed="$(slh_rows_newly_closed "$status_new" "$status_old")"
   fi
 
@@ -2308,7 +2473,7 @@ slh_verify_close() { # slh_verify_close <proj> <trunk> <what>
       # The row flipped but the file is not in this change: read it from the
       # index so the close conditions are checked against what the tree will
       # hold, rather than skipped because the author did not touch the file.
-      f="$(slh_spec_path_for "$proj" "$num")"
+      f="$(slh_spec_path_for "$proj" "$num")" || { SLH_REFUSED=1; return 1; }
     fi
     [ -n "$f" ] || {
       slh_refuse "SLH-CLOSES-NO-SPEC-FILE" "specs/STATUS.md marks spec $num CLOSED but no specs/${num}-*.md exists to verify. Add the spec file with its Closing report, or correct the row."
@@ -2374,8 +2539,17 @@ EOF
   if [ "$structured" = "1" ] && [ "$carries_code" = "1" ] && [ -z "$closing_specs" ] && [ -z "$closing_chores" ]; then
     local __mh
     __mh="$(slh_merged_head "$proj")"
-    if [ -n "$__mh" ] && ! slh_record_present "$proj" "$__mh"; then
-      closing_chores="$(slh_chores_completed "$(git -C "$proj" show "$__mh:specs/STATUS.md" 2>/dev/null | awk "$SLH_LIVE_TEXT_AWK")" "$(slh_head_show "$proj" specs/STATUS.md | awk "$SLH_LIVE_TEXT_AWK")")" # fail-open-ok: an unreadable page completes nothing, and the refusal below still fires
+    if [ -n "$__mh" ]; then
+      __rp=0; slh_record_present "$proj" "$__mh" || __rp=$?
+      [ "$__rp" -ne 2 ] || return 1
+      if [ "$__rp" -eq 1 ]; then
+        # The merged head's page and HEAD's, each read for its status (spec 0195): a page
+        # that is not there completes nothing; a read that failed refuses by name.
+        local __mhp __hp
+        __mhp="$(slh_git_blob "$proj" "$__mh" specs/STATUS.md "the merged branch's STATUS.md page")" || { SLH_REFUSED=1; return 1; }; __mhp="$(slh_text "$__mhp" | awk "$SLH_LIVE_TEXT_AWK")"
+        __hp="$(slh_head_show "$proj" specs/STATUS.md)" || { SLH_REFUSED=1; return 1; }; __hp="$(slh_text "$__hp" | awk "$SLH_LIVE_TEXT_AWK")"
+        closing_chores="$(slh_chores_completed "$__mhp" "$__hp")"
+      fi
     fi
   fi
 
@@ -2392,11 +2566,15 @@ EOF
   local entry __owns_list="" __owns_declaring=0 __owns_blockless=0 __owns_shape_bad=0
   # THE SWITCH, READ ONCE, IN THE FIRST PARENT'S TREE (ruling S2). HEAD is the
   # first parent of the commit this index is about to become.
-  local __armed=0
-  slh_diagram_switch_on "$proj" HEAD && __armed=1
+  local __armed=0 __sw=0
+  slh_diagram_switch_on "$proj" HEAD || __sw=$?
+  case "$__sw" in
+    0) __armed=1 ;;
+    2) slh_diagram_read_failed HEAD "whether the diagram checks are armed"; return 1 ;;
+  esac
   for entry in $closing_specs; do
     num="${entry%%:*}"; f="${entry#*:}"
-    text="$(slh_index_show "$proj" "$f")"
+    text="$(slh_index_show "$proj" "$f")" || { SLH_REFUSED=1; return 1; }
 
     # THE CLOSE IS THE STRONGEST POINT IN THE ATTESTATION CHAIN, and it is
     # nearly free: this function already knows which specs the change closes,
@@ -2438,10 +2616,11 @@ EOF
         slh_refuse "SLH-RECORD-NO-CLOSE" "spec $num is newly closed in .claude/status.json without its close facts: the entry must carry status closed, qa_pass_1 ok, and diagram updated or no-impact, written by /setlist:checkpoint at the close. Run the close through checkpoint rather than editing the record by hand."
       fi
       # HISTORY: ruling LIB-71 (undated): The ownership declaration, gathered here and consumed after the loop when this landing is single-parent (design 8.2).
-      __owns_out="$(slh_index_show "$proj" "$f" | awk "$SLH_OWNS_AWK")" || __owns_out="!read-failed"
+      __owns_out="$(slh_index_show "$proj" "$f")" || { SLH_REFUSED=1; return 1; }
+      __owns_out="$(slh_text "$__owns_out" | awk "$SLH_OWNS_AWK")" || __owns_out="!read-failed"
       # HISTORY: ruling LIB-72 (2026-09-06): THE LITE TIER'S CAP (edition v1.14, P1, the owner's ruling 3 of 2026-09-06):
       if grep -q '^!lite-oversized$' <<< "$__owns_out"; then
-        slh_refuse "SLH-LITE-OVERSIZED" "spec $num is declared Tier: lite and declares more than five files under Owns:. A lite spec is at most five files (Part 3 of the edition); the two honest exits are to drop the tier line (a full spec, judged exactly as before) or to split the work, both through /setlist:checkpoint. The tier is a claim about size, and a claim the close cannot honour is refused rather than reread."
+        slh_refuse "SLH-LITE-OVERSIZED" "spec $num is declared Tier: lite and declares more than five files under Owns:. A lite spec is at most five files (Part 3 of the edition); the two exits are to drop the tier line (a full spec, judged exactly as before) or to split the work, both through /setlist:checkpoint. The tier is a claim about size, and a claim the close cannot honour is refused rather than reread."
         __owns_out="$(printf '%s\n' "$__owns_out" | grep -v '^!lite-oversized$')"
       fi
       if grep -q '^!' <<< "$__owns_out"; then
@@ -2513,7 +2692,7 @@ $__owns_out"
      { [ "$__owns_declaring" = "1" ] || [ -n "$closing_chores" ]; }; then
     local __ch __cf __sf __owns_staged
     # HISTORY: ruling LIB-77 (plugin 2.4.0): The arm asks what ARRIVES on the trunk, so deletions are out of scope (2.4.0 leg F7):
-    __owns_staged="$(slh_staged_files "$proj" d)"
+    __owns_staged="$(slh_staged_files "$proj" d)" || { SLH_REFUSED=1; return 1; }
     for __ch in $closing_chores; do
       __cf="$(printf '%s' "$record_new" | jq -r --arg id "$__ch" "$SLH_RECORD_CHORE_FILES_JQ" 2>/dev/null || true)" # fail-open-ok: no files declared covers nothing, it cannot widen
       [ -n "$__cf" ] && __owns_list="$__owns_list
@@ -2578,7 +2757,10 @@ slh_gate_command_for() { # slh_gate_command_for <proj> <commit|close|push> -> pr
     return 0
   fi
   case "$raw" in
-    "ok "*|ok) printf '%s' "${raw#ok}" | sed 's/^ //' ;;
+    # The marker is stripped from the whole string once (spec 0196, the 2.13.0 leg's F2): a
+    # per-line strip changed every indented line of a multi-line command.
+    "ok "*) printf '%s' "${raw#ok }" ;;
+    ok) printf '' ;;
     shape)
       slh_refuse "SLH-GATES-SHAPE" ".claude/sdd.json has a \"gates\" block that is not an object of string tiers (commit, close, push), so which command runs at which event cannot be read. Refusing rather than guessing: an unreadable declaration is worse than none. Write it as {\"commit\": \"\", \"close\": \"<the full gate>\", \"push\": \"<the full suite>\"}, or remove the block to read the single gate_command as before."
       return 1 ;;
@@ -2626,7 +2808,7 @@ slh_run_gate_command() { # slh_run_gate_command <proj> [commit|close|push]
   # refusal into a silent no-op in any caller that sets it. The shipped hooks do
   # not, today. Making the function safe anyway costs nothing and removes a trap
   # from whoever adds `set -e` later.
-  out="$( ( cd "$proj" && eval "$cmd" ) 2>&1 )" && rc=0 || rc=$?
+  out="$( ( cd "$proj" && bash -c "$cmd" ) 2>&1 )" && rc=0 || rc=$?
   [ "$rc" = "0" ] && return 0
   last="$(printf '%s\n' "$out" | tail -3)"
   # HISTORY: ruling LIB-81 (undated): 127 is "a command in the gate was not found", which is a DIFFERENT fact from "the suite failed":

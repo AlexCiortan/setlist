@@ -40,11 +40,11 @@ run_hook "$HOOKS/scope-hook.sh" "$NB" "$(jq -nc '{tool_name:"Edit", tool_input:{
 expect_allow "scope nb-d: a pathless write-tool event off the trunk is allowed"
 git -C "$NB" checkout -q main
 
-# The template wires the full write-tool matcher set.
+# The template wires the full write-tool matcher list.
 if grep -q '"matcher": "Write|Edit|MultiEdit|NotebookEdit"' "$ROOT/templates/claude/settings.json.tmpl"; then
-  ok "scope nb-e: settings.json.tmpl wires the full write-tool matcher set"
+  ok "scope nb-e: settings.json.tmpl wires the full write-tool matcher list"
 else
-  bad "scope nb-e: settings.json.tmpl wires the full write-tool matcher set" \
+  bad "scope nb-e: settings.json.tmpl wires the full write-tool matcher list" \
       "the Write|Edit|MultiEdit|NotebookEdit matcher is missing from the template"
 fi
 

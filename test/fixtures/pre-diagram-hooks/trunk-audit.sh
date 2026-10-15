@@ -263,7 +263,7 @@ if [[ -z "$SINCE" ]]; then
   # instance whose first commit adopted the rules had no findable baseline and
   # every push was refused by accident. Measured: 0 commits without it, 1 with.
   SINCE="$(git -C "$INSTANCE" log --root --format=%H --diff-filter=A -- .claude/sdd.json | tail -n1)"
-  [[ -n "$SINCE" ]] || die "cannot find the commit that introduced .claude/sdd.json; pass --since <ref>"
+  [[ -n "$SINCE" ]] || die "cannot find the commit that introduced .claude/sdd.json; give --since <ref>"
 fi
 
 # The baseline must RESOLVE. Since an empty range now reports clean, a --since
@@ -556,8 +556,8 @@ BEGIN { n = 0; bad = "" }
   sub(/[[:space:]]+#.*$/, "", line)
   # the pattern is the first field; owners follow, whitespace-separated
   m = split(line, f, /[[:space:]]+/)
-  pat = f[1]
-  if (pat ~ /[\[\]?]/) { bad = "a character class or ? wildcard in a pattern"; badln = ln; next }
+  glob_rule = f[1]
+  if (glob_rule ~ /[\[\]?]/) { bad = "a character class or ? wildcard in a pattern"; badln = ln; next }
   owners = ""
   for (i = 2; i <= m; i++) {
     if (f[i] == "") continue
@@ -565,7 +565,7 @@ BEGIN { n = 0; bad = "" }
     owners = owners (owners == "" ? "" : " ") f[i]
   }
   if (bad != "") next
-  n++; P[n] = pat; O[n] = owners
+  n++; P[n] = glob_rule; O[n] = owners
 }
 END {
   if (bad != "") { printf "!unreadable\t%d\t%s\n", badln, bad; exit 0 }
@@ -965,7 +965,7 @@ $LIN_CF"
       # retirement passed spelled `git mv` and refused spelled `git rm`. The
       # merge arm's provenance sibling already filters (--diff-filter=A below).
       # T1: the declared set against the repository's ownership file, on the
-      # closing commit's author email (the arm above has already read the set).
+      # closing commit's author email (the arm above has already read the declared files).
       if [[ "$LIN_OWNS_VIOL" == "0" ]] && ! codeowners_arm "$C" "$C" "$LIN_OWNS_LIST"; then
         printf '          %s\n' "$SUBJ"
         LIN_OWNS_VIOL=1

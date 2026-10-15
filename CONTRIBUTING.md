@@ -8,15 +8,18 @@ which asks for what a reproduction needs.
 ## Before a pull request
 
 - **Open an issue first.** This repository is exported from the framework's source, where
-  the change is made, specced and reviewed, so a pull request here is read as a proposal
-  rather than merged as it stands.
-- **The edition is the protocol.** `setlist.md` is the one copy of the protocol, and the
-  plugin's skills, templates and hooks are bindings of it; a change to one without the other
-  is a drift, not a fix.
-- **Run the suite.** `bash test/run-shards.sh` runs it; a change that moves what a hook
+  the change is made, specced and reviewed. So a pull request here is read as a proposal,
+  and it is not merged as it stands.
+- **The edition is the protocol.** `setlist.md`, `setlist-operations.md` and
+  `setlist-changelog.md` are the one copy of the protocol, and the
+  plugin's skills, templates and hooks are bindings of it. A change to one without the other
+  is a drift, and it fixes nothing.
+- **Run the suite.** `bash test/run-shards.sh` runs it. A change that moves what a hook
   decides comes with a case that fails on the old bytes.
 - **Style.** No em-dashes in anything you write: use commas, colons, parentheses or separate
-  sentences.
+  sentences. Leave out the words `honest`, `honestly`, `honesty`, `genuine`, `genuinely`,
+  `load-bearing`, `straightforward`, `straightforwardly` and `quietly`, and keep sentences short: a
+  median of 22 words or fewer, with nine in ten at 40 or fewer.
 
 ## Security
 
@@ -24,5 +27,6 @@ A problem that should not be public before it is fixed goes through [SECURITY.md
 
 ## Licence
 
-Code contributions are under Apache-2.0 and text contributions to `setlist.md` under CC BY
-4.0, as the [LICENSE](LICENSE) file says.
+Code contributions are under Apache-2.0 and text contributions to the edition's three files
+(`setlist.md`, `setlist-operations.md`, `setlist-changelog.md`) under CC BY 4.0, as the
+[LICENSE](LICENSE) file says.

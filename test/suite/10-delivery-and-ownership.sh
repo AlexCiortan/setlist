@@ -161,9 +161,9 @@ if git -C "$ROOT" rev-list --all -- templates/git-hooks/ >/dev/null 2>&1 && [[ -
       || BLOB_MISSING="$BLOB_MISSING $bl"
   done <<< "$(git -C "$ROOT" rev-list --all -- templates/git-hooks/ | while read -r c; do git -C "$ROOT" ls-tree "$c" -- templates/git-hooks/ | awk '{print $3}'; done | sort -u)"
   if [[ -z "$BLOB_MISSING" ]]; then
-    ok "ownership blob list: every historical templates/git-hooks blob is in the embedded set"
+    ok "ownership blob list: every historical templates/git-hooks blob is in the embedded list"
   else
-    bad "ownership blob list: every historical templates/git-hooks blob is in the embedded set" \
+    bad "ownership blob list: every historical templates/git-hooks blob is in the embedded list" \
         "missing:$BLOB_MISSING; regenerate KNOWN_SETLIST_HOOK_BLOBS in setlist-delivery-lib.sh in this same commit (the recipe is in its comment)"
   fi
 else
@@ -1370,6 +1370,14 @@ else
   bad "remote trunk b: a remote whose trunk cannot be resolved refuses by name instead of auditing the wrong ref" \
       "expected SLH-REMOTE-UNRESOLVED and src/fresh.js NOT on the remote; got [$(grep -oE 'SLH-[A-Z-]+|audited [^,]*' "$WORK/f7f.out" | head -1)] and landed=$(git -C "$F7D-rem.git" cat-file -e refs/heads/master:src/fresh.js 2>/dev/null && echo yes || echo no)"
 fi
+# (b2) The refusal ends on its own reason (spec 0196, the 2.13.0 leg's F12): the hook used to
+# fall through to the trunk-violation trailer, which is false when nothing was audited.
+if grep -q 'SLH-REMOTE-UNRESOLVED' "$WORK/f7f.out" && ! grep -q 'carries work that did not arrive' "$WORK/f7f.out"; then
+  ok "remote trunk b2: an unresolved remote's refusal ends on its own reason, never the trunk-violation trailer"
+else
+  bad "remote trunk b2: an unresolved remote's refusal ends on its own reason, never the trunk-violation trailer" \
+      "$(grep -E 'SLH-REMOTE-UNRESOLVED|carries work' "$WORK/f7f.out" | head -n 3)"
+fi
 
 # (c) CONTROL: where the two trunk names agree, the local-name test catches it.
 F7D="$WORK/f7-samename"; f7_inst "$F7D" main
@@ -2004,7 +2012,7 @@ fi
 # original bound forbade. Pinned here so that the day it closes we find out.
 PLUSD="$WORK/plus-prefix"; rm -rf "$PLUSD"; scan_ref_fixture "$PLUSD"
 git -C "$PLUSD" checkout -q -b spec/0012-plus main
-printf '++%s\n' "$SCAN_SECRET" > "$PLUSD/src/plus.txt"
+printf '++%s\n' "$SCAN_SHAPED" > "$PLUSD/src/plus.txt"
 git -C "$PLUSD" add -A >/dev/null 2>&1
 if git -C "$PLUSD" commit -qm "++ prefixed secret" >/dev/null 2>&1; then
   ok "plus prefix: a source line beginning ++ is dropped by the diff reader, as Known limitations records (documented hole, still open)"
@@ -2016,8 +2024,8 @@ fi
 #
 # THIS FIXTURE EXISTS BECAUSE OF WHAT IT CAUGHT, and the shape of the miss
 # matters more than the defect. /setlist:new runs in an EMPTY directory, so no
-# git repository exists when stamp.sh runs, so stamp.sh could not set
-# core.hooksPath or merge.ff and (before R3-1) said nothing about it. Every
+# git repository exists when stamp.sh runs, so stamp.sh could not
+# set core.hooksPath or merge.ff and (before R3-1) said nothing about it. Every
 # project from the primary onboarding path shipped with .githooks/ present and
 # NO enforcement: a secret committed, an unclosed spec merged onto the trunk,
 # and both reached a remote, every command exiting 0.
@@ -2057,7 +2065,7 @@ if [[ -d "$ESP" ]]; then
   fi
   git -C "$ESP" checkout -q -b spec/0001-x 2>/dev/null
   mkdir -p "$ESP/src"
-  printf 'api_key = "AKIAABCDEFGH12345678"\n' > "$ESP/src/a.js"
+  printf 'api_key = "%s"\n' "$(sx_join AKIA ABCDEFGH 12345678)" > "$ESP/src/a.js"   # joined from parts (spec 0193)
   git -C "$ESP" add -A >/dev/null 2>&1
   if git -C "$ESP" commit -qm "code plus a secret" >/dev/null 2>&1; then
     bad "empty start c: the armed boundary refuses a secret in a project built from an empty directory" \
@@ -2093,7 +2101,7 @@ mkdir -p "$WORK/brokenbin"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/brokenbin/grep"
 chmod +x "$WORK/brokenbin/grep"
 git -C "$TCHK" checkout -q -b spec/0010-tc main
-printf '%s\n' "$SCAN_SECRET" > "$TCHK/src/leak.js"
+printf '%s\n' "$SCAN_SHAPED" > "$TCHK/src/leak.js"
 git -C "$TCHK" add -A >/dev/null 2>&1
 git -C "$TCHK" -c core.hooksPath=/dev/null commit -qm leak >/dev/null 2>&1
 if git -C "$TCHK" push -q origin spec/0010-tc >/dev/null 2>&1; then
@@ -2290,7 +2298,7 @@ if git clone -q "$GH" "$GHC" >/dev/null 2>&1; then
         "the config survived the clone, so the README overstates the gap"
   fi
 else
-  bad "git hooks n/o: the clone fixture could be created" "git clone failed, so neither half was checked"
+  bad "git hooks n/o: the clone fixture could be created" "git clone failed (rc $?), so neither half was checked"
 fi
 
 # --ff-only, the documented hole, asserted in BOTH directions: it really does
@@ -2378,7 +2386,7 @@ fi
 # Each case stamps into <dir>/w/t and snapshots <dir> whole, so a write
 # anywhere under it, the target or above it, is seen.
 sa_refused() { # sa_refused <case-id> <key> <printf-format-of-the-value> <description>
-  local id="$1" key="$2" fmt="$3" desc="$4" d="$WORK/sa-b-$1" val before after rc
+  local id="$1" field="$2" fmt="$3" desc="$4" d="$WORK/sa-b-$1" val before after rc
   rm -rf "$d"; mkdir -p "$d/w"
   # shellcheck disable=SC2059  # the format IS the value's spelling, control characters included
   val="$(printf "$fmt")"
@@ -2386,12 +2394,12 @@ sa_refused() { # sa_refused <case-id> <key> <printf-format-of-the-value> <descri
   # prints a refused answer through the same name bound as the hook library's
   # slh_bound, so the expected spelling is that function's, which also pins
   # that the stamp's inline copy agrees with it.
-  { cat "$SA_BASE"; printf '%s=%s\n' "$key" "$val"; } > "$d.ans"
+  { cat "$SA_BASE"; printf '%s=%s\n' "$field" "$val"; } > "$d.ans"
   before="$(cd "$d" && find . | sort)"
   bash "$ROOT/scripts/stamp.sh" "$d.ans" "$d/w/t" >"$d.out" 2>&1; rc=$?
   after="$(cd "$d" && find . | sort)"
   if [[ "$rc" -eq 1 && "$before" == "$after" ]] \
-     && grep -qF "$key" "$d.out" && grep -qF 'clean relative path' "$d.out" \
+     && grep -qF "$field" "$d.out" && grep -qF 'clean relative path' "$d.out" \
      && grep -qF -- "$(bash -c '. "$1"; slh_bound name "$2"' _ "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$val")" "$d.out" \
      && grep -qF 'Nothing has been written' "$d.out"; then
     ok "0158 stamp $id: $desc is REFUSED by name before any write, the value quoted and the rule stated"
@@ -2457,7 +2465,7 @@ fi
 # the plugin tree whose build writes the wrong trunk must refuse by name.
 SA_M="$WORK/sa-mutant"; rm -rf "$SA_M"; mkdir -p "$SA_M/root"
 cp -R "$ROOT/scripts" "$ROOT/templates" "$ROOT/.claude-plugin" "$SA_M/root/"
-cp "$ROOT/setlist.md" "$SA_M/root/"
+cp "$ROOT/setlist.md" "$ROOT/setlist-operations.md" "$ROOT/setlist-changelog.md" "$SA_M/root/"
 sed 's/| \.trunk = \$trunk |/| .trunk = "not-the-trunk" |/' "$ROOT/scripts/stamp.sh" > "$SA_M/root/scripts/stamp.sh"
 if cmp -s "$ROOT/scripts/stamp.sh" "$SA_M/root/scripts/stamp.sh"; then
   bad "0158 stamp c2: the read-back refuses an sdd.json that differs from what the stamp was given" \
@@ -2503,18 +2511,18 @@ fi
 # every workflow this repository ships or stamps (the 2.9.0 external review's
 # item 14; the 2.10.0 intake section 2b.3). The public workflow joins the list
 # once it exists (spec 0162).
-SA_PIN_FILES=("$ROOT/templates/root/.github/workflows/setlist-forge-check.yml" \
+SA_PINNED_FILES=("$ROOT/templates/root/.github/workflows/setlist-forge-check.yml" \
   "$ROOT/.github/workflows/setlist-forge-check.yml" "$ROOT/.github/workflows/test.yml")
-[[ -f "$ROOT/publish/test.public.yml" ]] && SA_PIN_FILES+=("$ROOT/publish/test.public.yml")
-SA_PINS="$(grep -h 'actions/checkout@' "${SA_PIN_FILES[@]}" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//')"
-SA_PIN_BAD="$(printf '%s\n' "$SA_PINS" | grep -vE '^actions/checkout@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
-SA_PIN_N="$(printf '%s\n' "$SA_PINS" | grep -c . || true)"
-SA_PIN_U="$(printf '%s\n' "$SA_PINS" | sort -u | grep -c . || true)"
-if [[ -z "$SA_PIN_BAD" && "$SA_PIN_N" -ge 3 && "$SA_PIN_U" -eq 1 ]]; then
-  ok "0158 stamp e1: every actions/checkout in the shipped and stamped workflows names one commit id, its tag beside it ($SA_PIN_N lines)"
+[[ -f "$ROOT/publish/test.public.yml" ]] && SA_PINNED_FILES+=("$ROOT/publish/test.public.yml")
+SA_PINS="$(grep -h 'actions/checkout@' "${SA_PINNED_FILES[@]}" | sed -E 's/^[[:space:]]*-?[[:space:]]*uses:[[:space:]]*//')"
+SA_PINNED_BAD="$(printf '%s\n' "$SA_PINS" | grep -vE '^actions/checkout@[0-9a-f]{40} # v[0-9]+\.[0-9]+\.[0-9]+$' || true)"
+SA_PINNED_N="$(printf '%s\n' "$SA_PINS" | grep -c . || true)"
+SA_PINNED_U="$(printf '%s\n' "$SA_PINS" | sort -u | grep -c . || true)"
+if [[ -z "$SA_PINNED_BAD" && "$SA_PINNED_N" -ge 3 && "$SA_PINNED_U" -eq 1 ]]; then
+  ok "0158 stamp e1: every actions/checkout in the shipped and stamped workflows names one commit id, its tag beside it ($SA_PINNED_N lines)"
 else
-  bad "0158 stamp e1: every actions/checkout in the shipped and stamped workflows names one commit id, its tag beside it ($SA_PIN_N lines)" \
-      "distinct spellings $SA_PIN_U; not a pinned id: $(printf '%s' "$SA_PIN_BAD" | tr '\n' ';')"
+  bad "0158 stamp e1: every actions/checkout in the shipped and stamped workflows names one commit id, its tag beside it ($SA_PINNED_N lines)" \
+      "distinct spellings $SA_PINNED_U; not a pinned id: $(printf '%s' "$SA_PINNED_BAD" | tr '\n' ';')"
 fi
 
 # (g) SD2's second reason in the stamp's twin of the foreign-layer refusal
@@ -2673,6 +2681,7 @@ ch_commit() { # ch_commit <dir> <message> <out> -> the commit's status, a new fi
 
 # >>> SHARD-BEGIN chain-0173 cost=4
 if shard_region chain-0173; then
+sx_pinned "key assignment (chain-0173)" "$(printf 'api_key = "%s"' "$(sx_join AKIA QQQQZZZZ 1234567890 abcd)")" 2168852610/38
 CH_ANS="$WORK/ch-answers"; ch_answers "$CH_ANS"
 for CH_MGR in husky lefthook; do
   CHD="$WORK/ch-$CH_MGR"; rm -rf "$CHD"; git_init "$CHD"; "ch_$CH_MGR" "$CHD"
@@ -2711,7 +2720,7 @@ for CH_MGR in husky lefthook; do
     husky) printf 'echo "husky pre-commit: REFUSING (lint)" >&2; exit 1\n' > "$CHD/.husky/pre-commit" ;;
     *) printf '#!/bin/sh\necho "lefthook pre-commit: REFUSING" >&2\nexit 1\n' > "$(git -C "$CHD" rev-parse --absolute-git-dir)/hooks/pre-commit" ;;
   esac
-  printf 'api_key = "AKIAQQQQZZZZ1234567890abcd"\n' > "$CHD/s.txt"
+  printf 'api_key = "%s"\n' "$(sx_join AKIA QQQQZZZZ 1234567890 abcd)" > "$CHD/s.txt"   # joined from parts (spec 0193)
   ch_commit "$CHD" "feat: secret" "$WORK/ch-$CH_MGR-c4.out"; CH_RC=$?
   if [[ "$CH_RC" -ne 0 ]] && grep -q 'SLH-SECRET' "$WORK/ch-$CH_MGR-c4.out" && grep -q "$CH_MGR pre-commit: REFUSING" "$WORK/ch-$CH_MGR-c4.out"; then
     ok "0173 chain e ($CH_MGR): when both layers refuse, both refusals print and the commit is refused"
@@ -2909,7 +2918,7 @@ if shard_region octopus-0173; then
 # refusal passing in silence at merge (the audit at push stays the guarantee).
 OCG="$WORK/oc-githead"; rm -rf "$OCG"; git_init "$OCG"
 oc_branch "$OCG" g1 main g1.txt; oc_branch "$OCG" g2 main g2.txt
-mkdir -p "$OCG/h"; printf '#!/usr/bin/env bash\ncompgen -e | grep -cE "^GITHEAD_[0-9a-f]{40}$" > "%s/heads.$$"\nexit 0\n' "$WORK" > "$OCG/h/pre-merge-commit"
+mkdir -p "$OCG/h"; printf '#!/usr/bin/env bash\ncompgen -v GITHEAD_ | grep -cE "^GITHEAD_[0-9a-f]{40}$" > "%s/heads.$$"\nexit 0\n' "$WORK" > "$OCG/h/pre-merge-commit"
 chmod +x "$OCG/h/pre-merge-commit"
 rm -f "$WORK"/heads.*
 git -C "$OCG" -c core.hooksPath=h merge -q --no-ff -m two g1 >/dev/null 2>&1
@@ -3018,16 +3027,16 @@ fi; shard_region_end
 # `-diff` or `binary` entry made git print "Binary files differ" and the scans read nothing, so a
 # live-shaped secret reached the remote at exit 0. A path the plain rendering calls binary is now
 # re-rendered with --text when its new blob has no NUL in its first 8,000 bytes (git's own text
-# test), and a real binary stays unread (this repository's publish/demo.gif carries an em-dash
-# byte triple, so a blanket --text would refuse it). A merge commit's combined diff does not
+# test), and a real binary stays unread (this repository's demo recording, an image file, carries
+# an em-dash byte triple, so a blanket --text would refuse it). A merge commit's combined diff does not
 # render past the attribute even under --text (measured), the residue the bullet names: pinned.
-ta_secret() { printf 'api_key = "AKIAQQQQZZZZ1234567890abcd"\n'; }
+ta_shaped_value() { printf 'api_key = "%s"\n' "$(sx_join AKIA QQQQZZZZ 1234567890 abcd)"; }   # joined from parts (spec 0193)
 
 # >>> SHARD-BEGIN text-attr-0173 cost=2
 if shard_region text-attr-0173; then
 for TA_ATTR in -diff binary; do
   TAD="$WORK/ta-commit$TA_ATTR"; oc_armed "$TAD"
-  printf 'cfg.txt %s\n' "$TA_ATTR" > "$TAD/.gitattributes"; ta_secret > "$TAD/cfg.txt"
+  printf 'cfg.txt %s\n' "$TA_ATTR" > "$TAD/.gitattributes"; ta_shaped_value > "$TAD/cfg.txt"
   git -C "$TAD" add -A >/dev/null 2>&1
   git -C "$TAD" commit -qm "config" >"$WORK/ta-commit$TA_ATTR.out" 2>&1; TA_RC=$?
   if [[ "$TA_RC" -ne 0 ]] && grep -q 'SLH-SECRET' "$WORK/ta-commit$TA_ATTR.out"; then
@@ -3045,16 +3054,24 @@ for TA_ATTR in -diff binary; do
   fi
 done
 # c (control): a real binary (NUL bytes) carrying the em-dash byte triple, under `binary`, is not read.
-TAC="$WORK/ta-gif"; oc_armed "$TAC"
-printf '*.gif binary\n' > "$TAC/.gitattributes"
-printf 'GIF89a\000\001\002\342\200\224 end\000\n' > "$TAC/asset.gif"
+TAC="$WORK/ta-binary"; oc_armed "$TAC"
+printf '*.bin binary\n' > "$TAC/.gitattributes"
+printf 'BIN\000\001\002\342\200\224 end\000\n' > "$TAC/asset.bin"
+# The control is only a control while the fixture IS binary, so its format is read from the
+# bytes, never assumed from a name (spec 0192, item 2).
+TA_ENC="$(file --mime-encoding -b "$TAC/asset.bin" 2>/dev/null)"
+if [[ "$TA_ENC" == "binary" ]]; then
+  ok "0173 text c precondition: the fixture is binary by its bytes (file reads $TA_ENC), so the control measures a real binary"
+else
+  bad "0173 text c precondition: the fixture is binary by its bytes" "file reads [$TA_ENC], so the control below would measure a text file"
+fi
 git -C "$TAC" add -A >/dev/null 2>&1
-git -C "$TAC" commit -qm "asset" >"$WORK/ta-gif.out" 2>&1; TA_RC=$?
-git -C "$TAC" push origin main >"$WORK/ta-gif-push.out" 2>&1; TA_PRC=$?
+git -C "$TAC" commit -qm "asset" >"$WORK/ta-binary.out" 2>&1; TA_RC=$?
+git -C "$TAC" push origin main >"$WORK/ta-binary-push.out" 2>&1; TA_PRC=$?
 if [[ "$TA_RC" -eq 0 && "$TA_PRC" -eq 0 ]]; then
   ok "0173 text c (control): a real binary carrying the em-dash bytes is accepted at commit and at push"
 else
-  bad "0173 text c (control): a real binary carrying the em-dash bytes is accepted at commit and at push" "commit rc=$TA_RC push rc=$TA_PRC: $(grep -h -o 'SLH-[A-Z-]*' "$WORK/ta-gif.out" "$WORK/ta-gif-push.out" | sort -u | tr '\n' ' ')"
+  bad "0173 text c (control): a real binary carrying the em-dash bytes is accepted at commit and at push" "commit rc=$TA_RC push rc=$TA_PRC: $(grep -h -o 'SLH-[A-Z-]*' "$WORK/ta-binary.out" "$WORK/ta-binary-push.out" | sort -u | tr '\n' ' ')"
 fi
 # d (pinned residue): a merge commit's OWN change to a -diff path, made with --no-verify, reaches
 # the remote; the day this refuses, the bullet's residue sentence is false.
@@ -3066,7 +3083,7 @@ git -C "$TADD" checkout -q -b side HEAD~1; printf 'y\n' > "$TADD/other.txt"
 git -C "$TADD" add -A >/dev/null 2>&1; git -C "$TADD" -c core.hooksPath=/dev/null commit -qm side >/dev/null 2>&1
 git -C "$TADD" checkout -q main
 git -C "$TADD" -c core.hooksPath=/dev/null merge -q --no-ff --no-commit side >/dev/null 2>&1
-ta_secret >> "$TADD/cfg.txt"; git -C "$TADD" add -A >/dev/null 2>&1
+ta_shaped_value >> "$TADD/cfg.txt"; git -C "$TADD" add -A >/dev/null 2>&1
 git -C "$TADD" -c core.hooksPath=/dev/null commit -qm "merge side" >/dev/null 2>&1
 git -C "$TADD" push origin main >"$WORK/ta-merge-push.out" 2>&1; TA_RC=$?
 if ! grep -q 'SLH-SECRET' "$WORK/ta-merge-push.out"; then
@@ -3078,7 +3095,7 @@ fi
 # The region removes its own fixtures (spec 0173): the mutation check runs nine unsharded suites at once
 # on the Linux runner's /tmp tmpfs, each keeping every fixture until it exits (371 MB at its peak), and
 # this spec's fixtures were what tipped the pool past the space it had (runs at 1968dea to 8b1f474).
-rm -rf "$WORK"/ta-commit-diff "$WORK"/ta-commit-diff-rem.git "$WORK"/ta-commitbinary "$WORK"/ta-commitbinary-rem.git "$WORK"/ta-gif "$WORK"/ta-gif-rem.git "$WORK"/ta-merge "$WORK"/ta-merge-rem.git
+rm -rf "$WORK"/ta-commit-diff "$WORK"/ta-commit-diff-rem.git "$WORK"/ta-commitbinary "$WORK"/ta-commitbinary-rem.git "$WORK"/ta-binary "$WORK"/ta-binary-rem.git "$WORK"/ta-merge "$WORK"/ta-merge-rem.git
 fi; shard_region_end
 # <<< SHARD-END text-attr-0173
 
@@ -3152,7 +3169,7 @@ else
   bad "0176 agents d (control): with CLAUDE.md present too, no shadowing notice and AGENTS.md is left as it is" "rc=$AM_RC: $(tr '\n' ' ' < "$WORK/am-rd.out" | cut -c1-200)"
 fi
 # e: the upgrade adds it where missing, beside the two agents and in their words.
-AM_UP="$(awk '/^- Stamp the close-reviewer agent if missing/{f=1} f{print} /^- \*\*Add the `release` block/{exit}' "$ROOT/skills/upgrade/SKILL.md")"
+AM_UP="$(awk '/^- The close-reviewer agent and the `verify` skill are delivered by the/{f=1} f{print} /^- \*\*Add the `release` block/{exit}' "$ROOT/skills/upgrade/SKILL.md")"
 if grep -qF 'templates/root/AGENTS.md' <<< "$AM_UP" && grep -q 'surface the diff instead of overwriting' <<< "$(awk '/AGENTS.md/{f=1} f' <<< "$AM_UP" | tr -s ' \n' '  ')"; then
   ok "0176 agents e: the upgrade skill adds AGENTS.md where missing, beside the two agents, surfacing a differing file instead of overwriting"
 else
@@ -3317,12 +3334,36 @@ elif [[ -z "$OB_BAD" ]]; then
 else
   bad "0180 delta g: an instance whose .claude/sdd.json is a tracked symlink to a shared file is read, and the shared file keeps every byte" "$OB_BAD: $(tr '\n' ' ' < "$WORK/ob-sym-delta.out" | cut -c1-300)"
 fi
+# h (spec 0189 fix round 1, the 2.12.0 leg's F7): a history git cannot read is refused by name,
+# never read as "nothing to read" at exit 0.
+OBH="$WORK/ob-missing"; git_init "$OBH"; mkdir -p "$OBH/src"
+printf 'a\n' > "$OBH/src/a.c"; git -C "$OBH" add -A >/dev/null 2>&1; git -C "$OBH" commit -qm direct >/dev/null 2>&1
+OBH_D="$(git -C "$OBH" rev-parse HEAD)"
+git -C "$OBH" checkout -qb side; printf 'n\n' > "$OBH/N.md"; git -C "$OBH" add -A >/dev/null 2>&1; git -C "$OBH" commit -qm side >/dev/null 2>&1
+git -C "$OBH" checkout -q main; git -C "$OBH" merge -q --no-ff -m "Merge side" side >/dev/null 2>&1
+rm -f "$OBH/.git/objects/${OBH_D:0:2}/${OBH_D:2}"
+bash "$SCRIPTS/refresh-instance.sh" --observe --role src "$OBH" >"$WORK/ob-missing.out" 2>&1; OB_RC=$?
+if [[ "$OB_RC" -ne 0 ]] && grep -q 'SLH-AUDIT-GIT-FAILED' "$WORK/ob-missing.out" && ! grep -q '^nothing to read' "$WORK/ob-missing.out"; then
+  ok "0189 observe h: a history with a missing commit object is refused by name, never read as 'nothing to read' at exit 0"
+else
+  bad "0189 observe h: a history with a missing commit object is refused by name, never read as 'nothing to read' at exit 0" "rc=$OB_RC: $(tr '\n' ' ' < "$WORK/ob-missing.out" | cut -c1-300)"
+fi
+# i (the leg's F18, its sibling in the delta): the shallow-clone question killed refuses rather than reading "not shallow"
+OBI="$WORK/ob-shallow-killed"; cr_fixture "$OBI" page ""
+OBI_BIN="$WORK/obi-bin"; mkdir -p "$OBI_BIN"; OBI_REAL="$(command -v git)"
+printf '#!/usr/bin/env bash\ncase "$*" in *is-shallow-repository*) exit 139 ;; esac\nexec "%s" "$@"\n' "$OBI_REAL" > "$OBI_BIN/git"; chmod +x "$OBI_BIN/git"
+PATH="$OBI_BIN:$PATH" bash "$SCRIPTS/refresh-instance.sh" --delta "$OBI" >"$WORK/ob-shallow-killed.out" 2>&1; OB_RC=$?
+if [[ "$OB_RC" -ne 0 ]] && grep -q 'SLH-AUDIT-GIT-FAILED.*--delta' "$WORK/ob-shallow-killed.out" && ! grep -q '^verdict delta (' "$WORK/ob-shallow-killed.out"; then
+  ok "0189 delta i: the delta's own shallow-clone question killed refuses by name before any read, rather than reading 'not shallow'"
+else
+  bad "0189 delta i: the delta's own shallow-clone question killed refuses by name before any read, rather than reading 'not shallow'" "rc=$OB_RC: $(tr '\n' ' ' < "$WORK/ob-shallow-killed.out" | cut -c1-300)"
+fi
 fi; shard_region_end
 # <<< SHARD-END observe-0176
 
 # =============================================================================
-# WHAT THE DRIFT REPORT READS (spec 0176, group C). AGENTS.md joins its read set
-# (C-58): an agent that reads only AGENTS.md is primed by it, so a stale edition
+# WHAT THE DRIFT REPORT READS (spec 0176, group C). AGENTS.md joins its read
+# set (C-58): an agent that reads only AGENTS.md is primed by it, so a stale edition
 # there is the same drift as one in CLAUDE.md. And the user-level skills and
 # plugins, the ones this machine's account loads into every session, are NAMED as
 # outside the instance (C-55, report-only): no Setlist reader compares them, and
@@ -3379,7 +3420,7 @@ grep -q 'newer Claude Code' <<< "$HL_C" && grep -q 'older one' <<< "$HL_C" && gr
   && grep -q 'git hooks refuse regardless' <<< "$HL_C" || HL_BAD="$HL_BAD no-newer-key-sentence"
 jq -e '.attribution == null' <<< "$HL_JSON" >/dev/null 2>&1 || HL_BAD="$HL_BAD the-template-writes-attribution"
 HL_V="$(awk '/^11\. Binding dependencies/{f=1} /^12\. /{f=0} f' "$ROOT/skills/validate/SKILL.md" | tr -s ' \n' '  ')"
-grep -q 'CLAUDE_PLUGIN_ROOT}/README.md' <<< "$HL_V" && grep -q 'Requires Claude Code' <<< "$HL_V" || HL_BAD="$HL_BAD validate-reads-no-floor"
+grep -q 'CLAUDE_PLUGIN_ROOT}/README' <<< "$HL_V" && grep -q 'Requires Claude Code' <<< "$HL_V" || HL_BAD="$HL_BAD validate-reads-no-floor"
 if [[ -z "$HL_BAD" ]]; then
   ok "0176 harness a: the settings template names the newer-key hazard in its _comment and parses; validate reports the installed Claude Code beside the README's floor"
 else

@@ -25,7 +25,7 @@ reports; never edits source files and never closes a spec.
    frame is a FAIL even when the DOM assertions pass; compare against the spec's
    redline or mock when one is bound.
 5. Emit one PASS / PARTIAL / FAIL line per criterion with one line of evidence.
-   Honest PARTIALs: anything headless cannot exercise (disabled storage, native
+   Truthful PARTIALs: anything headless cannot exercise (disabled storage, native
    file dialogs) is a PARTIAL with the reason, leaning on unit coverage, never a
    claimed PASS.
 6. Print the finished output for pasting into the spec's Closing report, in two
@@ -47,8 +47,8 @@ reports; never edits source files and never closes a spec.
 - Stale service workers on PWA previews serve the PREVIOUS build. A preview
   that looks unchanged after a deploy is the commonest false FAIL here, and the
   commonest false PASS: a fixed bug can still reproduce, and a broken build can
-  still look fine. Hard-reload with the service worker unregistered, or run the
-  pass in a fresh context, before believing any result that contradicts the
+  still look fine. Hard-reload with the service worker unregistered, or run
+  the pass in a fresh context, before believing any result that contradicts the
   diff.
 - Write the hollow-check guard about COVERAGE, not selectors. "The selector
   matched" proves the element exists, not that the criterion holds: a card

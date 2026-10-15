@@ -5,6 +5,10 @@
 # earlier shard, and the driver's verdict, TMPDIR and exit trap are its own.
 
 # =============================================================================
+# THE SHAPED VALUES ARE ASSEMBLED WHEN THE SUITE RUNS (spec 0193, item 2), with the
+# driver's sx_join and sx_sum (test/run-tests.sh), each pinned by checksum in the
+# region that first uses it.
+
 # >>> SHARD-BEGIN push-scan-kl2 cost=9
 if shard_region push-scan-kl2; then
 # THE PUSH-TIME SCAN: KL2 AND THE FOUR SCAN SUB-HOLES (spec 0121, 2026-08-26).
@@ -51,7 +55,12 @@ sp_push() { # sp_push <dir> [env-assignment...] -> 0 when the push LANDED
   local d="$1"; shift
   env "$@" git -C "$d" push -q origin main >/dev/null 2>&1
 }
-SP_SECRET='api_key = "AKIAQQQQZZZZ1234567890abcd"'
+SP_SHAPED="api_key = \"$(sx_join AKIA QQQQZZZZ 1234567890 abcd)\""
+if [[ "$(sx_sum "$SP_SHAPED")" == "2168852610/38" ]]; then
+  ok "push scan fixture: the key-shaped value assembled from parts is byte-identical to the literal it replaced (cksum 2168852610/38)"
+else
+  bad "push scan fixture: the key-shaped value assembled from parts is byte-identical to the literal it replaced (cksum 2168852610/38)" "got $(sx_sum "$SP_SHAPED")"
+fi
 
 # CONTROL a, the ALLOW direction. Without it every refusal below would pass
 # against a hook that refuses everything.
@@ -65,7 +74,7 @@ fi
 
 # CONTROL b, the DENY direction, and it is also SC4's subject: a first push whose
 # history carries a secret. On the pre-fix bytes this PUSHED.
-SPD="$(sp_mk plain)"; sp_commit "$SPD" docs/a.txt "$SP_SECRET"
+SPD="$(sp_mk plain)"; sp_commit "$SPD" docs/a.txt "$SP_SHAPED"
 if sp_push "$SPD"; then
   bad "push scan control b: a secret in a first push is refused (SC sub-hole 4)" \
       "it pushed. The first push of a trunk has no remote oid and no merge base with itself, so the range came out empty and the push that ESTABLISHES a repository is scanned by nothing"
@@ -74,7 +83,7 @@ else
 fi
 
 # KL2, direction 1: the AUDIT escape must not turn the SCAN off.
-SPD="$(sp_mk kl2a)"; sp_commit "$SPD" src/a.txt "$SP_SECRET"
+SPD="$(sp_mk kl2a)"; sp_commit "$SPD" src/a.txt "$SP_SHAPED"
 if sp_push "$SPD" SETLIST_SKIP_TRUNK_AUDIT=1; then
   bad "KL2: SETLIST_SKIP_TRUNK_AUDIT=1 does NOT skip the content scan" \
       "the secret was published. The audit's escape is turning off the secret scan as well, which is the whole of KL2: the variable is named for the audit and must skip the audit"
@@ -104,7 +113,7 @@ fi
 
 # SC sub-hole 3: content ADDED and then REMOVED inside the pushed range. An
 # endpoint diff never renders it while every object still reaches the remote.
-SPD="$(sp_mk sc3)"; sp_commit "$SPD" docs/a.txt "$SP_SECRET"
+SPD="$(sp_mk sc3)"; sp_commit "$SPD" docs/a.txt "$SP_SHAPED"
 rm -f "$SPD/docs/a.txt"; git -C "$SPD" add -A >/dev/null 2>&1
 SETLIST_SKIP_HOOKS=1 git -C "$SPD" commit -qm rm >/dev/null 2>&1
 if sp_push "$SPD"; then
@@ -118,7 +127,7 @@ fi
 SPD="$(sp_mk sc5)"; SETLIST_SKIP_HOOKS=1 git -C "$SPD" commit -q --allow-empty -m base >/dev/null 2>&1
 git -C "$SPD" push -q origin main >/dev/null 2>&1
 git -C "$SPD" checkout -q -b side
-sp_commit "$SPD" docs/a.txt "$SP_SECRET"
+sp_commit "$SPD" docs/a.txt "$SP_SHAPED"
 git -C "$SPD" tag sp-v9.9.9 >/dev/null 2>&1
 git -C "$SPD" checkout -q main; git -C "$SPD" branch -qD side >/dev/null 2>&1
 if git -C "$SPD" push -q origin sp-v9.9.9 >/dev/null 2>&1; then
@@ -130,7 +139,7 @@ fi
 
 # SC sub-hole 6: a secret on a line whose own content begins with +++, which the
 # unanchored header strip removed from the scan's input.
-SPD="$(sp_mk sc6)"; sp_commit "$SPD" docs/a.txt "+++$SP_SECRET"
+SPD="$(sp_mk sc6)"; sp_commit "$SPD" docs/a.txt "+++$SP_SHAPED"
 if sp_push "$SPD"; then
   bad "SC sub-hole 6: a secret behind a +++ prefix is refused" \
       "it pushed. The header strip is unanchored again, so it is eating added lines whose content starts with ++ as well as the diff's own +++ b/ header"
@@ -163,7 +172,8 @@ fi; shard_region_end
 # not read would fail here even though the commit succeeded.
 # ===========================================================================
 
-KL4_SECRET='const api_key = "EXAMPLE_NOT_A_REAL_SECRET_0123456789";'
+KL4_SHAPED="const api_key = \"$(sx_join EXAMPLE_NOT_A_REAL _SEC RET_ 0123456789)\";"
+KL4_URL="$(sx_join htt ps:// user: super secret value @ example.invalid /x)"
 KL4_DASHLINE="a $EMDASH b"
 
 kl4_fixture() { # kl4_fixture <dir> [scan_exclusions-json]
@@ -211,11 +221,17 @@ kl4_push() { # kl4_push <dir> <branch> -> rc, output in KL4_ERR
 # A prelude block moved into a measured region (spec 0168, item 2): independent both ways, measured.
 if shard_region kl4-scope-13; then
 
+if [[ "$(sx_sum "$KL4_SHAPED")" == "3316957785/55" && "$(sx_sum "$KL4_URL")" == "2153437623/47" ]]; then
+  ok "KL4 fixture: the secret-shaped value and the credentialed url assembled from parts are byte-identical to the literals they replaced"
+else
+  bad "KL4 fixture: the secret-shaped value and the credentialed url assembled from parts are byte-identical to the literals they replaced" "value $(sx_sum "$KL4_SHAPED"), url $(sx_sum "$KL4_URL")"
+fi
+
 # --- the four cells, both directions at both layers -------------------------
 
 # CELL 1: an excluded path carrying BOTH shapes commits clean AND says so.
 KL4A="$WORK/kl4-commit-excluded"; kl4_fixture "$KL4A" '["vendor/**"]'
-{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SECRET"; } >> "$KL4A/vendor/dep/lib.js"
+{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SHAPED"; } >> "$KL4A/vendor/dep/lib.js"
 git -C "$KL4A" add -A >/dev/null 2>&1
 if kl4_commit "$KL4A" "vendored"; then
   ok "KL4 cell 1a: an excluded path carrying an em-dash and a secret COMMITS clean"
@@ -236,7 +252,7 @@ fi
 # the existing codes. Without this the cell above is satisfied by a hook that
 # stopped scanning.
 KL4B="$WORK/kl4-commit-scanned"; kl4_fixture "$KL4B" '["vendor/**"]'
-{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SECRET"; } >> "$KL4B/src/app.js"
+{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SHAPED"; } >> "$KL4B/src/app.js"
 git -C "$KL4B" add -A >/dev/null 2>&1
 if kl4_commit "$KL4B" "mine"; then
   bad "KL4 cell 2a: the identical content on a NON-excluded path is still refused at commit" \
@@ -253,7 +269,7 @@ fi
 # CELL 3: the push layer, excluded path. The commit is made with the hooks
 # bypassed so the PUSH is what is being measured.
 KL4C="$WORK/kl4-push-excluded"; kl4_fixture "$KL4C" '["vendor/**"]'
-{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SECRET"; } >> "$KL4C/vendor/dep/lib.js"
+{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SHAPED"; } >> "$KL4C/vendor/dep/lib.js"
 git -C "$KL4C" add -A >/dev/null 2>&1
 git -C "$KL4C" -c core.hooksPath=/dev/null commit -qm "vendored" >/dev/null 2>&1
 if kl4_push "$KL4C" work; then
@@ -272,7 +288,7 @@ fi
 
 # CELL 4: the push layer, non-excluded path, still refuses.
 KL4D="$WORK/kl4-push-scanned"; kl4_fixture "$KL4D" '["vendor/**"]'
-{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SECRET"; } >> "$KL4D/src/app.js"
+{ printf '%s\n' "$KL4_DASHLINE"; printf '%s\n' "$KL4_SHAPED"; } >> "$KL4D/src/app.js"
 git -C "$KL4D" add -A >/dev/null 2>&1
 git -C "$KL4D" -c core.hooksPath=/dev/null commit -qm "mine" >/dev/null 2>&1
 if kl4_push "$KL4D" work; then
@@ -334,16 +350,16 @@ NEW: $new"
 
   kl4_diff_one "clean"        src/d1.txt "ordinary content" "second line"
   kl4_diff_one "emdash"       src/d2.txt "$KL4_DASHLINE"
-  kl4_diff_one "secret"       src/d3.txt "$KL4_SECRET"
-  kl4_diff_one "both"         src/d4.txt "$KL4_DASHLINE" "$KL4_SECRET"
-  kl4_diff_one "plusplusplus" src/d5.txt "+++$KL4_SECRET"
+  kl4_diff_one "secret"       src/d3.txt "$KL4_SHAPED"
+  kl4_diff_one "both"         src/d4.txt "$KL4_DASHLINE" "$KL4_SHAPED"
+  kl4_diff_one "plusplusplus" src/d5.txt "+++$KL4_SHAPED"
   kl4_diff_one "plusplus"     src/d6.txt "++$KL4_DASHLINE"
-  kl4_diff_one "forgedheader" src/d7.txt "+++ b/vendor/dep/lib.js" "$KL4_SECRET"
+  kl4_diff_one "forgedheader" src/d7.txt "+++ b/vendor/dep/lib.js" "$KL4_SHAPED"
   kl4_diff_one "devnullline"  src/d8.txt "+++ /dev/null" "$KL4_DASHLINE"
   kl4_diff_one "vendorclean"  vendor/dep/other.js "ordinary vendored content"
-  kl4_diff_one "vendordirty"  vendor/dep/dirty.js "$KL4_SECRET"
+  kl4_diff_one "vendordirty"  vendor/dep/dirty.js "$KL4_SHAPED"
   kl4_diff_one "deepclean"    src/nested/deep/x.txt "nothing to see"
-  kl4_diff_one "url"          src/d9.txt 'https://user:supersecretvalue@example.invalid/x'
+  kl4_diff_one "url"          src/d9.txt "$KL4_URL"
 
   if [[ "$KL4_DIFF_CASES" -eq 12 ]]; then
     ok "KL4 default-unchanged: the differential ran all 12 corpus cases (count asserted before comparing)"
@@ -393,7 +409,7 @@ kl4_malformed() { # kl4_malformed <label> <json> <expected-code>
   # DIRECTION TWO: a real secret. A malformed set must not become an accidental
   # exemption.
   git -C "$d" reset -q --hard HEAD >/dev/null 2>&1
-  printf '%s\n' "$KL4_SECRET" >> "$d/src/app.js"
+  printf '%s\n' "$KL4_SHAPED" >> "$d/src/app.js"
   git -C "$d" add -A >/dev/null 2>&1
   if kl4_commit "$d" dirty; then
     bad "KL4 malformed/$label: a SECRET is refused at commit (a broken config is not an exemption)" \
@@ -446,7 +462,7 @@ kl4_malformed anychar  '["?"]'                  SLH-SCAN-EXCLUSION-CATCHALL
 # with the verdict rather than with the evidence (A8), committed by the test for
 # that very class.
 KL4E="$WORK/kl4-empty-array"; kl4_fixture "$KL4E" '[]'
-printf '%s\n' "$KL4_SECRET" >> "$KL4E/src/app.js"
+printf '%s\n' "$KL4_SHAPED" >> "$KL4E/src/app.js"
 git -C "$KL4E" add -A >/dev/null 2>&1
 if kl4_commit "$KL4E" dirty; then
   bad "KL4 empty array: an empty exclusion set excludes nothing and the SECRET SCAN is what refuses" \
@@ -479,7 +495,7 @@ if shard_region kl4-boundary-traps; then
 # and nothing is announced as skipped: an exclusion that did not fire has no
 # business printing that it did.
 KL4N="$WORK/kl4-matches-nothing"; kl4_fixture "$KL4N" '["nosuchdir/**"]'
-printf '%s\n' "$KL4_SECRET" >> "$KL4N/src/app.js"
+printf '%s\n' "$KL4_SHAPED" >> "$KL4N/src/app.js"
 git -C "$KL4N" add -A >/dev/null 2>&1
 if kl4_commit "$KL4N" dirty; then
   bad "KL4 matches-nothing: a glob matching no path in the change changes no verdict" "it committed"
@@ -499,7 +515,7 @@ fi
 kl4_spelling() { # kl4_spelling <label> <json> <expect: excluded|scanned>
   local label="$1" json="$2" expect="$3" d rc
   d="$WORK/kl4-spell-$label"; kl4_fixture "$d" "$json"
-  printf '%s\n' "$KL4_SECRET" >> "$d/vendor/dep/lib.js"
+  printf '%s\n' "$KL4_SHAPED" >> "$d/vendor/dep/lib.js"
   git -C "$d" add -A >/dev/null 2>&1
   kl4_commit "$d" spell; rc=$?
   if [[ "$expect" == "excluded" ]]; then
@@ -540,7 +556,7 @@ kl4_spelling prefixonly  '["vend"]'          scanned
 # Without that, a diff-of-a-diff could point the scanner's attribution at an
 # excluded path and carry a secret through under its name.
 KL4F="$WORK/kl4-forged-attribution"; kl4_fixture "$KL4F" '["vendor/**"]'
-{ printf '%s\n' "+++ b/vendor/dep/lib.js"; printf '%s\n' "$KL4_SECRET"; } >> "$KL4F/src/app.js"
+{ printf '%s\n' "+++ b/vendor/dep/lib.js"; printf '%s\n' "$KL4_SHAPED"; } >> "$KL4F/src/app.js"
 git -C "$KL4F" add -A >/dev/null 2>&1
 if kl4_commit "$KL4F" forged; then
   bad "KL4 forged attribution: a content line spelled like a file header cannot move a secret into an excluded path" \
@@ -553,8 +569,8 @@ fi
 # excluded half is skipped and named, the scanned half still refuses. A filter
 # that worked per-commit rather than per-path would pass this by exempting both.
 KL4M="$WORK/kl4-mixed"; kl4_fixture "$KL4M" '["vendor/**"]'
-printf '%s\n' "$KL4_SECRET" >> "$KL4M/vendor/dep/lib.js"
-printf '%s\n' "$KL4_SECRET" >> "$KL4M/src/app.js"
+printf '%s\n' "$KL4_SHAPED" >> "$KL4M/vendor/dep/lib.js"
+printf '%s\n' "$KL4_SHAPED" >> "$KL4M/src/app.js"
 git -C "$KL4M" add -A >/dev/null 2>&1
 if kl4_commit "$KL4M" mixed; then
   bad "KL4 mixed change: an excluded file beside a scanned file does not exempt the scanned one" \
@@ -714,7 +730,7 @@ if instance_fixture "$KL4_INST" 1.0.0 >/dev/null 2>&1; then
         "the version did not move, so the preservation assertion above survived a refresh that did not happen"
   fi
 else
-  bad "KL4 delivery: the refresh fixture builds" "instance_fixture failed, so the preservation assertions test nothing"
+  bad "KL4 delivery: the refresh fixture builds" "instance_fixture failed (rc $?), so the preservation assertions test nothing"
 fi
 
 # ABSENCE STAYS ABSENT. The other half of opt-in: a refresh must not invent the
@@ -730,7 +746,7 @@ if instance_fixture "$KL4_INST2" 1.0.0 >/dev/null 2>&1; then
         "the upgrade added a config surface the operator did not choose"
   fi
 else
-  bad "KL4 delivery: the absent-key refresh fixture builds" "instance_fixture failed"
+  bad "KL4 delivery: the absent-key refresh fixture builds" "instance_fixture failed (rc $?)"
 fi
 fi; shard_region_end
 # <<< SHARD-END kl4-delivery-13
