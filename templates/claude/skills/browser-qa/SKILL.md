@@ -22,8 +22,10 @@ reports; never edits source files and never closes a spec.
 3. One fresh browser context per scenario: a fresh context is a true first-run
    profile with its own empty storage. Never rely on clearing storage by hand.
 4. Screenshot key states and actually look at the screenshots. A blank or broken
-   frame is a FAIL even when the DOM assertions pass; compare against the spec's
-   redline or mock when one is bound.
+   frame is a FAIL even when the DOM assertions pass. When the spec carries a
+   `Design contract:`, read the committed redline and its artboard export under
+   `docs/design/` and report each value a screenshot contradicts by the
+   redline's decision id (Part 5c).
 5. Emit one PASS / PARTIAL / FAIL line per criterion with one line of evidence.
    Truthful PARTIALs: anything headless cannot exercise (disabled storage, native
    file dialogs) is a PARTIAL with the reason, leaning on unit coverage, never a

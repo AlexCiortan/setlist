@@ -1242,6 +1242,11 @@ if [[ -n "$(jq -r '.model // empty' "$INSTANCE/.claude/settings.json" 2>/dev/nul
   LEGACY_OP="$(sed -n 's/^opusplan_verified=//p' "$INSTANCE/.claude/stamp-answers.txt" 2>/dev/null | tail -n1)"
   [[ -z "$LEGACY_OP" ]] || printf '  .claude/stamp-answers.txt carries opusplan_verified=%s, the legacy yes or no: it names no model and is not migrated.\n' "$(obs_text "$LEGACY_OP")"
 fi
+# THE SYSTEM SPEC (2.14.0, spec 0200): reported, never judged. The one write
+# below merges into this file, so a recorded system_spec is kept as it is;
+# /setlist:validate reports whether it resolves. Absent, nothing is printed.
+SYSTEM_SPEC_SHOWN="$(jq -r 'if (.system_spec | type) == "string" then .system_spec else empty end' "$SDD" 2>/dev/null || true)" # fail-open-ok: a report line only; an unreadable value prints nothing and decides nothing
+[[ -z "$SYSTEM_SPEC_SHOWN" ]] || printf '.claude/sdd.json records the system spec: system_spec=%s (kept as it is; /setlist:validate reports whether it resolves).\n' "$(obs_text "$SYSTEM_SPEC_SHOWN")"
 # THE GIT-HOOK BOUNDARY IS REPORTED TOO (1.1.0 leg, fourth run, F21).
 #
 # GH_NEW, GH_CHANGED and GH_CFG_NEEDED were computed a hundred lines above and
@@ -1742,7 +1747,7 @@ esac
 # in both modes, with the tracked files by top-level directory beside it (the
 # retrofit skill's inventory scan, the same ranking, held equal by the suite);
 # nothing is rewritten, because which directory holds the code is the operator's.
-ROLE_SCAN_AWK='{ top = (NF > 1) ? $1 : "."; k = split($NF, part, "."); ext = (k > 1) ? tolower(part[k]) : "" } ext ~ /^(c|cc|cpp|cs|go|java|js|jsx|kt|m|mjs|php|py|rb|rs|scala|sh|swift|ts|tsx|vue|dart|ex|exs|clj|lua|r|sql|hs|ml|fs|elm|erl|zig)$/ { n[top]++ } END { for (d in n) printf "%d %s%s\n", n[d], d, (tolower(d) ~ /^(test|tests|spec|__tests__|e2e|testing)$/ ? " (tests)" : "") }'
+ROLE_SCAN_AWK='{ top = (NF > 1) ? $(1) : "."; k = split($NF, part, "."); ext = (k > 1) ? tolower(part[k]) : "" } ext ~ /^(c|cc|cpp|cs|go|java|js|jsx|kt|m|mjs|php|py|rb|rs|scala|sh|swift|ts|tsx|vue|dart|ex|exs|clj|lua|r|sql|hs|ml|fs|elm|erl|zig)$/ { n[top]++ } END { for (d in n) printf "%d %s%s\n", n[d], d, (tolower(d) ~ /^(test|tests|spec|__tests__|e2e|testing)$/ ? " (tests)" : "") }'
 ROLE_EMPTY=""
 while IFS= read -r ROLE_R; do
   ROLE_R="${ROLE_R%/}"

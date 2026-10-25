@@ -1,0 +1,9 @@
+# gym-api's pipeline: build and test on every push, deploy the trunk.
+stages: [test, deploy]
+test:
+  stage: test
+  run: node --test tests/*.test.js
+deploy:
+  stage: deploy
+  only: [main]
+  run: ./deploy.sh api

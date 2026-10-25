@@ -14,7 +14,10 @@
 #             (scripts/model-probe.sh's "served" lines; since 2.12.0), or,
 #             read for 2.12.0 only, the legacy opusplan_verified=yes|no
 #   Optional: src_role (default src), tests_role (default tests),
-#             mode=new|retrofit (default new)
+#             mode=new|retrofit (default new), and system_spec=<path or URL>
+#             (since 2.14.0: the system spec of a system of repositories,
+#             recorded in .claude/sdd.json as given; absent or empty writes
+#             no key)
 #
 # Substitution runs ONLY on templates named *.tmpl (suffix stripped at the
 # destination). Everything else, notably templates/hooks/ and templates/git-hooks/,
@@ -116,6 +119,13 @@ DESIGN_SURFACE="$(get design_surface)"
 SRC_ROLE="$(get src_role src)"
 TESTS_ROLE="$(get tests_role tests)"
 MODE="$(get mode new)"
+# THE SYSTEM SPEC (2.14.0, spec 0200, D4). A system of repositories has one
+# system spec (Part 4), and each repository's bootstrap-plan step stamps with
+# its path or URL, recorded in .claude/sdd.json as "system_spec" by --arg and
+# read back with the other values. It is a record: no hook reads it, the stamp
+# refuses nothing for it, and /setlist:validate reports whether it resolves.
+# Absent or empty, no key is written and the file is what it was before.
+SYSTEM_SPEC="$(get system_spec)"
 STAMP_DATE="$(date +%F)"
 
 [[ -n "$PROJECT_NAME" ]] || die "answers: project_name is required"
@@ -529,18 +539,20 @@ stamp_tmpl() { # stamp_tmpl <abs-src> <abs-dest>
 stamp_sdd_json() { # stamp_sdd_json <abs-src> <abs-dest>
   local field want got
   jq --arg src "$SRC_ROLE" --arg tests "$TESTS_ROLE" --arg trunk "$TRUNK" --arg version "$PLUGIN_VERSION" \
-    --arg pm "$PLANNING_MODEL" --arg em "$EXECUTION_MODEL" \
+    --arg pm "$PLANNING_MODEL" --arg em "$EXECUTION_MODEL" --arg ss "$SYSTEM_SPEC" \
     '.roles.src = $src | .roles.tests = $tests | .trunk = $trunk | .plugin.version = $version
      | ({planning: $pm, execution: $em} | with_entries(select(.value != ""))) as $m
-     | if ($m | length) > 0 then .models = $m else . end' \
+     | if ($m | length) > 0 then .models = $m else . end
+     | if $ss != "" then .system_spec = $ss else . end' \
     "$1" > "$2" \
     || die "could not build .claude/sdd.json from templates/claude/sdd.json.tmpl with jq; the files listed above this line may already be stamped, and this instance has no usable config."
-  for field in roles.src roles.tests trunk plugin.version; do
+  for field in roles.src roles.tests trunk plugin.version $([[ -n "$SYSTEM_SPEC" ]] && printf 'system_spec'); do
     case "$field" in
       roles.src) want="$SRC_ROLE" ;;
       roles.tests) want="$TESTS_ROLE" ;;
       trunk) want="$TRUNK" ;;
       plugin.version) want="$PLUGIN_VERSION" ;;
+      system_spec) want="$SYSTEM_SPEC" ;;
     esac
     got="$(jq -r ".$field" "$2" 2>/dev/null || true)" # fail-open-ok: an unreadable file reads empty and differs, which refuses below
     [[ "$got" == "$want" ]] \
@@ -807,6 +819,9 @@ if [[ "$MODELS_LEGACY" -eq 1 ]]; then
   echo "stamp.sh: NOTICE: the answers carry opusplan_verified, a yes or a no that names no model; it is read for this release only. Record the probe's ids as planning_model and execution_model (scripts/model-probe.sh prints them), so .claude/sdd.json records what each phase served."
 else
   echo "stamp.sh: recorded the served models in .claude/sdd.json: planning=${PLANNING_MODEL:-not read}, execution=${EXECUTION_MODEL:-not read}"
+fi
+if [[ -n "$SYSTEM_SPEC" ]]; then
+  echo "stamp.sh: recorded the system spec in .claude/sdd.json: system_spec=$(LC_ALL=C; v="$SYSTEM_SPEC"; b="${v//[^A-Za-z0-9._\/ :+=@-]/?}"; e=""; [ "$b" = "$v" ] || e=" (characters outside a path set replaced with ?)"; [ "${#b}" -le 200 ] || { b="${b:0:200}"; e="$e (cut at 200 characters)"; }; printf '"%s"%s' "$b" "$e")"
 fi
 if [[ ${#SKIPPED[@]} -gt 0 ]]; then
   echo "stamp.sh: skipped existing files (retrofit; phase 2 merges by hand):"

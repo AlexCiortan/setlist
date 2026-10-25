@@ -556,7 +556,9 @@ baseline_refused "0157 baseline d1: an orphan tip audited under a declared basel
 # tells an instance with pre-boundary history what changed for it. A checker
 # that knows only the present direction leaves the refused instance, which is
 # the one the key exists for, with nothing said about it.
-BL_VS="$ROOT/skills/validate/SKILL.md"
+# Step 18's full text lives in the skill's references file since spec 0204 (C-83, the
+# compaction budget); SKILL.md keeps its number, title and pointer.
+BL_VS="$ROOT/skills/validate/references/checks.md"
 if grep -q 'audit.baseline' "$BL_VS" \
    && awk '/^18\./{f=1} /^19\./{f=0} f' "$BL_VS" | grep -q 'audit.baseline'; then
   ok "0157 validate e1: step 18 carries the baseline part, beside the three that were already there"
@@ -598,7 +600,7 @@ else
   bad "0167 validate e5: step 18 reads the baseline through the refresh's report mode, the audit's own function" \
       "step 18 does not route the question through refresh-instance.sh and slh_baseline_frame"
 fi
-if grep -q 'audit.baseline' "$ROOT/skills/upgrade/SKILL.md"; then
+if grep -rq 'audit.baseline' "$ROOT/skills/upgrade/"; then   # SKILL.md or its references/ (spec 0204)
   ok "0157 upgrade e4: the upgrade skill tells an instance with pre-boundary history what the migration commit records"
 else
   bad "0157 upgrade e4: the upgrade skill tells an instance with pre-boundary history what the migration commit records" \
@@ -1704,6 +1706,81 @@ ag_refused "0189 git h: the shallow-clone question killed refuses by name rather
 AGD="$WORK/ag-i"; ag_base "$AGD" page; git -C "$AGD" tag main "$(cat "$AGD.since")"
 ag_audit "$AGD"
 expect_script "0189 git i: a tag named like the trunk does not turn the audit onto the tag's history; the direct commit is a violation" 1 "1 violations"
+
+# --- C-84 (spec 0203, item 1): A REPLACE REF CANNOT SHOW THE AUDIT ANOTHER COMMIT ----------------
+# git substitutes a refs/replace/* object wherever it reads a commit, and a push sends the original.
+# So a direct feature commit V at the trunk's tip, replaced by V' (the stamp's tree, "docs only"),
+# read clean to an audit and a pre-push that honoured replace refs, while the remote received V.
+# The library and the audit export GIT_NO_REPLACE_OBJECTS=1, so every git read sees V. Red first:
+# before the export the hand-run audit read rc 0 and the armed push landed V.
+rr_mk() { # rr_mk <dir>: stamp, then V (src/a.js, the tip), V replaced by V'; armed hooks; a bare remote
+  local d="$1" vp
+  rm -rf "$d" "$d.git"; git_init "$d"; mkdir -p "$d/src" "$d/specs" "$d/.claude/hooks" "$d/.githooks"
+  printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$d/.claude/sdd.json"
+  printf '| Num | Title | Status |\n| --- | --- | --- |\n' > "$d/specs/STATUS.md"
+  cp "$ROOT/templates/git-hooks/pre-push" "$ROOT/templates/git-hooks/setlist-hook-lib.sh" \
+     "$ROOT/templates/git-hooks/pre-commit" "$ROOT/templates/git-hooks/pre-merge-commit" "$d/.githooks/"
+  cp "$SCRIPTS/trunk-audit.sh" "$d/.claude/hooks/trunk-audit.sh"
+  chmod +x "$d/.githooks/pre-push" "$d/.githooks/pre-commit" "$d/.githooks/pre-merge-commit"
+  git -C "$d" add -A && git -C "$d" -c core.hooksPath=/dev/null commit -qm stamp
+  git -C "$d" rev-parse HEAD > "$d.since"
+  printf 'code\n' > "$d/src/a.js"; git -C "$d" add -A && git -C "$d" -c core.hooksPath=/dev/null commit -qm "V: feature code direct"
+  vp="$(git -C "$d" commit-tree "$(git -C "$d" rev-parse "HEAD~1^{tree}")" -p HEAD~1 -m "docs only" </dev/null)"
+  git -C "$d" replace HEAD "$vp"
+  git -C "$d" config core.hooksPath .githooks
+  git init -q --bare "$d.git"; git -C "$d" remote add origin "$d.git"
+}
+RRD="$WORK/rr-replaced"; rr_mk "$RRD"
+if [[ "$(git -C "$RRD" log -1 --format=%s main)" == "docs only" && "$(GIT_NO_REPLACE_OBJECTS=1 git -C "$RRD" log -1 --format=%s main)" == "V: feature code direct" ]]; then
+  ok "0203 replace (fixture): git log shows the replacement, and git with replace refs ignored shows V"
+else
+  bad "0203 replace (fixture): git log shows the replacement, and git with replace refs ignored shows V" "$(git -C "$RRD" log -1 --format=%s main) / $(GIT_NO_REPLACE_OBJECTS=1 git -C "$RRD" log -1 --format=%s main)"
+fi
+run_script bash "$SCRIPTS/trunk-audit.sh" "$RRD" --since "$(cat "$RRD.since")"
+expect_script "0203 replace a: the hand-run audit reads the original commit behind a replace ref and refuses it" 1 "VIOLATION"
+RR_OUT="$(git -C "$RRD" push origin main 2>&1)"; RR_RC=$?
+if [[ "$RR_RC" -ne 0 ]] && ! git -C "$RRD.git" rev-parse -q --verify refs/heads/main >/dev/null 2>&1 && grep -q 'VIOLATION' <<< "$RR_OUT"; then
+  ok "0203 replace b: the armed pre-push refuses the unspecced commit a replace ref hides, and the remote is untouched"
+else
+  bad "0203 replace b: the armed pre-push refuses the unspecced commit a replace ref hides, and the remote is untouched" "rc=$RR_RC remote main: $(git -C "$RRD.git" rev-parse -q --verify refs/heads/main 2>/dev/null || echo none) $(grep -E 'VIOLATION|SLH-|clean' <<< "$RR_OUT" | head -3 | tr '\n' ' ' | cut -c1-200)"
+fi
+# control: the same instance with the stamp alone at the tip pushes clean, replace ref or not
+RRC="$WORK/rr-control"; rr_mk "$RRC"; git -C "$RRC" replace -d "$(git -C "$RRC" rev-parse HEAD)" >/dev/null
+git -C "$RRC" -c core.hooksPath=/dev/null reset -q --hard HEAD~1
+if git -C "$RRC" push -q origin main >/dev/null 2>&1; then
+  ok "0203 replace c (control): with the feature commit gone the same armed instance pushes clean"
+else
+  bad "0203 replace c (control): with the feature commit gone the same armed instance pushes clean" "the push was refused"
+fi
+# d (spec 0205, the 2.14.0 leg's F1): pre-push read the pushed tip for .claude/sdd.json BEFORE it sourced
+# the library that sets GIT_NO_REPLACE_OBJECTS=1, so a replacement whose tree drops .claude/, pushed from a
+# checkout without .claude/sdd.json, read as ungoverned and exited 0 with V on the remote. The leg's payload,
+# with its control (the same checkout, no replace ref) refused.
+rr_noclaude() { # rr_noclaude <dir> <replace|plain>: V on main, optionally replaced by a tree without .claude, then an orphan checkout without it
+  local d="$1" t vp
+  rr_mk "$d"; git -C "$d" replace -d "$(GIT_NO_REPLACE_OBJECTS=1 git -C "$d" rev-parse HEAD)" >/dev/null
+  if [[ "$2" == replace ]]; then
+    t="$(git -C "$d" ls-tree HEAD | grep -v "$(printf '\t').claude\$" | git -C "$d" mktree)"
+    vp="$(git -C "$d" commit-tree "$t" -p HEAD~1 -m "docs only" </dev/null)"
+    git -C "$d" replace HEAD "$vp"
+  fi
+  git -C "$d" -c core.hooksPath=/dev/null checkout -q --orphan side
+  git -C "$d" rm -rfq --cached . >/dev/null
+  rm -rf "${d:?}/.claude" "${d:?}/specs" "${d:?}/src"
+}
+RRN="$WORK/rr-noclaude"; rr_noclaude "$RRN" replace
+RR_OUT="$(git -C "$RRN" push origin main 2>&1)"; RR_RC=$?
+if [[ "$RR_RC" -ne 0 ]] && ! git -C "$RRN.git" rev-parse -q --verify refs/heads/main >/dev/null 2>&1; then
+  ok "0205 F1 replace d: a replacement without .claude/, pushed from a checkout without .claude/sdd.json, is still audited and refused"
+else
+  bad "0205 F1 replace d: a replacement without .claude/, pushed from a checkout without .claude/sdd.json, is still audited and refused" "rc=$RR_RC remote main: $(git -C "$RRN.git" rev-parse -q --verify refs/heads/main 2>/dev/null || echo none) $(tr '\n' ' ' <<< "$RR_OUT" | cut -c1-200)"
+fi
+RRP="$WORK/rr-noclaude-plain"; rr_noclaude "$RRP" plain
+if ! git -C "$RRP" push -q origin main >/dev/null 2>&1 && ! git -C "$RRP.git" rev-parse -q --verify refs/heads/main >/dev/null 2>&1; then
+  ok "0205 F1 replace e (control): the same checkout and push with no replace ref is refused"
+else
+  bad "0205 F1 replace e (control): the same checkout and push with no replace ref is refused" "the push landed"
+fi
 fi; shard_region_end
 # <<< SHARD-END audit-git-0184
 

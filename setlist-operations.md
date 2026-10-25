@@ -1,4 +1,4 @@
-**Edition v1.21 (the delegation edition)**
+**Edition v1.22 (the session-zero edition)**
 
 This is the second of the edition's three files, Parts 7 to 10 and Appendices A to C;
 `setlist.md` holds the core (Parts 1 to 6) and `setlist-changelog.md` the Changelog.
@@ -15,17 +15,26 @@ This is the generic day-to-day manual. Bootstrap (Part 8, Step 5) turns it into 
    want." The Planner re-grounds from STATUS.md (the stamped re-grounding hook injects the
    pointer at session start, Part 6), ground-truths the premise against the code, asks one
    structured round for any real forks, and proposes the spec. Design-heavy entries route
-   through the design intake first (Part 5c) and are specced against the locked redline. You
+   through the design intake first (a `/design` session, Part 5c) and are specced against the
+   locked redline committed under `docs/design/`. You
    approve. The session leaves plan mode, and the Builder writes the spec from
-   `specs/TEMPLATE.md`, updates the inventory and commits. **The pre-build reading (new in
+   `specs/TEMPLATE.md`, updates the inventory and commits on the trunk. **The pre-build reading (new in
    v1.21)** follows at once: the stamped `spec-reader` agent, read-only and on the delegated
    tier (Part 2), reads the written spec and its owner docs as the Builder will and lists the
-   questions it would still need to ask, each tied to a line. The Planner answers each in the
+   questions it would still need to ask, each tied to a line. It also reads the Assumptions
+   sections of those owner docs and lists every assumption the spec depends on that the engineer
+   has not approved (new in v1.22). The Planner answers each in the
    spec or dismisses it with a reason, before the spec goes ACTIVE. It is advice: no hook and
    no gate reads it, and "No questions." is an answer.
-2. **Branch.** `/setlist:checkpoint` opens `spec/NNNN-<slug>`. If a split was pre-agreed at
-   plan time, the sibling number is already decided (Part 6, the suffix convention). Read the
-   STATUS STATE of anything this spec depends on: only CLOSED means the work is on the trunk.
+2. **Branch.** `/setlist:checkpoint` makes the opening flip on the trunk and pushes it, after
+   the ask, before anything else (new in v1.22, Part 5): the spec reads ACTIVE on the trunk with
+   its `Spec-hash:` and its `Driver:` line. Only then does it open `spec/NNNN-<slug>`, and it
+   refuses to open one whose spec the trunk does not carry at ACTIVE. It prints the visibility block
+   (new in v1.22): what landed on the trunk, what was pushed, who can see it now, and what is
+   still only local, so you know whether a teammate can see the spec is taken. If a split was
+   pre-agreed at plan time, the sibling number is already decided (Part 6, the suffix
+   convention). Read the STATUS STATE of anything this spec depends on: only CLOSED means the
+   work is on the trunk.
 3. **Build.** "Build NNNN." The Builder implements in small spec-scoped commits and runs the
    gates as it goes. Real ambiguities get parked in STATUS.md's open questions and surfaced to
    you, and they are never improvised. You answer inline, or flip into plan mode if the answer
@@ -36,11 +45,12 @@ This is the generic day-to-day manual. Bootstrap (Part 8, Step 5) turns it into 
    spec's Closing report.
 5. **QA Pass 2.** Use the feature yourself, in context, for several minutes. Spot-check at
    least one criterion the verifier passed. Design-heavy specs also complete design QA
-   against the locked mock (Part 5c).
+   against the committed redline and its artboard export (Part 5c).
 6. **Close.** Complete the Closing report: deviations, test counts, the diagram field, and
    follow-up chores or parking-lot rows. Write a journal entry if the session was
    substantive. `/setlist:checkpoint` runs the close checks and merges with `--no-ff`, and the
-   merge hook refuses an incomplete close. STATUS.md names the next action. Under a declared
+   merge hook refuses an incomplete close. The visibility block says what the close put on the
+   trunk and what is still only local. STATUS.md names the next action. Under a declared
    release model, this is also where a version bump rides the close commit (`version-file`),
    or where the release notes learn what this spec added (`tags`). Under `none`, neither
    applies and nothing is owed. If the close pushed to the trunk, the CI run it triggered is
@@ -54,10 +64,15 @@ exactly where its writes happen. The spec's entry lands at the cut, beside its S
 Every lifecycle flip updates the one token in the same commit as the row edit. As the build
 acquires role-path files, checkpoint appends `Owns:` lines to the spec header (Appendix C), one
 verbatim repo-relative file each. It refuses a glob or a directory at declaration time,
-because a declared set you cannot enumerate is an exemption wearing a declaration. Under
+because a declared set you cannot enumerate is an exemption wearing a declaration. At each append
+it reports who else declares the file (new in v1.22): every other ACTIVE spec on the trunk and
+every spec on a remote `spec/` branch, read by the board's script, with the close's remedy. The
+report refuses nothing; the close-time refusal stays the guarantee. Under
 declared attestation custody those appends drift the hash, the SessionStart warning fires, and
 re-attestation happens at the next checkpoint, WHERE THE HUMAN ALREADY IS: the ownership set is
-precisely a thing an approver should re-approve. At the close, checkpoint DRAFTS the Closing
+precisely a thing an approver should re-approve. With attestation off the appends drift the hash
+too, and checkpoint refreshes it in the append's commit through `spec-hash.sh --refresh-owns`,
+which prints each appended file and both digests and refuses any other edit (new in v1.22). At the close, checkpoint DRAFTS the Closing
 report from what the record and the tree already hold (new in v1.14). It scaffolds the QA
 verdict block one line per criterion with the verdict left blank, writes what was built from
 the branch's commit subjects, takes test counts from the gate run where the runner prints them,
@@ -178,7 +193,8 @@ Five steps, in order:
    integrable (invariant (a), Part 6). A gate asks whether the trunk is healthy, and whether it
    has been released is invariant (b), a separate question. Skim the Closing reports of specs
    closed since the last transition, for deviations and follow-ups only. Where a design surface
-   exists, run **/insights** over its record (Part 5c). The repo as it exists is the ground
+   exists, read its committed record, `docs/design/INDEX.md` and the redlines locked since the
+   last transition, for drift (Part 5c). The repo as it exists is the ground
    truth, and the roadmap's assumptions are not.
 2. **Verify the gate, leg by leg.** Quote each leg and state PASS or FAIL with evidence. The
    human answers the usage and desire legs, and their answers are the evidence. If ANY leg
@@ -295,7 +311,8 @@ UI. This is how they bind:
   deviation ratification and overrides are human decisions. A headless run that reaches one
   parks it (an open question in STATUS.md, or a resume note) and ends cleanly. It never
   certifies itself. The hooks make the mechanical subset unbypassable, and everything else
-  waits for a human session.
+  waits for a human session. A design intake is interactive by mechanism as well: artifacts
+  are off under `claude -p`, so a headless run never drafts a `/design` canvas (Part 5c).
 - **CI is the team binding of the same gates, and since v1.14 it is a stamped one.** The forge
   check (`.claude/hooks/forge-check.sh`, run by the stamped
   `.github/workflows/setlist-forge-check.yml` as the required status check `setlist forge
@@ -337,14 +354,44 @@ UI. This is how they bind:
 > file set from Part 3, customized as follows.
 
 ### Step 1 - Interview the user (ask, don't assume)
-Use one structured round of several questions where possible, and only real forks become
-questions. Gather:
+Session zero opens by stating its contract (new in v1.22). It is an architecture session the
+engineer drives, not a wizard. Its first message says so right after the model line (Part 2),
+before any question, in three sentences. What the agent decides only with the engineer's approval:
+the stack, the core data model, the scope, and every default it writes down. What it never decides
+for them: boundaries, data ownership, the repository split, and anything with a cost. And how to go
+deeper: "ask me anything at the level you work at; I keep going until you stop me."
+
+A high-level idea is derived before anything is proposed (new in v1.22). The idea is high-level when
+the agent cannot name the deployables, the users and the core data from what it was told. Then it
+first derives the decisions the idea leaves open and asks them in order of consequence, three at a
+time, before it proposes a stack, a model or a scope. Part 2's stopping rule does not apply until
+the derivation is done, and the decisions it finds are the register's first lines.
+
+Every decision the idea leaves open is a question or a stated default (new in v1.22). Ask the
+questions in structured rounds of several, each with its recommendation inline. Write each default
+as a line of the assumption register: an id (`A-07`), the decision, the default taken, why, and the
+question that would change it. The engineer answers each line inline: keep, change, or ask me later.
+A line left for later reads "ask me later" as its default and "not set" as its why, in the chat as
+on disk. Nothing is assumed silently. Part 2's stopping rule bounds the rounds of questions, never the
+register. Gather:
 - **What has changed since the framework's last use**: the tooling, the model lineup, the
   workflow. Ask this first, because it surfaces structural drift the rest of the interview
   will not.
+- **The sizing** (new in v1.22), asked second, on three axes: the deployables (one; several,
+  each with its own pipeline; or an existing estate), who else builds here (solo, a team,
+  several teams), and what already exists (nothing, a prototype, production). The answers
+  select the mode and its rounds (below). They are written into `product.md` as the sizing
+  line and into the answers file as `sizing=`.
 - **The product:** what it is, the core user job, the one-sentence pitch.
 - **The developer:** their skills and, crucially, **whether they write code or only review.**
 - **Constraints:** budget, solo or team, time, and legal, safety and privacy concerns.
+- **The team round** (new in v1.22), where the answer is team: who else builds here and how many
+  at once; whether the trunk is protected and by what (a ruleset, required reviews); who approves
+  a spec; who may flip it ACTIVE; and what happens to a claim nobody touches for N days. The
+  answers write a Team section in `product.md`. Who may flip ACTIVE feeds Step 2's attestation
+  question, whose default stays OFF, and the stale-claim answer is `stale_days` in
+  `.claude/sdd.json` (Part 3). The CODEOWNERS owner and the headless-build question stay as they
+  are.
 - **Environment:** the OS, languages, hosting, and anything mandated. Claude Code is assumed.
   Confirm that `opusplan` actually *resolves* in the environment by running it in each phase
   and reading the model each served. Access on paper is not resolution in practice, and a
@@ -356,15 +403,84 @@ questions. Gather:
   headless Chromium; on Linux and WSL that means the system libraries, a one-time install.
   For other stacks: terminal capture, HTTP assertions. This decides what shape acceptance
   criteria take.
-- **The design surface** (UI projects): will a dedicated design project exist (Part 5c)? If
-  yes, `docs/design/` is part of the file set, and design-heavy entries route through it.
+- **The design surface** (UI projects): will design-heavy entries route through Claude
+  Code's `/design` (Part 5c)? Yes commits the instance to three things: each design intake is
+  an interactive `/design` session; each locked redline and its artboard exports are committed
+  under `docs/design/` before the spec that builds to it goes ACTIVE; and design QA reads the
+  committed redline. `/design` needs a claude.ai sign-in with the Design template on; an
+  instance without it can still answer yes and commit mocks made another way. With yes,
+  `docs/design/` is part of the file set.
+- **The pipelines** (new in v1.22): which deployables the system has, and for each its build
+  and release pipeline, its release cadence and the team that owns it. The answer decides the
+  repository split (Step 2).
 - **The riskiest assumption** worth a spike.
+
+#### The depth modes (new in v1.22)
+
+The sizing selects one of three modes, and the agent says
+which, and what it will ask, once the sizing is answered:
+- **Ordinary**, for one deployable: the round above, as it stands. Part 2's stopping rule applies
+  as written: one round is right, two is fine, three is procrastination.
+- **Deep**, for several deployables: the round above, then the deep rounds below, one topic per
+  round. Each round ends with two written lists, what was decided and what stays open, and
+  every open item is a register line or an open question.
+- **Estate**, for a system that already runs as several repositories: deep, plus the estate
+  inventory of Part 8b Step 1, which reads the sibling repositories before the deep rounds ask
+  about them.
+
+The engineer may ask for deep on one deployable; the agent never forces it there. In deep and
+estate the stopping rule is per round: a round ends when its decisions are written or the
+engineer says enough, never when the agent runs out of defaults. One round per topic is right,
+a second on a hard topic is fine, and a third on the same topic is procrastination.
+
+#### The deep rounds (new in v1.22, deep and estate modes only)
+
+Six rounds, in this order, one topic each. None is asked in the ordinary mode. Each writes into a
+steering document the stamp already emits, so the steering set does not grow.
+- **Boundaries and ownership.** Which components exist, what each owns (data, decisions, a
+  user-facing surface), what crosses each boundary, and who may change a boundary. Ask for the
+  three hardest boundaries first, and name the ones you would otherwise have assumed. Where the
+  system has end users, ask how they sign in and which component owns their identity. It writes
+  the component list into `structure.md` beside the core model and the L2 view, with one owner
+  line per component and a named owner for every piece of state.
+- **Contracts between components.** For every crossing: the protocol (HTTP, events, a queue, a
+  shared table), the shape (a schema, or a reference to one), versioning and compatibility, and
+  who publishes the contract and where it lives. Propose a `contracts/` location and record it;
+  the session creates no directory. No crossing is left without a named contract or an open
+  question. A crossing between two OTHER repositories is an open question by id, owned by the
+  session of the repository that publishes its contract, and carried like any other open
+  question. It writes one contract line per crossing into `structure.md`, beside the components.
+- **Data.** Where each kind of record lives, which copy is the truth, the consistency each user
+  flow needs (strong, eventual or best effort, asked per flow and never per table), how schemas
+  migrate and who runs the migrations, and retention and privacy per store. It writes `state.md`,
+  which becomes data, persistence and the request lifecycle (Customization, below).
+- **Pipelines and deployment.** One pipeline per deployable or one shared; the build and test
+  stages; the environments; who approves a deploy; rollback; secrets; and whether a deploy of one
+  component forces a deploy of another. The commands go into `RUNBOOK.md` (Step 5) and the rules
+  into `tech.md`, and the full-suite command of each repository is named for `/scaffold` to record
+  as that instance's `gate_command`. In deep mode this round takes the place of the pipelines
+  bullet above, and its answers decide the repository split (Step 2).
+- **Failure modes and the riskiest integration.** For each crossing: what happens when the other
+  side is down, slow or wrong; timeouts, retries, idempotency and dead letters. Then the one
+  integration most likely to fail, and the spike that proves it. In deep and estate mode this
+  round replaces the single riskiest-assumption bullet above with one question per crossing; the
+  ordinary mode keeps the bullet. It writes a failure line beside each crossing's contract line
+  in `structure.md`, and Step 4's spike 0000 is scoped from the riskiest integration.
+- **Observability and operations**, asked last because it is the round skipped under time
+  pressure and the one regretted after: logs, metrics and traces per component, correlation ids
+  across crossings, on-call and alerting, and the dashboards that must exist before launch. It
+  writes an Operations section in `tech.md`.
 
 ### Step 2 - Make the foundational decisions WITH the user
 - **The stack**, and what was rejected and why -> `tech.md`.
 - **The core data model or central abstraction**, the single most important design decision
   -> `structure.md`. Spend the most effort here, and include the initial architecture diagram.
 - **Scope and the explicit out-of-scope list** -> `product.md`.
+- **The repository split** (new in v1.22), from the pipelines answer -> `product.md`. Propose one
+  repository per deployable that needs its own pipeline, release cadence or team, and one
+  repository, a monorepo, where the deployables share all three. Name the trade: each repository
+  is its own instance under its own hooks, and a change that spans them becomes one spec in each.
+  Record the choice and its reason.
 - **The working mode** (writes code, or only reviews) -> spec strictness and `review.md`.
 - **The approval attestation: ask, and the DEFAULT IS OFF** (new in v1.11). Ask one
   question: "will anything build this project headlessly, in CI or under `claude -p`?" If no,
@@ -389,12 +505,41 @@ Generation splits by information content. Files whose content the framework fixe
 mechanically, and files whose content encodes the Step 2 decisions are written by the model.
 Never hand-write what a stamp can emit, and never stamp what a decision shapes.
 
+#### A system of repositories (new in v1.22)
+
+Where Step 2's repository split named two or more repositories, the session writes the system
+spec first (Part 4), in the system repository: `system.md` with the bootstrap plan in it, the
+contract files the contracts round named under `contracts/`, and the system's founding ADRs.
+Before it walks the plan it checks each contract file it wrote against its own format (an OpenAPI
+document with an OpenAPI linter, a JSON Schema with a schema validator, at the least a parse) and
+fixes what fails, so no repository is stamped against a contract that does not validate. Then it
+walks the plan: Phase 1 and Phase 2 below, once per repository, in the plan's order.
+Each repository's spec 0001 carries a `Cites:` line naming `system.md`. A system of one
+repository skips this paragraph.
+
+The **bootstrap plan** is a `## Bootstrap plan` section of `system.md`: one numbered step per
+repository, in stamp order. The system repository's documents come first, then each repository
+the split named, a contract's publisher before its consumers. Each step names the repository's
+directory (a sibling path such as `../api`), its role paths (agreed in the interview, or read
+from its layout in a retrofit), its gate command from the pipelines round, for `/scaffold` to
+record, and its `system_spec`, the system spec's path as that repository sees it
+(`../shop-system/system.md`) or its URL. For each step the session writes that repository's
+answers file with the `system_spec=` line, runs the Phase 1 stamp into its directory, writes
+its Phase 2 and its spec 0001, and reports one progress line: `plan step 2 of 3, api: stamped
+(exit 0), phase 2 written, spec 0001 cites ../shop-system/system.md`. A stamp exit other than 0,
+or a step that cannot be written, stops the plan at that step: the session names it with the
+stamp's own message and lists the steps left undone. Resuming is that step, re-run after the
+fix. The list is complete and the session walks it; no script loops over it. Because the plan
+is in `system.md`, a later session reads where the bootstrap stands, and each step is marked done
+there as it lands, the system repository's own commit included.
+
 #### Phase 1, the mechanical stamp (zero model tokens)
 
 With the plugin installed, `/setlist:new` writes a small answers file from the interview: the
 project name, the stack, the working mode, UI or not, the model each `opusplan` phase served,
-the design surface, and the src and tests role paths. It invokes the bundled stamp script
-once. The stamp emits every file the framework fixes:
+the design surface, the src and tests role paths, the sizing (`sizing=`, the mode Step 1
+selected, a record the stamp does not read) and, in a system of repositories, `system_spec=`,
+which the stamp records in `.claude/sdd.json` and reads back (new in v1.22). It invokes the bundled stamp script once. The stamp emits every file the framework fixes:
 - the directory tree;
 - **`specs/TEMPLATE.md`, extracted verbatim from the bundled edition's Appendix C at stamp
   time**, never a second copy someone maintains;
@@ -405,7 +550,8 @@ once. The stamp emits every file the framework fixes:
 - **`.claude/settings.json` with `opusplan` (only if verified), the fallback chain, the
   permission rules and the hook wiring**;
 - **`.claude/sdd.json`**: the role paths, the gate command `/scaffold` fills, the `gates`
-  block with three empty tiers `/scaffold` records, and the `scaffolded` flag;
+  block with three empty tiers `/scaffold` records, the `scaffolded` flag, and `system_spec`
+  where the answers carry one;
 - **`.claude/status.json`, the status record (new in v1.12), so a stamped instance is
   structured from birth**. It is born with `setlist_status: 1` and empty maps, valid against
   the grammar the gates read, and `/setlist:checkpoint` is its one writer from the first spec
@@ -422,7 +568,8 @@ once. The stamp emits every file the framework fixes:
   `.claude/agents/spec-reader.md` agent (the pre-build reading, Part 7, v1.21);
 - **the framework markdown itself, committed into the repo** as the audit trail of which
   edition governed which work (upgrades replace it, Part 8c);
-- `docs/design/INDEX.md` as a stub, for UI projects with a design surface;
+- `docs/design/INDEX.md` as a stub, for UI projects with a design surface, naming the
+  surface and the export step;
 - **`templates/root/DIAGRAM-HEADER.md`'s four-line header, the shape every diagram file opens
   with (new in v1.15)**, which the stamp carries and phase 2 uses;
 - an empty `journal/`;
@@ -458,10 +605,16 @@ state for a project born under this edition, and a user who wants to start witho
 the directory.
 
 ### Step 4 - Write the first specs
-Write a **spike (0000)** for the riskiest assumption, if there is one; **0001**, the
+Write a **spike (0000)** for the riskiest assumption, if there is one (in deep and estate mode,
+for the riskiest integration the failure-modes round named); **0001**, the
 foundational feature, which usually establishes and exercises the core model; and
 **0002-0003**, the next solid features. Later features become DRAFTs with their assumptions
-listed, or parking-lot rows. Match strictness to the working mode.
+listed, or parking-lot rows. Match strictness to the working mode. Every register line the engineer
+answered "ask me later" is carried by spec 0001 under an `## Open questions` heading, by its id,
+and STATUS.md's open questions for the Planner name the same ids. In deep and estate mode every
+crossing the contracts round left open is one of those questions, by its id. In a system of
+repositories each repository's spec 0001 cites the system spec (Part 4) in a `Cites:` line, and
+a crossing left open is carried by the spec 0001 of the repository that publishes its contract.
 
 ### Step 5 - Hand off
 Turn Part 7 into the project's **`RUNBOOK.md`**, with the exact commands for this stack: how
@@ -491,14 +644,28 @@ wrong" procedures.
 > and `tests/` is required; editing them is forbidden.
 
 ### Step 1 - Inventory (read-only)
+Ask one question before exploring (new in v1.22): is this repository the whole system, or one
+of several? For several, ask for each sibling's local path or URL and read each one, read-only:
+its layout, its languages, its pipeline files, and the crossings it can see (imports, HTTP
+clients, queue names). A local path is read in place. A URL is read through a shallow clone
+into a temporary directory, removed afterwards, with the engineer's own access. Nothing in a
+sibling is written, and a sibling the session cannot read is asked about, never guessed. The
+inventory then covers the siblings too, and the interview confirms it rather than guessing.
+`/setlist:new` in estate mode reads the siblings of a new repository the same way.
+
 Explore before asking. Identify the actual stack and versions; the de-facto core data model,
 meaning the central abstraction the code revolves around, even if it was never reified; state
 ownership; error handling as it is practiced, which may differ from what the documents say;
 the reality of test coverage (zero is common); secrets handling; and the riskiest areas. Identify
 the de-facto `src/` and `tests/` locations; paths are roles (Part 3), and they may not exist by
-those names. If git history is shallow or squashed, identify the source that can stand in for a
+those names. The role-path scan's candidates are shown with their file counts, and each role
+path is confirmed by the engineer, path by path, before it is written (new in v1.22). Where the
+scan finds several code directories, or none, the role paths are asked, never written from the
+first candidate. If git history is shallow or squashed, identify the source that can stand in for a
 journal (a CHANGELOG, release notes, a wiki) and cite it. The output is an inventory report
-shown to the user before Step 2. The report stays ephemeral: its findings are summarized in
+shown to the user before Step 2. It proposes the answer to Part 8 Step 1's sizing question
+from what it read: the deployables it found, the contributors in the history, and whether the
+code runs in production; the interview confirms it. The report stays ephemeral: its findings are summarized in
 journal/0001 and feed the traceability of Step 4.
 
 #### Observe, on request, before anything is written (plugin 2.11.0)
@@ -513,10 +680,12 @@ bootstrap has no equivalent and needs none: a new project has no history, and Pa
 interview proposes every decision before a file is written.
 
 ### Step 2 - Interview
-The interview follows Part 8 Step 1's rules for a structured round, the stopping rule
-included, plus one question specific to a retrofit: which existing constraints are
+The interview follows Part 8 Step 1's rules for a structured round, the contract in the first
+message, the assumption register, the depth mode the sizing selects and its stopping rule included, plus one question specific to a retrofit: which existing constraints are
 **sacred**, meaning they cannot be redesigned in the coming months, and which are
-disposable? A new project has nothing sacred yet, and an existing one always does.
+disposable? A new project has nothing sacred yet, and an existing one always does. The team round
+applies too, and a retrofit records the team as it works today: its protection, its approvers and
+how it treats a stale claim.
 
 Part 8 Step 2's attestation question applies here unchanged, and **the default is still OFF**
 (new in v1.11). A retrofit has one extra reason to leave it off at first. The repo's specs
@@ -539,6 +708,15 @@ retrofit:
   the stamp prints a notice naming `AGENTS.md` before its first write and leaves the file as
   it is, and phase 2 merges what it says into `CLAUDE.md`. Where the repository carries
   neither, the stamp writes the pointer `AGENTS.md`, as for a new instance.
+- **For an estate, the system is written from what exists (new in v1.22).** For a system of
+  several repositories, phase 2 writes the system spec (Part 4), `system.md` in the system
+  repository, from the inventory: the components as found, the crossings as found, and the
+  contracts as found or missing. Each repository's `structure.md` points at it, and each
+  repository the engineer adopts is a step of the bootstrap plan (Part 8 Step 3). For a system of
+  one repository, phase 2 writes the same as a **System** section in its `structure.md`. Every
+  missing piece is an open question, carried by spec 0001's `## Open questions` by its id, and
+  the specs that fill the gaps follow, each traced to the inventory. Spec 0001 stays the
+  characterization harness (Step 4).
 - Steering docs DESCRIBE the system as it is. Wherever the inventory found divergence between
   reality and intent, use the Current vs target callout (Part 4). A retrofit steering doc with
   no callouts is suspicious: either the project is at target everywhere, which is rare, or the
@@ -748,9 +926,9 @@ ADRs is the first planning action.
   the migration commit is the one that carries it. The stamped hooks, the audit and the forge
   check arrive through the refresh's existing CHANGED arm. The refresh leaves two things alone,
   because each is the team's own file. It leaves `.claude/settings.json`'s `permissions`
-  alone, so an upgraded instance keeps `Read(.env.*)` until someone narrows it by hand to the
-  names Part 3 lists; the only cost of not doing so is that `.env.example` stays unreadable to
-  the session. And it leaves a trunk's protection alone, so under `forge` custody a team turns
+  alone, so an upgraded instance keeps `Read(.env.*)` and the earlier Bash entry until someone
+  narrows them by hand to the names Part 3 lists; the only cost of not doing so is that
+  `.env.example` stays unreadable to the session (to the Read tool, and since v1.22 to `cat`). And it leaves a trunk's protection alone, so under `forge` custody a team turns
   on "Require review from Code Owners" before upgrading, or the check refuses its next closing
   pull request (`FC-NO-CODE-OWNER-REVIEW`).
 - **The v1.19 delta: new rules dated by the version the refresh records, one agent and one
@@ -802,6 +980,32 @@ ADRs is the first planning action.
   report reads the same aliases as before plus `haiku`. The refresh records `plugin.version`
   2.13.0, which dates no new rule: the effort line is optional, so every close already in the
   history reads as it did.
+- **The v1.22 delta: hooks and two agents through the refresh, two additive keys read when
+  present, one offered settings edit, and the design surface on `/design` (new in v1.22).** The
+  refresh delivers through its CHANGED arm the hook library and the three git hooks (a local replace
+  ref no longer substitutes a commit for any git read; a `symbolic-ref` git cannot answer is refused
+  by name at the merge hook and at `pre-commit`'s landing path; on an empty remote `pre-push` audits
+  the declared trunk alone and names every other pushed branch unaudited), the trunk audit, the
+  re-grounding hook (it names the remote's other spec branches from the last fetch, offline), and
+  the `close-reviewer` and `spec-reader` agents, which now read the assumption register; a differing
+  agent copy is kept as `.setlist-backup` beside the new one. Nothing in the instance's own files is
+  migrated. The `Driver:` line is written by the next ACTIVE flip and read where present; the
+  `Cites:` and `Contracts touched:` lines are optional and read by no hook; `system_spec` and
+  `stale_days` are additive keys in `.claude/sdd.json`, absent reading as before (`stale_days` as 7),
+  and the refresh keeps a recorded `system_spec` and names it; the Assumptions sections of
+  `product.md` and `tech.md` arrive with the next default written down. `specs/TEMPLATE.md` is
+  refreshed from Appendix C as in every upgrade, so it gains the `Driver:`, `Cites:` and `Contracts
+  touched:` lines, and its `Design contract:` line names the committed redline. The refresh never
+  edits `.claude/settings.json`, so the upgrade offers one edit the human takes or declines: the
+  earlier Bash entry for reading environment files replaced by the template's `Bash(cat <name>)`
+  entries for the seven names, which deny the same secret files and let the session read
+  `.env.example` from the shell; declining costs only that. A UI instance's design surface is
+  Claude Code's `/design` (Part 5c): the upgrade offers the stub `docs/design/INDEX.md` where it
+  is absent, and tells the human that a design locked on the standalone design site is committed
+  under `docs/design/` before that site closes on
+  2026-12-14, because its chats and comments do not move. The edition's three files are replaced as
+  in every upgrade. The refresh records `plugin.version` 2.14.0, which dates no new rule; read the
+  verdict delta before `--apply`.
 - **Accepted deviations are recorded, and never erased.** If the repo keeps a non-canonical
   layout (paths are roles), say so inside the umbrella ADR; a future chore can relocate it.
 - **Close like any chore:** the gates pass (docs-only, so the results must match the ones
@@ -932,10 +1136,10 @@ The durable ideas; everything in Parts 1-10 is one implementation of them.
   index stops fitting the read budget, and real constitutional decisions drown in
   transcription. Apply the Part 4 bar (the decision must outlive its spec) and consolidate
   at stage gates.
-- **A design record trapped outside the repo.** A locked mock that lives only in the design
-  tool is a decision that does not exist: no Builder session can read it, no future session
-  can re-ground from it, and it will eventually be lost. The bundle rule (Part 5c) is the
-  antidote.
+- **A design record trapped outside the repo.** A locked mock that lives only on the
+  `/design` canvas is a decision that does not exist: no Builder session can read it, no future
+  session can re-ground from it, and a retention period or a closed site will eventually lose
+  it. The bundle rule (Part 5c) is the antidote.
 - **Treating a pasted secret as still secret.** A token or password that touched a chat
   transcript is compromised; "I'll be careful" is not rotation. Burn it, rotate it, record
   the debt in the repo (Part 3).
@@ -996,6 +1200,18 @@ placeholder either: a placeholder is bytes the grammar would have to read, and t
 checkpoint's act at acquisition, which nobody authors by hand. A spec that never declares
 closes under the pre-v1.12 rules.
 
+One header line names who holds the spec (new in v1.22): **`Driver:`**, one handle, written by
+`/setlist:checkpoint` at the opening ACTIVE flip from `.claude/sdd.json`'s `identity.user_email`
+where it is declared, else from git's `user.email`, before the `Spec-hash:` is computed. It sits in
+the header, inside the hashed range, so an attestation signs it and an edit to it drifts the hash.
+`/setlist:board` and `/setlist:validate` read it, and no hook does. The status record carries no
+copy: the header is the one record of the driver.
+
+Two header lines are optional and read by no hook (new in v1.22). `Contracts touched:` names the
+contract lines the spec changes. `Cites:`, zero or more, names the system spec of a system of
+repositories by path or URL, with a system spec's id (`system/0003`) for a change that crosses
+repositories (Part 4); `/setlist:validate` reads it, and nothing refuses on it.
+
 #### The lite shape (new in v1.14)
 
 A lite spec (Part 5) is this template with `Tier: lite` in its header and the middle trimmed.
@@ -1017,11 +1233,14 @@ criterion with the verdict blank, and the verdicts are yours.
 Status: QUEUED
 Tier: full <or lite: the trimmed shape of Part 5, at most five Owns: files; the hooks read only the exact line "Tier: lite">
 Spec-hash: <written by /setlist:checkpoint when Status flips to ACTIVE; leave blank until then>
+Driver: <written by /setlist:checkpoint at the ACTIVE flip; leave blank until then>
 Depends on: <spec numbers, or "none"> (must all be CLOSED in STATUS.md before starting)
 Owner docs: <the steering docs the Builder must load for this spec>
 Strictness: <review-only: strict and exhaustive | developer-writes: guiding>
 QA binding: <how Pass 1 verifies this spec: browser-qa skill | CLI run | curl against endpoints | test runner>
-Design contract: <path to the locked redline under docs/design/, or "none (functional)">
+Design contract: <path to the locked redline under docs/design/ (committed from the /design intake: numbered decisions with exact values, the artifact and the version locked, the picked artboards' exports beside it), or "none (functional)">
+Contracts touched: <optional: the contract lines in structure.md this spec changes, or "none"; read by no hook>
+Cites: <optional, zero or more: the system spec by path or URL, and a system spec's id for a change that crosses repositories; read by /setlist:validate, refused by nothing>
 
 ## Goal
 <What this builds and why it's next. 2-4 sentences.>

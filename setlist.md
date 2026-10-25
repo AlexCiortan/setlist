@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.21 (the delegation edition)**
+**Edition v1.22 (the session-zero edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -65,8 +65,8 @@ ever. Use commas, colons, parentheses or separate sentences. The rule applies to
 framework itself, every generated document, specs, journals, commit messages and code
 comments. Style rules are forward-only: they govern new content, and existing or relocated
 historical text is never retrofitted (Part 8c). Style rules also ride every handoff
-between surfaces (Part 5c). State them in the intake prompt, so deliverables arrive
-compliant and need no cleanup in follow-up commits.
+between surfaces (Part 5c). State them in the `/design` brief and any other intake prompt,
+so deliverables arrive compliant and need no cleanup in follow-up commits.
 
 ---
 
@@ -113,9 +113,10 @@ CLI for building. v1.2 runs both roles inside Claude Code. The separation surviv
 move because its boundary was never the tool. **The boundary is between planning
 artifacts and implementation.**
 
-UI projects grow a third surface beside the two roles: a dedicated design project that
-owns visual decisions the way DECISIONS.md owns architecture. It joins the loop at the
-design intake and at design QA, and never in the middle of a build. Part 5c defines it.
+UI projects grow a third surface beside the two roles: a design surface, bound to Claude
+Code's `/design` canvas, that owns visual decisions the way DECISIONS.md owns architecture.
+It joins the loop at the design intake and at design QA, and never in the middle of a build;
+what it decides is locked in the repo. Part 5c defines it.
 
 ### The binding: `opusplan` + plan mode
 
@@ -184,7 +185,10 @@ The rules were observed in the field, and their substance has not changed since 
   check; QA Pass 1 (the stamped `qa-verifier`, on `model: haiku`) and the browser-QA runs
   it makes; and the `verify` skill's run of the gate command. Planning, the close review
   (the stamped `close-reviewer` stays on `model: opus`) and every decision that closes a
-  spec are never delegated. Two guardrails make the rung safe inside Setlist, and they
+  spec are never delegated. A delegated phase runs through the Agent tool with
+  `model: haiku` and never as a fork, because a fork runs on the parent session's model
+  (new in v1.22); the phase's journal line names the model it was served, and a line that
+  names the parent's model is the sign it ran as a fork. Two guardrails make the rung safe inside Setlist, and they
   answer the two failure modes the vendor names for this tier in long agent prompts,
   stopping early to hand the task back and reporting a change done without a check: the
   golden rules "carry a spec through" and "a real check, or no claim", which the Stop
@@ -208,18 +212,18 @@ The rules were observed in the field, and their substance has not changed since 
   single-turn change to another model of the same tier included, so the record names the
   model that actually decided.
 
-The current bindings were **RE-VERIFIED on 2026-10-14 against the live harness**: Claude
-Code 2.1.299, the documented model-alias and provider tables, and a live probe of each
+The current bindings were **RE-VERIFIED on 2026-10-24 against the live harness**: Claude
+Code 2.1.310, the documented model-alias and provider tables, and a live probe of each
 alias. The table carries its verification date for a reason. A bindings table whose date
 is older than the harness is a claim nobody has checked. Renumbering a stale table to the
 current edition would be the same defect wearing a new number.
 
 | Tier | Binding | How it was verified |
 |---|---|---|
-| Planning | Opus, via `opusplan` plan mode, which plans on the alias `opus` | Re-read 2026-10-14 at Claude Code 2.1.299: the plan phase of `opusplan` served `claude-opus-5-5` (`scripts/model-probe.sh`). Read 2026-10-07 at Claude Code 2.1.292: `opus` resolves to Opus 5.5 (claude-opus-5-5, since Claude Code 2.1.280) on the Anthropic API, on Claude Platform on AWS and on two of the three cloud-provider platforms, and to Opus 4.6 on the third. `opusplan` is documented as "uses `opus` during plan mode, then switches to `sonnet` for execution". The plan phase of `opusplan` (`claude -p --permission-mode plan --model opusplan`) served `claude-opus-5-5` here at 2.1.292 on 2026-10-07, read from the result's `modelUsage` key by `scripts/model-probe.sh`; `claude -p --model opus` served `claude-opus-5-5` at 2.1.280 and 2.1.284 on 2026-09-29. The model-deprecations page lists `claude-opus-5-5` active, retirement not sooner than 2027-09-22, and `claude-opus-5` not sooner than 2027-07-24 (read 2026-10-07). The 1M window: Opus 4.7 and later run it natively on the Anthropic API, and the probes read a 1,000,000-token window in the plan phase with the `[1m]` suffix and without it. Effort, read 2026-09-29: Claude Code's default is `medium` on Opus 5.5 (the model-configuration page), and on Opus 5.5 `medium` matches or exceeds Opus 5 at `high` on coding evaluations (Anthropic, "Prompting Claude Opus 5.5") |
-| Execution | Sonnet, via `opusplan` execution mode, which builds on the alias `sonnet` | Re-read 2026-10-14 at Claude Code 2.1.299: the execution phase of `opusplan` served `claude-sonnet-5-5` (`scripts/model-probe.sh`). Read 2026-10-07 at Claude Code 2.1.292: `sonnet` resolves to Sonnet 5.5 (claude-sonnet-5-5) on the Anthropic API, to Sonnet 4.6 on Claude Platform on AWS and to Sonnet 4.5 on the cloud-provider platforms, which are partner-operated and set their own retirement schedules. Same alias as the planning row: one setting binds both tiers. The execution phase of `opusplan` served `claude-sonnet-5-5` here at 2.1.292 on 2026-10-07 (`scripts/model-probe.sh`); `claude -p --model sonnet` served it at 2.1.284 on 2026-09-29. The model-deprecations page, read 2026-10-07, lists `claude-sonnet-5-5` active, retirement not sooner than 2027-09-28, and `claude-sonnet-5` not sooner than 2027-06-30. It lists `claude-sonnet-4-5-20250929` Deprecated, announced 2026-09-30, retirement 2026-11-30, and says its dates apply to Anthropic-operated platforms while partner-operated platforms set their own. Thinking does not cross phases: Anthropic, "What's new in Claude Sonnet 5.5", read 2026-09-29. The 1M window: Sonnet 5 and later run it natively on the Anthropic API (the probes read 1,000,000 tokens in the execution phase with the suffix and without it); Sonnet 4.6 and 4.5 reach it only through their `[1m]` variant. Effort, read 2026-09-29: Claude Code's default is `medium` on Sonnet 5.5; on Sonnet 5.5 a level is not the amount of thinking it was on Sonnet 5, the documented start for agentic coding is `medium` for well-specified work and `high` for harder or longer work, and the API default is `high` (Anthropic, "Prompting Claude Sonnet 5.5") |
-| Escalation | Claude Fable, the family above Opus, alias `fable`; the availability-aware alias `best` uses Fable where the organization has access and the latest Opus otherwise | Re-read 2026-10-14 at Claude Code 2.1.299: `claude -p --model fable` and `claude -p --model best` each served `claude-fable-5-1`. Read 2026-10-07 at Claude Code 2.1.292: `fable` resolves to Claude Fable 5.1 since Claude Code 2.1.257 (v1.13; the row said "Claude Fable 5" from v1.8, and its own probe had started returning a model it did not name), except in Claude apps gateway sessions, where both escalation aliases resolve to Fable 5. `claude -p --model fable` and `claude -p --model best` each served `claude-fable-5-1` here, re-run 2026-10-07 at Claude Code 2.1.292. The alias table defines `best` as "the model the `fable` alias resolves to where Fable is available to you, otherwise the same model as `opus`", which is the latest Opus the provider serves. The model-deprecations page lists `claude-fable-5-1` active with a tentative retirement not sooner than 2027-09-01 (read 2026-10-07) |
-| Delegated work | Haiku, alias `haiku`, for the subagents the delegation rule names | Read 2026-10-14 at Claude Code 2.1.299: `claude -p --model haiku` served `claude-haiku-5-5`, and a subagent launched with `model: haiku` resolved to `claude-haiku-5-5` (the Agent tool's result, its `resolvedModel` field). Claude Code 2.1.293's changelog: "Added Claude Haiku 5.5 (`claude-haiku-5-5`), now the default Haiku model on the Anthropic API". The model overview page, read 2026-10-09, lists `claude-haiku-5-5` active, retirement not sooner than 2027-10-07, with adaptive thinking and effort, default `medium` in Claude Code. The vendor's prompting page for Haiku 5.5, read 2026-10-09, names the tier's failure modes at `low` effort in long agent prompts (stopping early and handing the task back; reporting a code change without a check) and prescribes two system-prompt paragraphs and `medium` effort |
+| Planning | Opus, via `opusplan` plan mode, which plans on the alias `opus` | Re-read 2026-10-24 at Claude Code 2.1.310: the plan phase of `opusplan` served `claude-opus-5-5` (`scripts/model-probe.sh`); the same on 2026-10-14 at 2.1.299. Read 2026-10-07 at Claude Code 2.1.292: `opus` resolves to Opus 5.5 (claude-opus-5-5, since Claude Code 2.1.280) on the Anthropic API, on Claude Platform on AWS and on two of the three cloud-provider platforms, and to Opus 4.6 on the third. `opusplan` is documented as "uses `opus` during plan mode, then switches to `sonnet` for execution". The plan phase of `opusplan` (`claude -p --permission-mode plan --model opusplan`) served `claude-opus-5-5` here at 2.1.292 on 2026-10-07, read from the result's `modelUsage` key by `scripts/model-probe.sh`; `claude -p --model opus` served `claude-opus-5-5` at 2.1.280 and 2.1.284 on 2026-09-29. The model-deprecations page lists `claude-opus-5-5` active, retirement not sooner than 2027-09-22, and `claude-opus-5` not sooner than 2027-07-24 (read 2026-10-07). The 1M window: Opus 4.7 and later run it natively on the Anthropic API, and the probes read a 1,000,000-token window in the plan phase with the `[1m]` suffix and without it. Effort, read 2026-09-29: Claude Code's default is `medium` on Opus 5.5 (the model-configuration page), and on Opus 5.5 `medium` matches or exceeds Opus 5 at `high` on coding evaluations (Anthropic, "Prompting Claude Opus 5.5") |
+| Execution | Sonnet, via `opusplan` execution mode, which builds on the alias `sonnet` | Re-read 2026-10-24 at Claude Code 2.1.310: the execution phase of `opusplan` served `claude-sonnet-5-5` (`scripts/model-probe.sh`); the same on 2026-10-14 at 2.1.299. The model-configuration page, read 2026-10-24, still resolves `sonnet` to Sonnet 4.6 on Claude Platform on AWS and to Sonnet 4.5 on the cloud-provider platforms; the model-deprecations page, read the same day, keeps `claude-sonnet-4-5-20250929` Deprecated with retirement on 2026-11-30 on the Anthropic-operated platforms and says the partner-operated platforms set their own retirement schedules, so where `sonnet` resolves to Sonnet 4.5 on a partner-operated platform, that platform's date applies, not 2026-11-30. Read 2026-10-07 at Claude Code 2.1.292: `sonnet` resolves to Sonnet 5.5 (claude-sonnet-5-5) on the Anthropic API, to Sonnet 4.6 on Claude Platform on AWS and to Sonnet 4.5 on the cloud-provider platforms, which are partner-operated and set their own retirement schedules. Same alias as the planning row: one setting binds both tiers. The execution phase of `opusplan` served `claude-sonnet-5-5` here at 2.1.292 on 2026-10-07 (`scripts/model-probe.sh`); `claude -p --model sonnet` served it at 2.1.284 on 2026-09-29. The model-deprecations page, read 2026-10-07, lists `claude-sonnet-5-5` active, retirement not sooner than 2027-09-28, and `claude-sonnet-5` not sooner than 2027-06-30. It lists `claude-sonnet-4-5-20250929` Deprecated, announced 2026-09-30, retirement 2026-11-30, and says its dates apply to Anthropic-operated platforms while partner-operated platforms set their own. Thinking does not cross phases: Anthropic, "What's new in Claude Sonnet 5.5", read 2026-09-29. The 1M window: Sonnet 5 and later run it natively on the Anthropic API (the probes read 1,000,000 tokens in the execution phase with the suffix and without it); Sonnet 4.6 and 4.5 reach it only through their `[1m]` variant. Effort, read 2026-09-29: Claude Code's default is `medium` on Sonnet 5.5; on Sonnet 5.5 a level is not the amount of thinking it was on Sonnet 5, the documented start for agentic coding is `medium` for well-specified work and `high` for harder or longer work, and the API default is `high` (Anthropic, "Prompting Claude Sonnet 5.5") |
+| Escalation | Claude Fable, the family above Opus, alias `fable`; the availability-aware alias `best` uses Fable where the organization has access and the latest Opus otherwise | Re-read 2026-10-24 at Claude Code 2.1.310: `claude -p --model fable` and `claude -p --model best` each served `claude-fable-5-1`; the same on 2026-10-14 at 2.1.299. Since Claude Code 2.1.301 both aliases retry once on the previous Fable model when the newest is unavailable to the organization (the Claude Code changelog, 2.1.301: "Claude Code now retries once on the previous Fable model"), so an organization without access to the newest Fable is served the one before it under the same alias; the model-configuration page, read 2026-10-24, does not yet describe the retry. Read the served id, never the alias. Read 2026-10-07 at Claude Code 2.1.292: `fable` resolves to Claude Fable 5.1 since Claude Code 2.1.257 (v1.13; the row said "Claude Fable 5" from v1.8, and its own probe had started returning a model it did not name), except in Claude apps gateway sessions, where both escalation aliases resolve to Fable 5. `claude -p --model fable` and `claude -p --model best` each served `claude-fable-5-1` here, re-run 2026-10-07 at Claude Code 2.1.292. The alias table defines `best` as "the model the `fable` alias resolves to where Fable is available to you, otherwise the same model as `opus`", which is the latest Opus the provider serves. The model-deprecations page lists `claude-fable-5-1` active with a tentative retirement not sooner than 2027-09-01 (read 2026-10-07) |
+| Delegated work | Haiku, alias `haiku`, for the subagents the delegation rule names | Re-read 2026-10-24 at Claude Code 2.1.310: `claude -p --model haiku` served `claude-haiku-5-5`, and a subagent launched through the Agent tool with `model: haiku` was served `claude-haiku-5-5` on each of its turns (its transcript's model field). Read 2026-10-14 at Claude Code 2.1.299: the same two readings, the subagent's from the Agent tool's result, its `resolvedModel` field. Per provider, the model-configuration page, read 2026-10-24: `haiku` resolves to Haiku 5.5 on the Anthropic API and to Haiku 4.5 on Claude Platform on AWS and on every cloud-provider platform, so the stamped agents on `model: haiku` run a generation behind there. The model-deprecations page, read 2026-10-24, lists `claude-haiku-4-5-20251001` Active, retirement not sooner than 2026-10-15, with no deprecation announced. Claude Code 2.1.293's changelog: "Added Claude Haiku 5.5 (`claude-haiku-5-5`), now the default Haiku model on the Anthropic API". The model overview page, read 2026-10-09, lists `claude-haiku-5-5` active, retirement not sooner than 2027-10-07, with adaptive thinking and effort, default `medium` in Claude Code. The vendor's prompting page for Haiku 5.5, read 2026-10-09, names the tier's failure modes at `low` effort in long agent prompts (stopping early and handing the task back; reporting a code change without a check) and prescribes two system-prompt paragraphs and `medium` effort |
 
 Four facts about this table are easy to get wrong:
 
@@ -435,7 +439,7 @@ project-root/
 ├── docs/
 │   ├── design/                    # UI projects: the committed design record (Part 5c)
 │   │   ├── INDEX.md               #   the design source-of-truth index
-│   │   └── ...                    #   locked redlines (.md) + mock exports (.png/.html)
+│   │   └── ...                    #   locked redlines (.md) + artboard exports (.png/.pdf)
 │   └── diagrams/                  # THE DIAGRAM SWITCH (v1.15, Part 4): this directory
 │       ├── context.md             #   present arms the close checks; absent, every reader
 │       ├── components/            #   behaves exactly as v1.14. L1 context; L3 components,
@@ -508,8 +512,9 @@ The `Read` rules stop the Read tool on the
 conventional secret-bearing names and on no others, so a secret file named any other way is
 not covered. They were narrowed in v1.18 from `Read(.env.*)`, which also hid the
 `.env.example` the stamp writes from the session told to keep it current. The
-template's deny list also carries one Bash entry, the deny for reading environment files,
-which stops one Bash spelling and nothing else: `less`, `head`, a
+template's deny list also carries Bash entries, the deny for reading environment files. They
+name the same files (narrowed in v1.22 from one pattern that also refused reading
+`.env.example`) and stop one Bash spelling and nothing else: `less`, `head`, a
 `$(<.env)` expansion, a `source` or a `grep` read the same file and are not listed. The
 scope hook watches the file-writing tools and never Bash. The stamped template says so in
 a `_comment` key inside the `permissions` block, the one place the harness tolerates a
@@ -554,7 +559,16 @@ the wiring by hand, and the template is the authority on the exact matcher set. 
 sits `.claude/sdd.json`, the instance config the hooks and `/setlist:checkpoint` read: the
 src and tests role paths, the gate command (recorded by `/scaffold`), the `gates` block
 (below), the optional `diagram_command` (below, new in v1.15), and the `scaffolded` flag
-that arms the scope hook.
+that arms the scope hook. The optional `stale_days` (new in v1.22) is the team round's answer to
+how many days a claim may stand untouched (Part 8 Step 1), an integer the agent writes after the
+stamp. No hook reads it, and an instance without it behaves exactly as before. The board reads it
+(Part 6, `/setlist:board`): an ACTIVE spec whose branch has had no commit for that many days, 7
+where the key is absent or not a positive whole number, is shown stale with its driver, and a
+claim the team releases parks with a reason and a revisit trigger (Part 5). The optional
+`system_spec` (new in v1.22) is the system spec's path, relative to the instance root, or its URL,
+in a system of several repositories (Part 4). The stamp writes it from the answers file and reads it
+back; no hook reads it, `/setlist:validate` reports whether it resolves, and the refresh keeps it.
+An instance without it behaves exactly as before.
 
 #### The `gates` block: three tiers, and who runs which (new in v1.14)
 
@@ -708,7 +722,14 @@ text says so.
 
 Specs, chores and journal entries all use numeric IDs in adjacent namespaces. Commit
 messages and cross-references always carry the prefix that tells them apart: `spec/0004`,
-`CHORE-003`, `journal/0007`. A bare number is never a valid reference.
+`CHORE-003`, `journal/0007`. A bare number is never a valid reference. A spec's number comes
+from the trunk and the remote (new in v1.22): the highest number on the trunk and among the
+remote's `spec/` branches, plus one, which `/setlist:board` prints and the skills that cut a spec
+take. Two cuts can still collide, two clones that had not fetched each other's claim; then the
+first trunk landing owns the number, and the other renumbers before it merges. The board names a
+number claimed twice; no hook refuses it before the close. A system spec (Part 4,
+new in v1.22) is numbered in the system repository's own `specs/` and cited from another
+repository with the prefix `system/`: `system/0003`.
 
 ### The two tempos
 - **`steering/` is the constitution**: slow-changing and deliberate. A steering edit
@@ -808,14 +829,25 @@ because it lies with confidence.
 - **product.md: the why and the scope.** The product in one sentence, who it is for, the
   v1 feature list and, most importantly, an **explicit "out of scope" list**. Legal,
   safety, ethical and privacy constraints live here as hard rules. This file is the main
-  weapon against scope creep.
+  weapon against scope creep. Its **sizing line** (new in v1.22) records the three answers of
+  Part 8 Step 1's sizing question and the mode they selected. It records the repository split with its reason (Part 8 Step 2,
+  new in v1.22), and, for a team, a **Team** section: who builds and how many at once, how the
+  trunk is protected, who approves a spec, who may flip it ACTIVE, and the stale-claim rule
+  (Part 8 Step 1's team round, new in v1.22). Its **Assumptions** section (new in v1.22) carries the
+  session-zero register lines about the product, each with the engineer's answer (Part 8).
 - **tech.md: the locked stack.** The chosen technologies *with rationale*, and explicitly
   **what was rejected and why**, which is never re-litigated. Hard technical rules, the
-  testing bar, and accessibility and performance targets.
+  testing bar, and accessibility and performance targets. Its **Assumptions** section (new in
+  v1.22) carries the register lines about the stack and the platform, each with its answer. In
+  deep and estate mode it carries the pipeline and deployment rules and an **Operations**
+  section: logs, metrics, traces, correlation ids, on-call and the dashboards due before launch.
 - **structure.md: the core model and the living diagram.** **The single highest-leverage
   document.** Most applications are transformations over one central data structure.
   Define it precisely: its types, its invariants, why it is shaped that way, and the code
   layout, especially the boundary between pure, testable logic and framework or UI code.
+  In deep and estate mode (Part 8 Step 1, new in v1.22) it also carries the component list with
+  one owner line each and an owner for every piece of state, one contract line per crossing, and
+  a failure line beside each contract.
 
   The architecture diagram is a living Mermaid section at the bottom of the file. It holds
   the **L2 container view** of the system as it exists on `main`, with the core-model
@@ -837,7 +869,9 @@ because it lies with confidence.
     is a real steering edit and the ADR rule applies in full.
 - **state.md: ownership and flow.** Who owns in-memory state, and how it changes (prefer
   explicit actions that produce new immutable values). How real mutations, view-only
-  transforms and ephemeral UI state are kept distinct.
+  transforms and ephemeral UI state are kept distinct. In deep and estate mode it carries the
+  data round's answers: where each record lives, which copy is the truth, the consistency per
+  user flow, migrations and who runs them, and retention and privacy per store.
 - **error-handling.md: the unhappy paths.** Never a blank screen, never a silent failure,
   never lost data. Every list and view has a designed empty state, and the file names the
   specific edge cases that MUST be handled. Proportionate, and never over-engineered.
@@ -850,7 +884,35 @@ because it lies with confidence.
   colors, typography, spacing and component conventions, locked as tokens the Builder must
   use everywhere, decided before any UI is built. Where a design surface exists (Part 5c),
   it owns proposals to this file, and the edits still land through an ADR like any steering
-  change.
+  change; the `/design` brief names this file as the design system, so the canvas draws
+  with these tokens.
+
+### system.md and contracts/: the system spec (new in v1.22)
+
+A system of several repositories has one system spec. Each repository is still its own
+instance (Part 8 Step 2's repository split), and the system spec is the one document they
+share. It lives in a system repository of its own by default, or in the API's repository
+under `system/` where the engineer chooses. It holds three things:
+- **`system.md`**: the components, one per repository, each with its owner line and its
+  pipeline; every crossing with its contract line and its failure line; the data each
+  repository owns; and the **bootstrap plan** (Part 8 Step 3), the numbered list of the
+  repositories to stamp, in order.
+- **`contracts/`**: the contract files the contracts round named (Part 8 Step 1), created
+  when the first one is written.
+- **The system's ADRs**, in a `DECISIONS.md` of the same shape as an instance's: an index
+  table and the entries.
+
+Each repository's own `structure.md` describes that repository and points at `system.md` for
+what crosses. Each repository's spec 0001 cites the system spec in a `Cites:` header line, by
+path or URL (Part 5). A change that crosses repositories is ONE system spec in the system
+repository's `specs/`, numbered in its own sequence, plus one spec in each repository it
+touches. Each of those cites the system spec by its id (`system/0003`, Part 3). The system
+repository holds documents, no code and no pipeline, so it is not stamped as an instance
+unless the engineer asks; then its role path is `contracts`. No gate reads across
+repositories. The citation is checked by a reviewer and reported by `/setlist:validate` (Part
+6), and nothing refuses on it. A system of ONE repository, a monorepo with several
+deployables, has no `system.md`: its components, contract lines and failure lines stay in its
+own `structure.md`.
 
 ### The living diagrams (new in v1.15)
 
@@ -1064,7 +1126,7 @@ journal is the *diary*: what happened, what surprised you, what dead ends you tr
 what you would change about the spec with hindsight. `journal/0001` is always the scaffold
 record written by `/scaffold`. With the plugin installed, `/setlist:journal` drives the entry
 ceremony (shipped in the field under v1.5, canonical as of v1.6), and the format rules here
-remain the contract. Substantive work done on another surface (the design project, Part 5c)
+remain the contract. Substantive work done on another surface (a `/design` intake, Part 5c)
 lands as a **companion journal entry**, numbered in the same sequence and written from that
 surface's own record. Any deliberate deviation from the declared working mode (a model
 experiment, a process trial) gets one journal line stating the intent: the repo cannot tell
@@ -1089,8 +1151,9 @@ at a written gate. Part 7b defines the gates and the transition protocol.
 | An architectural decision and its reasoning | `DECISIONS.md` (entry + index row), if it outlives its spec; else the spec itself |
 | The constitution (scope, stack, model, conventions) | `steering/*.md` (edits need an ADR) |
 | The system's current shape, as a picture | the living diagrams: L2 in `structure.md`, L3 under `docs/diagrams/` (synced at spec close) |
+| The shape of a system of repositories, and what crosses between them | `system.md` and `contracts/` in the system repository (the system spec) |
 | A divergence between today's reality and intent | A Current vs target callout in the steering doc |
-| A locked visual decision (redline, mock, exact values) | `docs/design/` + its INDEX.md (Part 5c) |
+| A locked visual decision (redline, artboard export, exact values) | `docs/design/` + its INDEX.md (Part 5c) |
 | The work to do next as a feature | A spec file from `specs/TEMPLATE.md` |
 | A small maintenance item not worth a spec | `STATUS.md`, "Open chores" |
 | Current project state, queue, open questions | `specs/STATUS.md` (bounded) |
@@ -1113,7 +1176,11 @@ Every spec starts from `specs/TEMPLATE.md`, whose full skeleton is Appendix C. O
 feature, one file:
 - **Header:** the status, `Depends on:`, `Owner docs:` (which drives the Builder's read
   budget), a strictness note, the `QA binding:` field and, for design-heavy specs, the
-  `Design contract:` field naming the locked redline under `docs/design/`. **The Builder
+  `Design contract:` field naming the locked redline committed under `docs/design/` by the
+  design intake (Part 5c's bundle rule). In a system of
+  repositories (new in v1.22) the optional `Cites:` lines, zero or more, name the system spec
+  by path or URL and, for a change that crosses repositories, its id (`system/0003`, Part 4).
+  `/setlist:validate` reads them and nothing refuses on them. **The Builder
   must verify that every `Depends on:` spec is CLOSED in STATUS.md before starting.** If a
   dependency is not closed, stop and ask.
 - **Goal:** what this builds and why it is next.
@@ -1232,6 +1299,21 @@ literally. A state that exists in the protocol and not in the hook is a lifecycl
 the hook silently fails to notice, and that is the one failure mode a gate must never have.
 Adding a state here and nowhere else turns the suite red, so no check is turned off unseen.
 
+Where each flip lands is fixed (new in v1.22). The QUEUED cut and the opening ACTIVE flip are commits
+on the trunk, and both are PUSHED, with the ask `settings.json` already enforces, before
+`spec/NNNN-<slug>` is cut. The opening flip carries the `Spec-hash:` (Part 6), the `Driver:` line
+(Appendix C) and, where custody is declared, the attestation. This holds in every instance, not
+only under `forge` custody, because a claim that lives only on a local branch is invisible to every
+other clone, and two people can then build the same spec. Under `forge` custody the trunk is
+reached through the pull request, as before. A return from REVISED to ACTIVE is made on the spec's
+branch, which already exists and is pushed. With no remote configured the flip lands on the local
+trunk, and the checkpoint's visibility block says that only this clone can see it. The number
+the cut takes comes from the trunk and the remote (Part 3, "Numbering namespaces"). The push race
+is the mutual exclusion: two people flipping one spec on an unprotected trunk produce one push git
+refuses to fast-forward, and the checkpoint reports who holds the spec instead of leaving a git
+error to read. Under `forge` custody the forge's merge is the exclusion, and the second pull
+request's diff shows the first's `Driver:` line. There is no server and no lease.
+
 A spec in **BUILT** is complete on its branch with the close pending: the work exists,
 and the trunk does not have it yet. **PARKED** means deliberately paused on its branch,
 unmerged. It carries three rules:
@@ -1309,7 +1391,8 @@ were learned in the field:
   - **One fresh browser context per scenario.** A fresh context is a true first-run profile
     with its own empty storage; never rely on clearing storage by hand.
   - **Screenshot key states and actually look at them.** A blank or broken frame is a FAIL
-    even when the DOM assertions pass; compare it against the spec's redline or mock.
+    even when the DOM assertions pass; compare it against the spec's committed redline and
+    its artboard export under `docs/design/`.
   - **Truthful PARTIALs.** Anything headless cannot exercise (disabled storage, native file
     dialogs) is a PARTIAL with the reason, leaning on unit coverage, and never a claimed
     PASS.
@@ -1331,8 +1414,9 @@ the loop stays the same.**
 #### Design QA (design-heavy specs)
 
 Pass 1 verifies criteria. Fidelity to the locked mock is a separate check. For any spec
-carrying a `Design contract:`, screenshots of the real build go back to the design surface,
-which returns a punch list against the redline: exact values, never vibes (Part 5c). The spec
+carrying a `Design contract:`, screenshots of the real build are read beside the committed
+redline and its artboard export, and the check returns a punch list by the redline's decision
+ids: exact values, never vibes (Part 5c). The spec
 does not close until the punch list is empty, or each remaining item is accepted or deferred
 by name, usually to the polish pass.
 
@@ -1347,7 +1431,9 @@ list names no Write and no Edit, and the harness enforces that list; its Bash en
 declaration, since a write through Bash is stopped only by the session's permission mode
 (measured on Claude Code 2.1.292). Its inputs are named, and there are no others: the spec
 (its criteria, its out-of-scope list, its decisions), `git diff <trunk>...HEAD` of the spec
-branch, the `qa-pass-1` block, and the gate command's output. It never reads the builder's
+branch, the `qa-pass-1` block, the gate command's output, and, since v1.22, the assumption
+register (the Assumptions sections of `product.md` and `tech.md`). A criterion that rests on a
+register line answered "ask me later" is a MAJOR finding. It never reads the builder's
 narrative. It reports every finding and lets the gate filter, and a finding without a file
 and a line is not a finding. Its output is a `close-review` block in the Closing report
 (Part 6, "What counts as a close review"): a verdict per criterion and one line per finding,
@@ -1488,13 +1574,36 @@ from the diff, and it means the same thing.
 ## Part 5c - The design surface (UI projects)
 
 A UI project run seriously grows a third surface beside the Planner and the Builder: a
-dedicated design project that owns visual decisions the way DECISIONS.md owns architecture.
-Its current binding is a Claude project bound to the design system, "Claude Design". It
-reads the repo, produces locked deliverables, and verifies real builds. This Part was
-distilled from a project where the design surface shaped about fifteen specs. Before v1.4
-the framework's only design artifact was `design-tokens.md`. The plugin ships a
-`design-surface` reference skill, a condensed binding of this Part, and on any conflict the
-edition text wins.
+design surface that owns visual decisions the way DECISIONS.md owns architecture. **Its
+binding is Claude Code's `/design` skill (new in v1.22)**, which drafts mockups, screen flows
+and landing pages as artboards on one canvas and publishes the canvas as a Claude Design
+artifact on claude.ai, private until it is shared and versioned on every publish. It reads
+the repo, produces the options a design intake decides between, and the decision it returns
+is locked in the repo, where every later session reads it. This Part was distilled from a
+project where the design surface shaped about fifteen specs. Before v1.4 the framework's
+only design artifact was `design-tokens.md`, and from v1.4 to v1.21 the surface was a
+separate design project. The plugin ships a `design-surface` reference skill, a condensed
+binding of this Part, and on any conflict the edition text wins.
+
+### Where a design lives
+
+A design lives in two places, with two jobs. **The canvas is where it is drawn**: the
+artboards are edited in a desktop browser, the edits save on their own, each publish becomes
+a version, and each artboard exports as PNG or PDF. **The repo is where it is locked**:
+`docs/design/` holds the redline, the exports and `INDEX.md` (the bundle rule below). The
+canvas lives where no Builder session reads it, and an organization's retention period can
+delete an artifact nobody opens for that period, so a decision that exists only on the
+canvas does not exist.
+
+`/design` needs Claude Code 2.1.265 or later in an **interactive** session signed in with a
+claude.ai account (`/login`) on a Pro, Max, Team or Enterprise plan, with the Design template
+on for the organization, on the Anthropic API. Artifacts are off under `claude -p`, so a
+design intake is never a headless act (Part 7c). An instance without `/design` (one that
+reaches Claude through a cloud provider's platform or an API gateway, one whose organization
+runs customer-managed keys, HIPAA or zero data retention, one with the template or artifacts
+turned off) keeps this Part whole: the mock is still a decision, and its redline and an image
+or HTML mock made however the team makes it are committed under `docs/design/` by the same
+rule.
 
 ### The routing test
 
@@ -1505,15 +1614,31 @@ plumbing: a service worker, a migration, a parser. Design-heavy entries route th
 The intake sits between backlog reconciliation and speccing; in a stage transition, that is
 between Part 7b Steps 3 and 4.
 
+### The design intake
+
+The intake is one `/design` session per batch of screens, run by the Planner with the human
+present. The brief names the screens, the house style (Handoff hygiene below) and the
+instance's design system: `/design` looks for one in the project and ranks it above its own
+choices, so the brief names `steering/design-tokens.md` as that system. The canvas's
+artboards are the options. The human picks one per screen, and may adjust it on the canvas;
+**the pick is the lock**. The docs' own order is "pick one, tweak it, then have Claude
+implement it". Setlist reads the pick and the tweak as the intake, and the implementation as a
+spec written against the locked redline, never a build from the canvas session. The session
+writes the redline from the pick: the human names the artboard, the session reads the canvas
+back from claude.ai at the version it locks, so an adjustment made on the canvas is read
+rather than remembered, and the human confirms each value line by line, as the assumption
+register is confirmed (Part 8 Step 1).
+
 ### A mock is a decision, not a picture
 
-The design surface returns **locked deliverables**: redlines and mocks carrying exact values
-(hex, px, breakpoints, copy), numbered as decisions and ready for an ADR. The spec is then
-written against the locked redline, never in the abstract. The redline is cited in the spec
-header (`Design contract:`, Appendix C), and its values become acceptance criteria. When a
-redline arrives already shaped as numbered decisions, speccing becomes mostly transcription,
-which is the sign the intake did its job. Pixel fidelity stays a QA concern checked against
-the mock, and it is never an acceptance criterion.
+The intake returns **locked deliverables**: redlines carrying exact values (hex, px,
+breakpoints, copy), numbered as decisions and ready for an ADR, with the picked artboards'
+exports beside them. The spec is then written against the locked redline, never in the
+abstract. The redline is cited in the spec header (`Design contract:`, Appendix C), and its
+values become acceptance criteria. When a redline arrives already shaped as numbered
+decisions, speccing becomes mostly transcription, which is the sign the intake did its job.
+Pixel fidelity stays a QA concern checked against the mock, and it is never an acceptance
+criterion.
 
 ### Design in batches, build in order
 
@@ -1521,55 +1646,83 @@ Design coherent groups of screens as ONE system in a single intake, freeze the d
 then build them in engineering order. The field case was a capture funnel's three screens
 (landing, onboarding, import). The backlog would have designed them months apart in three
 visual languages. Instead they were mocked as one system in one batch and built as four specs
-against it. The corollary is the strongest anti-drift rule the field produced: **no design
-happens mid-build.** A spec that starts redesigning something mid-build means an intake was
-skipped. Stop and run it, and do not improvise pixels in the build session.
+against it. One canvas per batch keeps the system visible in one place. The corollary is the
+strongest anti-drift rule the field produced: **no design happens mid-build.** A spec that
+starts redesigning something mid-build means an intake was skipped. Stop and run it, and do
+not improvise pixels in the build session.
 
 ### The bundle rule (the repo is the memory, still)
 
-Design deliverables are created inside the design tool, where no Builder session can read
-them and where they will eventually be lost. So the intake is not done until the
-deliverables are IN the repo: **at the end of every design intake, ask the design surface to
-produce the downloadable bundle (redline documents, mock exports, an updated INDEX.md) and
-commit it under `docs/design/`.** `INDEX.md` is the design source-of-truth index: what is
-locked, what each redline governs, and which spec consumed it. A design decision that is not
-committed does not exist.
+The intake is not done until its deliverables are IN the repo, and **the spec that builds to
+a design does not go ACTIVE until they are**. At the end of every intake, commit under
+`docs/design/`:
+
+- **the redline**, a Markdown file of numbered decisions with exact values, whose header
+  names the artifact's title, its address as the instance records it, the version locked and
+  the date;
+- **the export of each picked artboard**, PNG (or PDF for a printed piece), exported from the
+  canvas page in a desktop browser, the one place the export runs;
+- **the canvas's saved source**: a read of the artifact saves its board files, and the picked
+  boards are copied as read. They display only through the canvas's own script, so they are
+  evidence of the version locked and never a substitute for the artboard exports;
+- **every decision a comment thread on the canvas records**, copied into the redline or an
+  ADR; the session reads the threads itself, and the human pastes any it cannot reach;
+- **an updated `INDEX.md`**, the design source-of-truth index: what is locked, from which
+  artifact and version, what each redline governs, and which spec consumed it.
+
+A design decision that is not committed does not exist.
 
 ### Design as a QA gate
 
 The design surface is also a verifier, and not only at close: **design QA runs iteratively on
-the spec branch during the build.** Screenshots of the running build go back to it for
-comparison against the locked mock. Findings return as a concrete punch list of exact values
-and are fixed in place, and later-phase work is never pulled forward to fix them. The field
-record is clear: design QA on the branch finds real issues that criterion checks miss. The
-spec does not close until the final punch list is empty, or each remaining item is accepted
-or deferred by name. The field pattern to expect: the first build is usually right in
-structure and wrong in rhythm (density, gutters, alignment), and the punch-list loop
+the spec branch during the build**, against the locked redline and the committed export.
+Screenshots of the running build are read beside the export, and findings return as a
+concrete punch list that names the redline's decision ids and their exact values; they are
+fixed in place, and later-phase work is never pulled forward to fix them. A team may also
+publish the build's screenshots beside the mock on the canvas, and the Part does not require
+it. The field record is clear: design QA on the branch finds real issues that criterion
+checks miss. The spec does not close until the final punch list is empty, or each remaining
+item is accepted or deferred by name. The field pattern to expect: the first build is usually
+right in structure and wrong in rhythm (density, gutters, alignment), and the punch-list loop
 converges in two or three rounds. Know when to stop. The last micro-alignment nits belong to
 an app-wide polish pass, and a closing spec should leave them there.
 
-### /insights at major gates
+### The design record at major gates
 
-At major gates (stage transitions, and before a large design arc), run **/insights** in the
-design project over the accumulated design record. It surfaces what no single intake sees:
-drift across specs, one-off UI decisions accumulating toward a consolidation, a
-release-facing surface that keeps losing to developer-facing polish. Feed the result into
-the transition session's backlog reconciliation (Part 7b Step 3), beside the skim of the
-Closing reports.
+At major gates (stage transitions, and before a large design arc), read the committed design
+record: `docs/design/INDEX.md` and the redlines locked since the last transition. It surfaces
+what no single intake sees: drift across specs, one-off UI decisions accumulating toward a
+consolidation, a release-facing surface that keeps losing to developer-facing polish. Feed the
+result into the transition session's backlog reconciliation (Part 7b Step 3), beside the skim
+of the Closing reports. (Through v1.21 this was /insights run in the design project; Claude
+Code's `/insights` reports a machine's sessions, not a design record.)
 
 ### Handoff hygiene
 
-- **Style rules ride the handoff prompt.** House style (the no-em-dash rule, naming
-  conventions, token names) is stated in the intake prompt, so deliverables arrive compliant
-  and need no cleanup in follow-up commits.
+- **Style rules ride the brief.** House style (the no-em-dash rule, naming conventions, token
+  names) is stated in the `/design` brief, so deliverables arrive compliant and need no
+  cleanup in follow-up commits.
 - **The design record journals like everything else.** Substantive design arcs land as a
   companion journal entry in `journal/`, numbered in the same sequence and written from the
-  design side's own record: the mocks, the iterations, and the reasoning that produced the
-  acceptance criteria. The Builder's journals carry the back half of each loop, and the
-  companion carries the front half.
+  design side's own record: the redlines, the canvas's versions, and the reasoning that
+  produced the acceptance criteria. The Builder's journals carry the back half of each loop,
+  and the companion carries the front half.
 - **Design owns proposals, and steering stays with the Planner.** Changes to
   `design-tokens.md` or any steering doc still land through the Planner with an ADR, and the
   design surface supplies the verified values.
+
+### The standalone site closes on 2026-12-14
+
+Through v1.21 this Part bound the surface to a design project on the standalone Claude Design
+site, claude.ai/design. That site closes on 2026-12-14 and is read-only after; its public
+links stop working. What moves to Claude: design systems, in one move for the whole
+organization (empty ones and ones made from a built-in starter theme stay behind), and
+projects, each moved by its owner, irreversibly, with a .zip download offered first, each
+becoming an artifact. What does not move: chats and comments, deleted some time after the
+closure. So an instance that followed v1.21 commits, before 2026-12-14, every locked
+deliverable still on that site under `docs/design/` by the bundle rule, and copies every
+decision a chat or a comment records into a redline or an ADR. `/design-sync` and
+`/design-login` upload to and sign in for that site, and this edition does not bind them.
 ---
 
 ## Part 6 - The Git workflow and the skills
@@ -1969,8 +2122,13 @@ Changelog is the delta list.
   must resolve to an ancestor of the recorded trunk and stand where the refresh writes it,
   and an instance whose `.githooks/pre-push` arrived after `.claude/sdd.json` with no key is
   a finding naming the refresh and the value it would write. No phase-2 slot marker
-  survives anywhere in the instance. Validate reports findings and fixes nothing without
+  survives anywhere in the instance. Since v1.22, where `.claude/sdd.json` records a
+  `system_spec`, a path that does not resolve or cannot be read is a finding, a URL is
+  reported unfetched, and a spec 0001 with no `Cites:` line naming it is a finding; without
+  the key nothing is reported. Validate reports findings and fixes nothing without
   approval.
+- **`--board`** (new in v1.22) adds the board's report after the checks, the same read
+  `/setlist:board` makes (below).
 - **Three diagram reports, and never a refusal (new in v1.15).** On an opted-in instance
   validate reports diagrams over twelve primary nodes, with the count. It reports
   **undiagrammed ownership**: role paths that closed specs declared under `Owns:` and that no
@@ -2000,6 +2158,26 @@ Changelog is the delta list.
   live in an instance-owned skill under the instance's own name, never in a copy of the
   shipped command: the fork-to-surface rule. Upgrading repos relocate any such adaptations
   first, then remove `.claude/skills/validate/` (the checkpoint precedent).
+
+#### /setlist:board (shipped by the plugin, any time, read-only; new in v1.22)
+- The trunk is the board. One script, `scripts/board.sh`, which `/setlist:validate --board`
+  runs too, reads the trunk's status record and every spec header on it (Status, `Driver:`,
+  `Owns:`), and the remote's `spec/` branches with each branch's own spec file, because
+  `Owns:` lines are appended on the branch. It prints every spec by state with its driver,
+  its `Owns:` set, its branch on the remote and its last commit's age.
+- It names the collisions it can see, one line each: a number claimed twice under two
+  slugs, two ACTIVE specs whose `Owns:` sets overlap, a `spec/` branch whose spec is not on
+  the trunk, an ACTIVE spec with no branch, a BUILT spec waiting to merge, and a stale claim
+  (an ACTIVE spec whose branch has had no commit for `stale_days`, Part 3). It counts ACTIVE
+  specs per driver and never limits them.
+- The remote is the trunk's upstream, else `origin`, else none. The live read lists the
+  remote with `git ls-remote` and fetches the tips it does not have into remote-tracking
+  refs; `--offline` reads the last fetch and names its age. It needs no server and works
+  from any clone.
+- It refuses nothing, and no hook reads it. What it cannot see is a claim nobody pushed,
+  which is why the opening flip is pushed before the branch is cut (Part 5). The guarantee on
+  two specs that declare one file stays the close-time refusal (below, the ownership
+  question).
 
 #### /setlist:checkpoint (shipped by the plugin, on demand)
 - Survey the changes, sanity-check them (no secrets, no build cruft), commit with a clean
@@ -2485,17 +2663,6 @@ that layer ends. Everything below is a real hole, known and accepted, and none i
   ancestor of the tip being audited. A key moved forward to the tip walks nothing and reports
   clean; that is a declaration under the same review as the rest of `.claude/`, disclosed and
   not refused. Under `--since`, which the forge check passes, the key is not read at all.
-- **A first push to a brand-new EMPTY remote audits every pushed branch as a trunk
-  candidate.** An empty remote has no default branch yet, and git hosts adopt the first
-  pushed branch as the default. So `pre-push` cannot know which pushed ref is about to
-  become the trunk, and it audits them all. The clean trunk pushed on its own passes. A spec
-  branch pushed first, or alongside the trunk, is audited as if it were the trunk and
-  refused, because unclosed feature code must not become a remote's default by a raw push.
-  Push the trunk first, or use `SETLIST_SKIP_TRUNK_AUDIT=1` for a deliberate exception. This
-  fails closed, and it closed a fail-open that adversarial review found: a branch with
-  another name, pushed first to an empty remote, was ALLOWED while the hook audited the
-  local trunk, a ref the push never touched. That is exactly the class the remote-trunk
-  resolution was written to close.
 - **Hooks are per-clone, and `core.hooksPath` narrows that gap without closing it.**
   `.git/hooks` is not cloned, which is why the hooks are stamped into a tracked directory
   instead: they are versioned, reviewed in diffs, and present in every clone. The CONFIG
@@ -2580,7 +2747,12 @@ excluded because it is APPENDED during the build by design. Including it would m
 legitimate build read as drift, and a warning that fires on correct work is a warning people
 learn to scroll past. The `Spec-hash:` line is excluded because it lives inside the hashed
 range, so hashing it would change the value being written; excluding it is what makes writing
-the hash idempotent.
+the hash idempotent. Every other header line is inside the range, the `Driver:` line (new in
+v1.22) and the `Owns:` lines included, so an edit to who holds the spec drifts the hash like any
+other edit. With attestation off, checkpoint refreshes the hash after its own `Owns:` appends,
+through a mode that writes only when nothing but appended `Owns:` lines moved since the spec's last
+commit and prints each appended file with the hash before and after, so the drift is reported and
+never silent (v1.22); any other edit it refuses.
 
 #### It warns; it does not deny
 
@@ -2926,8 +3098,14 @@ audit reads. And a branch that took the earlier spec by merging that spec's bran
 trunk, is refused although it carries the change, and the same remedy clears it. The question
 is dated by the release that introduced it, so a close whose own `.claude/sdd.json` stamps a
 plugin older than 2.11.0 is not asked it. A double declaration across time (a spec cut after
-the earlier one closed) is not an overlap. That is the parallel-spec story: it is a property of
-the declarations, and no coordination tool is involved.
+the earlier one closed) is not an overlap. That is the parallel-spec story: the guarantee is a
+property of the declarations and the close-time refusal, and no coordination tool decides it.
+Since v1.22 the overlap is also REPORTED when it is acquired: at each `Owns:` append the checkpoint
+runs the board's read and names every other ACTIVE spec on the trunk, and every spec on a remote
+`spec/` branch, that declares the same file, with its driver and the remedy above. The board
+(`/setlist:board`) shows the same overlap between any two ACTIVE specs. Both are reads of what was
+pushed and refuse nothing, so a claim nobody pushed is invisible to them, and the refusal at the
+close is still what holds.
 
 The lite tier's cap rides the same reader (new in v1.14). A spec whose header reads
 `Tier: lite` (Part 3) declares at most five files, and a sixth is refused as
@@ -3009,7 +3187,12 @@ time. Part 8c's v1.16 delta says how an existing instance learns that.
   command that disarms the hooks for its own run. This line is how the session learns of a
   persistent change, or of a fresh clone whose `.git/config` was never armed. It is still a
   report and never a refusal, and it is silent before the repository exists, on an armed
-  instance, and outside an instance.
+  instance, and outside an instance. **Since v1.22 it also names the remote's other spec
+  branches.** It reads them from the LAST FETCH, the remote-tracking refs `git branch -r` lists,
+  other than the active spec's own, and says how old that fetch is, or that its age is unknown,
+  so a session learns of a teammate's pushed claim before it cuts or flips a spec. It makes no
+  network call, as no stamped hook does; the live reading is `/setlist:board`'s. It is a report,
+  and it is silent when no other spec branch is known.
 
 The hooks live in the instance and outside the plugin session, so enforcement survives a plugin
 uninstall. Each has a one-line disable (remove its entry from `settings.json`), which a later

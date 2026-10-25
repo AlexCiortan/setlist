@@ -267,6 +267,89 @@ SPEC DRIFT: the active spec $SPEC_SHOWN has CHANGED since it was approved. Its r
   fi
 fi
 
+# THE REMOTE'S SPEC BRANCHES, FROM THE LAST FETCH (spec 0201; G5 of the
+# session-zero rebuild). A teammate's claim is a spec/ branch pushed at the ACTIVE
+# flip, and it shows in git branch -r once this clone has fetched. So the remote's
+# spec/ branches as the LAST FETCH left them, other than the active spec's own,
+# are named on one line with that fetch's age, and a session does not start a
+# second copy of claimed work unseen. It reads local refs only and makes NO
+# network call: the stamped hooks are offline, and the live reading is the
+# board's (/setlist:board). A report, never a refusal; nothing is said when no
+# other spec branch is known.
+if [[ -e "$PROJ/.git" || -L "$PROJ/.git" ]]; then
+  RB_TRUNK="$(jq -r '.trunk // "main" | if . == "" then "main" else . end' "$PROJ/.claude/sdd.json" 2>/dev/null)"
+  RB_REMOTE="$(git -C "$PROJ" config --get "branch.${RB_TRUNK:-main}.remote" 2>/dev/null)"
+  [[ "$RB_REMOTE" == "." ]] && RB_REMOTE=""
+  if [[ -z "$RB_REMOTE" ]] && git -C "$PROJ" remote 2>/dev/null | grep -qx origin; then RB_REMOTE=origin; fi
+  if [[ -n "$RB_REMOTE" ]]; then
+    # The names are read under the remote's FULL name (spec 0205, the 2.14.0 leg's F3): a fixed
+    # lstrip=3 kept a second segment of a remote called team/up, so every name read up/spec/...
+    # and the active spec's own branch was never left out.
+    if RB_LIST="$(git -C "$PROJ" for-each-ref --format='%(refname)' "refs/remotes/$RB_REMOTE/spec/" 2>/dev/null)"; then
+      # Only the active spec's OWN branch is left out, by its full name: another
+      # claim of the same number under another slug is the collision to name.
+      RB_OWN=""
+      [[ -n "${SPEC_FILE:-}" ]] && RB_OWN="spec/$(basename "$SPEC_FILE" .md)"
+      RB_SHOWN=""; RB_N=0; RB_REFS=()
+      while IFS= read -r RB_B; do
+        [[ -n "$RB_B" ]] || continue
+        RB_B="${RB_B#"refs/remotes/$RB_REMOTE/"}"
+        [[ -n "$RB_OWN" && "$RB_B" == "$RB_OWN" ]] && continue
+        RB_N=$((RB_N + 1))
+        [[ "$RB_N" -le 10 ]] || continue
+        RB_REFS+=("refs/remotes/$RB_REMOTE/$RB_B")
+        RB_SAFE="${RB_B//[^A-Za-z0-9._\/ :+=@-]/?}"
+        # A name shown other than as the remote spells it says so, as the spec-file and armed paths
+        # do (spec 0205, the 2.14.0 leg's F10): the name is text the remote chose.
+        RB_EDIT=""
+        [[ "$RB_SAFE" == "$RB_B" ]] || RB_EDIT=" (characters outside a path set replaced with ?)"
+        [[ "${#RB_SAFE}" -le 80 ]] || RB_EDIT="$RB_EDIT (cut at 80 characters)"
+        RB_SHOWN="${RB_SHOWN:+$RB_SHOWN, }${RB_SAFE:0:80}$RB_EDIT"
+      done <<< "$RB_LIST"
+      if [[ "$RB_N" -gt 0 ]]; then
+        # THE AGE IS THE FETCH THAT CARRIED THESE BRANCHES (spec 0205, the 2.14.0 leg's F2, F8, F13).
+        # FETCH_HEAD's own time read "never fetched" in a fresh clone that lists them, "never fetched"
+        # in every linked worktree (its FETCH_HEAD is the repository's), the age of any unrelated
+        # fetch, and a future time as fresh. The age is now the newer FETCH_HEAD of this worktree
+        # and its repository that names a spec/ branch, else the newest reflog entry a fetch wrote
+        # for a listed branch, else unknown; a time in the future is unknown.
+        RB_AGE="of unknown age"; RB_T=""
+        for RB_FH in "$(git -C "$PROJ" rev-parse --git-path FETCH_HEAD 2>/dev/null)" "$(git -C "$PROJ" rev-parse --git-common-dir 2>/dev/null)/FETCH_HEAD"; do
+          [[ -n "$RB_FH" && "$RB_FH" != /* ]] && RB_FH="$PROJ/$RB_FH"
+          [[ -f "$RB_FH" ]] || continue
+          grep -q "branch 'spec/" "$RB_FH" 2>/dev/null || continue
+          RB_M="$(date -r "$RB_FH" +%s 2>/dev/null)" || continue
+          [[ "$RB_M" =~ ^[0-9]+$ ]] || continue
+          [[ -z "$RB_T" || "$RB_M" -gt "$RB_T" ]] && RB_T="$RB_M"
+        done
+        if [[ -z "$RB_T" ]]; then
+          for RB_R in ${RB_REFS[@]+"${RB_REFS[@]}"}; do
+            RB_G="$(git -C "$PROJ" reflog show -1 --format=%gd --date=unix "$RB_R" 2>/dev/null)" || continue
+            RB_M="${RB_G##*@\{}"; RB_M="${RB_M%\}}"
+            [[ "$RB_M" =~ ^[0-9]+$ ]] || continue
+            [[ -z "$RB_T" || "$RB_M" -gt "$RB_T" ]] && RB_T="$RB_M"
+          done
+        fi
+        if [[ -n "$RB_T" ]]; then
+          RB_S=$(( $(date +%s) - RB_T ))
+          if [[ "$RB_S" -lt 0 ]]; then RB_AGE="of unknown age"
+          elif [[ "$RB_S" -ge 86400 ]]; then RB_AGE="$((RB_S / 86400)) days old"
+          elif [[ "$RB_S" -ge 3600 ]]; then RB_AGE="$((RB_S / 3600)) hours old"
+          else RB_AGE="under an hour old"; fi
+        fi
+        [[ "$RB_N" -gt 10 ]] && RB_SHOWN="$RB_SHOWN, and $((RB_N - 10)) more"
+        MSG="$MSG
+
+OTHER SPEC BRANCHES ON THE REMOTE, as the last fetch left them ($RB_AGE; this hook makes no network call): $RB_SHOWN. Each is a spec someone else may hold. Before you cut or flip a spec, run /setlist:board, which reads the remote live and names who holds each spec and what collides."
+      fi
+    else
+      MSG="$MSG
+
+OTHER SPEC BRANCHES ON THE REMOTE: not read (git branch -r failed in this clone); /setlist:board reads the remote live."
+    fi
+  fi
+fi
+
 [[ -n "$ARMED_LINE" ]] && MSG="$ARMED_LINE
 
 $MSG"

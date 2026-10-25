@@ -482,6 +482,36 @@ run_hook "$HOOKS/scope-hook.sh" "$BARE" "$(edit_payload "$BARE/src/app.js")"
 expect_allow "no-sdd x1: the scope hook stays silent outside an instance"
 run_hook "$HOOKS/regrounding-hook.sh" "$BARE" "$(hook_payload startup)"
 expect_allow "no-sdd x2: the regrounding hook stays silent outside an instance"
+
+# --- M-4 (spec 0203, item 2): THE HASH REFRESHED AFTER `Owns:` APPENDS IS REPORTED, NEVER SILENT ---
+# With attestation off, checkpoint's `Owns:` appends drift the spec's own Spec-hash (the lines are inside
+# the hashed range), the re-grounding hook warns, and a refresh by hand reported nothing (2.13.0's cold
+# run refreshed it twice). spec-hash.sh --refresh-owns writes the new digest only when every difference
+# from the committed spec is an appended `Owns:` line, and prints each appended file and both digests;
+# any other difference is refused with nothing written (run_script is a later shard's, so the output
+# is captured here). Red first: before the mode existed both failed.
+SHO="$WORK/spechash-owns"; sh_fixture "$SHO" ACTIVE yes "Build the thing."
+git_init "$SHO"; git -C "$SHO" add -A; git -C "$SHO" -c core.hooksPath=/dev/null commit -qm "flip 0001 ACTIVE" >/dev/null 2>&1
+SHO_OLD="$(grep -m1 'Spec-hash:' "$SHO/specs/0001-thing.md" | sed 's/.*Spec-hash: //')"
+awk '{ print } /^Status: ACTIVE$/ { print "Owns: src/a.js"; print "Owns: src/b.js" }' "$SHO/specs/0001-thing.md" > "$SHO/t" && mv "$SHO/t" "$SHO/specs/0001-thing.md"
+SHO_OUT="$(bash "$ROOT/scripts/spec-hash.sh" --refresh-owns "$SHO/specs/0001-thing.md" 2>&1)"; SHO_RC=$?
+SHO_NEW="$(grep -m1 'Spec-hash:' "$SHO/specs/0001-thing.md" | sed 's/.*Spec-hash: //')"
+if [[ "$SHO_RC" -eq 0 && "$SHO_NEW" != "$SHO_OLD" && "$SHO_NEW" == "$(bash "$ROOT/scripts/spec-hash.sh" "$SHO/specs/0001-thing.md")" ]] \
+   && grep -q 'REFRESHED' <<< "$SHO_OUT" && grep -qF 'src/a.js' <<< "$SHO_OUT" && grep -qF 'src/b.js' <<< "$SHO_OUT" \
+   && grep -qF "$SHO_OLD" <<< "$SHO_OUT" && grep -qF "$SHO_NEW" <<< "$SHO_OUT"; then
+  ok "0203 M-4 a: after Owns: appends the refresh writes the new digest and prints each appended file and both digests"
+else
+  bad "0203 M-4 a: after Owns: appends the refresh writes the new digest and prints each appended file and both digests" "rc=$SHO_RC field $SHO_OLD -> $SHO_NEW: $(tr '\n' ' ' <<< "$SHO_OUT" | cut -c1-220)"
+fi
+git -C "$SHO" checkout -q -- specs/0001-thing.md
+awk '/^Build the thing\.$/ { print "Build a different thing."; next } { print } /^Status: ACTIVE$/ { print "Owns: src/a.js" }' "$SHO/specs/0001-thing.md" > "$SHO/t" && mv "$SHO/t" "$SHO/specs/0001-thing.md"
+SHO_SUM="$(cksum < "$SHO/specs/0001-thing.md")"
+SHO_OUT="$(bash "$ROOT/scripts/spec-hash.sh" --refresh-owns "$SHO/specs/0001-thing.md" 2>&1)"; SHO_RC=$?
+if [[ "$SHO_RC" -eq 1 && "$(cksum < "$SHO/specs/0001-thing.md")" == "$SHO_SUM" ]] && grep -q 'NOT REFRESHED' <<< "$SHO_OUT" && grep -q 'REVISED' <<< "$SHO_OUT"; then
+  ok "0203 M-4 b: an Owns: append beside an edit to the spec's body is refused, the REVISED route named, the file unchanged"
+else
+  bad "0203 M-4 b: an Owns: append beside an edit to the spec's body is refused, the REVISED route named, the file unchanged" "rc=$SHO_RC: $(tr '\n' ' ' <<< "$SHO_OUT" | cut -c1-220)"
+fi
 fi; shard_region_end
 # <<< SHARD-END session-gates-01
 

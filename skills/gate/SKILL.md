@@ -25,8 +25,9 @@ evidence-gated, never time-gated.
    (b), it is allowed to lag the trunk by design, and failing a gate on it
    would block planning on a release that was never owed. Skim the
    Closing reports of specs closed since the last transition (deviations and
-   follow-ups only). Where a design surface exists, run /insights over its
-   record (Part 5c). The repo as it exists is the ground truth, and the
+   follow-ups only). Where a design surface exists, read its committed
+   record, `docs/design/INDEX.md` and the redlines locked since the last
+   transition, for drift (Part 5c). The repo as it exists is the ground truth, and the
    roadmap's assumptions are not.
 2. **Verify the gate, leg by leg.** Quote each leg and state PASS or FAIL
    with evidence, verified live this session (gates re-run in this session).
@@ -36,7 +37,9 @@ evidence-gated, never time-gated.
    tier (the Agent tool with `model: haiku`, Part 2) that reports each
    command's output and exit status; whether a leg PASSES is yours, and a
    journal line names each delegated run, the model it resolved to, its
-   tokens, and its cost where the harness reports one. If ANY leg fails: stop. A failed gate
+   tokens, and its cost where the harness reports one. A delegated run is never
+   a fork, which runs on this session's model; the journal line's model field is
+   the check. If ANY leg fails: stop. A failed gate
    is a finding to act on, and arguing with it is no move. Name the smallest work that
    addresses the failing leg as the next action and end the session.
 3. **Reconcile the next stage's backlog.** For each row: keep, amend the

@@ -34,6 +34,12 @@
 
 set -u
 
+# REPLACE REFS IGNORED BEFORE THE FIRST GIT READ (spec 0205, the 2.14.0 leg's F1). The library sets
+# this for every reader it holds (spec 0203, C-84), but this hook reads git before it sources the
+# library, so a replacement could show it a pushed tip without .claude/sdd.json and the push read as
+# ungoverned. Set here too, before anything reads git.
+GIT_NO_REPLACE_OBJECTS=1; export GIT_NO_REPLACE_OBJECTS
+
 # THE CHAIN RUNNER'S ENTRY (spec 0173, item 2). One EXIT trap, set before anything
 # can exit, so whatever this hook decides (a pass, a refusal, the SETLIST_SKIP_HOOKS
 # escape), a hook manager recorded as "hooks_chain" in .claude/sdd.json then runs
@@ -102,7 +108,10 @@ TRUNK="$(slh_trunk "$PROJ")" || exit 1
 # branch (the ordinary way a long branch keeps up) is not a close and must not be
 # gated, or the hook makes the normal workflow impossible, which is the
 # false-denial direction this repo treats as the more dangerous one.
-if ! slh_on_trunk "$PROJ" "$TRUNK"; then
+OT=0; slh_on_trunk "$PROJ" "$TRUNK" || OT=$?
+# A HEAD git could not read refused by name above (spec 0203): never read as "not on the trunk".
+[ "$OT" -ne 2 ] || exit 1
+if [ "$OT" -ne 0 ]; then
   # A merge that is not INTO the trunk is not a close event, and gating it would
   # make the ordinary catch-up merge impossible. The predicate is genuinely
   # evaluated: $TRUNK arrives here REDUCED to a local branch name by slh_trunk,

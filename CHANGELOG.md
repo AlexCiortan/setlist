@@ -9,6 +9,161 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.14.0
+
+Edition v1.22, the session-zero edition. Session zero says what it is before it asks anything.
+It no longer opens on a question (`skills/new/SKILL.md`, `skills/retrofit/SKILL.md`).
+
+- **The session contract.** The first message of `/setlist:new` and `/setlist:retrofit` says what
+  the session is, right after the model line. It names what the agent decides only with your
+  approval and what it never decides for you: boundaries, data ownership, the repository split
+  and anything with a cost. You can ask it anything at the level you work at.
+- **The sizing question.** Session zero's second question, after what has changed, sizes the
+  system: one deployable, several with their own pipelines, or an existing estate; who else builds
+  here; and what already exists. The answers choose how deep the session goes and are written into
+  `product.md` as its sizing line. The retrofit proposes the answer from what its inventory read.
+- **The depth modes.** The sizing picks one of three: ordinary for one deployable, the round as
+  before; deep for several, which adds one round per topic, each ending with what was decided and
+  what stays open; and estate, deep plus a read of the sibling repositories. A deep round ends when
+  its decisions are written or you say enough, never when the session runs out of defaults. Deep
+  is never forced on one deployable; you can ask for it.
+- **The deep rounds.** In deep and estate mode session zero asks six rounds, one topic each:
+  boundaries and ownership, contracts between components, data, pipelines and deployment, failure
+  modes and the riskiest integration, and observability, last. Every crossing gets a named contract
+  or an open question. The answers go into the steering documents the stamp already writes
+  (`structure.md`, `state.md`, `tech.md` and `RUNBOOK.md`), and the spike is scoped from the riskiest
+  integration. The spec template gains an optional `Contracts touched:` line, which no hook reads.
+- **The estate inventory.** `/setlist:retrofit` first asks whether the repository is the whole
+  system or one of several. For several, it reads each sibling you name, by path or URL and
+  read-only: its layout, languages, pipeline files and the crossings it can see. For an estate it
+  writes a System section in `structure.md` from what it found, and every missing piece becomes an
+  open question. Each role path is shown with its file count and confirmed by you, path by path;
+  several code directories, or none, are asked about, never guessed.
+- **The system spec.** A system of several repositories gets one system spec: `system.md` in a
+  system repository (or the API's), with `contracts/` and the system's decisions beside it. Each
+  repository's first spec cites it in an optional `Cites:` header line, and a change that crosses
+  repositories is one system spec plus one spec in each repository, each citing its id.
+  `/setlist:validate` reads the citation; no hook refuses on it. A system of one repository keeps
+  its System section in `structure.md`.
+- **The bootstrap plan.** `system.md` lists the repositories to stamp, in order, each with its
+  directory, role paths and gate command. Session zero and the retrofit walk it one step at a time:
+  each repository is stamped with the system spec's path recorded as `system_spec` in
+  `.claude/sdd.json`, gets its own documents and a first spec that cites the system spec, and gets
+  one progress line; the walk stops at the first failure. The refresh keeps the key, and
+  `/setlist:validate` reports a system spec that is missing or unreadable, or that spec 0001 does
+  not cite.
+- **The readers read the register.** The spec reader also reads the Assumptions sections of the
+  steering documents a spec names, and lists every assumption the spec depends on that you have
+  not approved. The close review takes the register as a fifth input, and a criterion that rests on
+  an assumption you left for later is a MAJOR finding (`templates/claude/agents/spec-reader.md`,
+  `templates/claude/agents/close-reviewer.md`).
+- **The assumption register.** Every decision your idea leaves open is a question or a written
+  default: an id, the decision, the default taken, why, and the question that would change it.
+  You answer each line: keep, change, or ask me later. The lines land in an Assumptions section
+  of `product.md` and `tech.md`, and the ones you left for later in spec 0001's open questions.
+- **Decisions first.** When the session cannot name the deployables, the users and the core data
+  from what you told it, it derives the decisions your idea leaves open and asks them in order of
+  consequence, three at a time, before it proposes anything.
+- **The repository split.** Session zero asks which deployables your system has and, for each, its
+  pipeline, its release cadence and its team. It proposes one repository per deployable that needs
+  its own of any of the three, and one repository where they share all three, names the trade, and
+  records the choice with its reason in `product.md`. Each repository is its own instance, and
+  no gate reads across them: [the boundary](LIMITATIONS.md#one-repository).
+- **The team round.** For a team, session zero and the retrofit ask who else builds and how many
+  at once, how the trunk is protected, who approves a spec, who may flip it ACTIVE, and what
+  happens to a claim nobody touches for some days. The answers go into a Team section of
+  `product.md`, and the last one into an optional `stale_days` key in `.claude/sdd.json`.
+- **The visibility block.** After every lifecycle flip `/setlist:checkpoint` prints four lines:
+  what reached the trunk, what was pushed, who can see it now, and what is still only local. It
+  reports; the checkpoint still pushes only when you ask.
+- **The trunk claim.** `/setlist:checkpoint` makes the opening ACTIVE flip a commit on the trunk
+  and pushes it, after you approve the push, before it cuts `spec/NNNN-<slug>`, in every instance
+  and not only under `forge` custody. It refuses, in words, to open a branch whose spec the trunk
+  does not carry at ACTIVE, so a claim never lives only on a local branch.
+- **The Driver line.** A spec's header gains `Driver: <handle>`, written by the ACTIVE flip from
+  `identity.user_email` in `.claude/sdd.json`, or git's `user.email`, inside the hashed range, so an
+  attestation signs it. `/setlist:validate` reports it beside the spec's hash.
+- **The spec board.** `/setlist:board`, and `/setlist:validate --board`, read the trunk and the
+  remote from any clone, with no server (`scripts/board.sh`, `skills/board/SKILL.md`). They print
+  every spec by state with its driver, its `Owns:` set, its branch and its last commit's age, and
+  name each collision they can see: one number claimed twice, two ACTIVE specs declaring one file,
+  a branch whose spec is not on the trunk, an ACTIVE spec with no branch, a BUILT spec waiting to
+  merge. The board refuses nothing and cannot see a claim nobody pushed.
+- **The next number.** A new spec takes the highest number on the trunk and among the remote's
+  spec branches, plus one (`scripts/board.sh --next`), so a number a teammate pushed is not
+  handed out again. When two cuts still collide, the first trunk landing keeps the number and the
+  other renumbers before it merges.
+- **The claim pushed.** The opening flip pushes the trunk and the empty `spec/NNNN-<slug>` branch in
+  one atomic push, after you approve it, so `git branch -r` shows the claim in every clone that
+  fetches. At each session start the re-grounding hook names the remote's other spec branches from
+  the last fetch, with its age or that the age is unknown (`templates/hooks/regrounding-hook.sh`). It
+  makes no network call.
+- **The overlap report.** At each `Owns:` line the checkpoint appends, it names every other ACTIVE
+  spec on the trunk, and every spec on a remote spec branch, that declares the same file, with its
+  driver and the close's remedy, before the build writes the file. `/setlist:validate`'s double
+  declaration item reaches the remote's spec branches too. Both report; the close still refuses the
+  second of two overlapping closes.
+- **The push race.** When two people flip one spec, git refuses the second push (or the stamped
+  pre-push refuses it first, for a trunk this clone never fetched), and the checkpoint fetches,
+  reads the trunk again and says who holds the spec instead of leaving a git error to read; it
+  never retries or resets on its own. Under `forge` custody the second pull request shows the
+  first's Driver line.
+- **Stale claims.** The board shows an ACTIVE spec whose branch has had no commit for `stale_days`
+  (`.claude/sdd.json`, seven by default) as stale, with its driver, and prints a count of ACTIVE
+  specs per driver, which is reported and never enforced.
+- **The design canvas.** The design surface for UI work is Claude Code's `/design`: a design intake
+  drafts the screens as artboards on a canvas, and you pick one per screen. The locked redline, the
+  picked artboards' exports and every decision a comment thread records are committed under
+  `docs/design/` before the spec that builds to it goes ACTIVE, and design QA reads the committed
+  redline (`skills/design-surface/SKILL.md`). The `docs/design/INDEX.md` stub names the export step.
+  Without `/design`, a mock made another way is committed by the same rule.
+
+- **Replace refs are ignored.** A local `git replace` made git read another commit in place of the
+  one a push sends, so the git hooks and the trunk audit could be shown a compliant commit while
+  the remote received an unspecced one. The hook library and the audit now read history with
+  replace refs ignored, and judge the commit the remote receives.
+- **A failed read of HEAD is refused.** When git cannot say which branch HEAD is on, the commit and
+  merge hooks refuse by name (`SLH-AUDIT-GIT-FAILED`) where they used to read it as "not on the
+  trunk" and let a merge pass ungated. A detached HEAD still reads as not on the trunk.
+- **The example environment file is readable.** The stamped deny list's Bash rules name the same
+  secret files as its Read rules, so a session can read `.env.example` with `cat` as well as with
+  the Read tool. An existing instance keeps its own permissions; `/setlist:upgrade` offers the edit.
+- **The hash refresh is reported.** With attestation off, the `Owns:` lines the checkpoint appends
+  during a build change the spec's `Spec-hash:`. The checkpoint now refreshes it with
+  `spec-hash.sh --refresh-owns`, which prints each appended file and the hash before and after, and
+  refuses, writing nothing, when anything else in the spec moved since its last commit.
+- **The first push to an empty remote.** An empty remote has no trunk yet, so `pre-push` used to
+  audit every branch pushed to it as if it were the trunk, and refused a spec branch pushed first
+  or beside the trunk. It now audits the trunk your instance declares and names every other pushed
+  branch it did not audit (`SLH-REF-NOT-AUDITED`), with the two ways through: push the trunk first,
+  and require the forge check on the trunk.
+
+- **Delegated work never runs as a fork.** The checkpoint, gate and validate commands hand their
+  mechanical half to a subagent on the delegated tier through the Agent tool with `model: haiku`,
+  and never as a fork, which runs on your session's model. The journal line's model field shows
+  which model ran it (`skills/checkpoint/SKILL.md`, `skills/gate/SKILL.md`,
+  `skills/validate/SKILL.md`).
+- **The model table, per provider.** The edition's model table is re-read at the current Claude
+  Code: `haiku` is Haiku 4.5 on Claude Platform on AWS and on the cloud-provider platforms, `fable`
+  and `best` retry once on the previous Fable model where the newest is unavailable, and a
+  partner-operated platform's own retirement date applies where `sonnet` is Sonnet 4.5.
+  `/setlist:validate` names the Haiku generation that served its own run when it is not Haiku 5.
+- **Long commands stay whole through compaction.** `/setlist:checkpoint`, `/setlist:upgrade` and
+  `/setlist:validate` keep what every run needs in their `SKILL.md`, each under 20,000 bytes, and
+  read the rarely needed sections (releases, chores, the diagram half, the older upgrade deltas, the
+  long checks, the gotchas) from `references/` files beside it, so a long session that compacts
+  keeps the steps the close and the flip depend on (`skills/checkpoint/references/`,
+  `skills/upgrade/references/`, `skills/validate/references/`).
+- **The upgrade to 2.14.0.** `/setlist:upgrade` names every edit an instance receives: the changed
+  hooks, the re-grounding hook and two agents through the refresh, the new header lines and keys
+  read only where present, one offered edit to `.claude/settings.json`, and, for a UI project, the
+  design record under `docs/design/`.
+
+One design boundary leaves with the capability that retires it: "A first push to a brand-new EMPTY
+remote audits every pushed branch as a trunk candidate." One enters, as the bound of the repository
+split: [one repository is one instance](LIMITATIONS.md#one-repository). The Known-limitations list
+as it stands in this release: 21 design boundaries, 0 open limitations, 0 upstream conditions.
+
 ## 2.13.0
 
 Edition v1.21, the delegation edition. Part 2 binds each tier by its alias and never by a

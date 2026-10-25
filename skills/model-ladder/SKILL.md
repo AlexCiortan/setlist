@@ -44,7 +44,9 @@ held in one table the edition's Changelog updates per edition.
   `/setlist:validate`'s read-only check, QA Pass 1 (`qa-verifier`, `model:
   haiku`) with its browser-QA runs, and the `verify` skill's gate run. Never
   delegated: planning, the close review (`close-reviewer` stays on `model:
-  opus`), and any decision that closes a spec. The rung is safe inside Setlist
+  opus`), and any decision that closes a spec. A delegated phase runs through
+  the Agent tool with `model: haiku`, never as a fork, which runs on the parent
+  session's model; the journal line's model field shows which ran. The rung is safe inside Setlist
   because two guardrails answer the tier's named failure modes (stopping early
   to hand the task back; claiming a change done without a check): the golden
   rules "carry a spec through" and "a real check, or no claim", delivered by

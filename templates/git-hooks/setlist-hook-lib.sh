@@ -50,6 +50,14 @@
 # ASCII-only.
 LC_ALL=C; export LC_ALL
 
+# EVERY GIT READ IN THIS PROCESS READS THE OBJECTS A PUSH SENDS (spec 0203, C-84). git substitutes a
+# refs/replace/* object wherever it reads a commit, and a push sends the original, so a local
+# `git replace` showed these hooks and the trunk audit a compliant commit while the remote received
+# an unspecced one (measured red first on these bytes: the audit read the replacement clean and the
+# armed push landed the original). Set ONCE here, for the same reason as the locale above: every
+# hook that sources this file and every git and audit process those hooks start inherits it.
+GIT_NO_REPLACE_OBJECTS=1; export GIT_NO_REPLACE_OBJECTS
+
 # NO READER EXITS BEFORE ITS WRITER IS DONE (spec 0169, CHK-REPORT-READ's cause,
 # h5). `printf ... | grep -q` let grep exit at its first match while the writer
 # was still writing; where SIGPIPE is ignored (the Linux CI runner) the writer
@@ -1021,14 +1029,21 @@ slh_canonical_branch() { # slh_canonical_branch <proj> <name> -> stored spelling
   printf '%s' "$name"
 }
 
-slh_on_trunk() { # slh_on_trunk <proj> <trunk>
-  # A DETACHED HEAD yields empty, which never equals the trunk name (slh_trunk
-  # guarantees a non-empty local branch), so the hooks treat it as "not on the
-  # trunk". Correct: commits made on a detached HEAD advance no branch ref, so
-  # nothing reaches the trunk by that route.
-  # fail-open-ok: detached HEAD is not the trunk, and cannot become it silently.
-  local head
-  head="$(git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null || true)" # fail-open-ok: detached HEAD yields empty, handled above
+slh_on_trunk() { # slh_on_trunk <proj> <trunk>: 0 on it, 1 not, 2 after refusing a read that failed
+  # A DETACHED HEAD is "not on the trunk": symbolic-ref exits 1 for it, and
+  # commits made there advance no branch ref, so nothing reaches the trunk by
+  # that route. ANY OTHER FAILURE IS NOT A DETACHED HEAD (spec 0203, R5 of the
+  # 2.13.0 leg): exit 128 is git unable to read HEAD, and reading it under
+  # `|| true` as "not on the trunk" let pre-merge-commit pass a merge onto the
+  # trunk ungated. It refuses by name, the commit layer's other failed reads'
+  # code, and the callers act on 2 as a refusal.
+  local head st=0
+  head="$(git -C "$1" symbolic-ref --quiet --short HEAD 2>/dev/null)" || st=$?
+  case "$st" in
+    0) ;;
+    1) return 1 ;; # fail-open-ok: a detached HEAD, measured by symbolic-ref's own exit 1, is not the trunk
+    *) slh_git_failed "$st" "symbolic-ref --quiet --short HEAD" "which branch HEAD is on"; return 2 ;;
+  esac
   [ -n "$head" ] || return 1
   # HISTORY: ruling LIB-32 (2026-08-07): THE UPSTREAM DISCRIMINATOR IS REMOVED (2026-08-07).
   [ "$(slh_canonical_branch "$1" "$head")" = "$(slh_canonical_branch "$1" "$2")" ]

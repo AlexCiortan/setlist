@@ -11,7 +11,9 @@ specs/TEMPLATE.md, which is the same text, stamped at bootstrap.
 ## Authoring
 
 - Every spec starts as a copy of specs/TEMPLATE.md, numbered sequentially
-  (spikes are 0000). Statuses: DRAFT, QUEUED, ACTIVE, REVISED, BUILT, PARKED,
+  (spikes are 0000); the number comes from `scripts/board.sh --next`, the
+  highest on the trunk and the remote's spec branches plus one (Part 3,
+  edition v1.22). Statuses: DRAFT, QUEUED, ACTIVE, REVISED, BUILT, PARKED,
   CLOSED (Part 5 carries the canonical list; BUILT and PARKED are v1.7, and
   both mean the work is NOT on the trunk).
 - A spike's output is a decision, and it lands as a citable artifact, never as
@@ -34,11 +36,17 @@ specs/TEMPLATE.md, which is the same text, stamped at bootstrap.
   that must be CLOSED first; `Owner docs:` is the Builder's read budget for
   this spec; `QA binding:` declares how Pass 1 verifies it, decided at
   authoring time, never improvised at close; `Design contract:` cites the
-  locked redline for design-heavy work, or "none (functional)". Two are
+  locked redline for design-heavy work, or "none (functional)"; the optional
+  `Contracts touched:` (edition v1.22) names the contract lines in
+  `steering/structure.md` the spec changes, and no hook reads it; the optional
+  `Cites:` lines (edition v1.22) name the system spec of a system of
+  repositories by path or URL, with its id (`system/0003`) for a change that
+  crosses repositories, read by `/setlist:validate` and refused by nothing. Three are
   MACHINE-written and never authored by hand: `Spec-hash:` (checkpoint, at the
-  ACTIVE flip) and `Owns:` lines (checkpoint, as the build acquires role-path
+  ACTIVE flip), `Driver:` (checkpoint, at the same flip, edition v1.22) and
+  `Owns:` lines (checkpoint, as the build acquires role-path
   files; edition v1.12, one verbatim file per line, no placeholder in the
-  template on purpose). Do not add, edit or imitate either while authoring:
+  template on purpose). Do not add, edit or imitate any of them while authoring:
   the audit reads their exact grammar, and a hand-written declaration is a
   claim checkpoint never made.
 - A spec MAY carry an optional `## Design sketch` section, above Scope, holding
@@ -61,7 +69,8 @@ specs/TEMPLATE.md, which is the same text, stamped at bootstrap.
   approves and before the spec goes ACTIVE, run the stamped `spec-reader`
   agent with the spec's path. It reads the spec and its owner docs as the
   Builder will and lists the questions it would still need to ask, each with
-  its line. Answer each in the spec (a sharper criterion, a named decision,
+  its line. Since edition v1.22 it also lists every assumption the spec
+  rests on that the register does not show approved. Answer each in the spec (a sharper criterion, a named decision,
   an open question) or dismiss it with a reason; "No questions." is a fine
   answer. It touches no hook and no gate, and it decides nothing: the spec
   is still what the human approved.

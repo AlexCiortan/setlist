@@ -1685,7 +1685,7 @@ if grep -q 'root/github/CODEOWNERS.tmpl' "$ROOT/templates/STAMP-TREE.md" && grep
 else
   bad "codeowners template (amendment 5): STAMP-TREE's row names the fourth path" "the row does not mention /.github/"
 fi
-if grep -q 'fourth protected path' "$ROOT/skills/validate/SKILL.md" && grep -q 'fourth protected path' "$SCRIPTS/refresh-instance.sh"; then
+if grep -rq 'fourth protected path' "$ROOT/skills/validate/" && grep -q 'fourth protected path' "$SCRIPTS/refresh-instance.sh"; then
   ok "codeowners (amendment 5): the validate skill's check 21 and the refresh's report both know the fourth path by name"
 else
   bad "codeowners (amendment 5): the validate skill's check 21 and the refresh's report both know the fourth path by name" "the phrase 'fourth protected path' is absent from one of them"
@@ -2451,7 +2451,9 @@ else
 fi
 # Narrowed by spec 0159 (review item 13; R15 option (a)): Read(.env.*) denied the .env.example
 # the stamp writes, so the Read rules now name the conventional secret-bearing files. Red first.
-SH_DENY_WANT='["Read(.env)","Read(.env.local)","Read(.env.*.local)","Read(.env.production)","Read(.env.development)","Read(.env.staging)","Read(.env.test)","Bash(cat .env*)"]'
+# Narrowed again by spec 0203 (item 10; 0200's cold run, m-4): Bash(cat .env*) refused the
+# cat .env.example a session is meant to run, so the Bash rules name the same files. Red first.
+SH_DENY_WANT='["Read(.env)","Read(.env.local)","Read(.env.*.local)","Read(.env.production)","Read(.env.development)","Read(.env.staging)","Read(.env.test)","Bash(cat .env)","Bash(cat .env *)","Bash(cat .env.local)","Bash(cat .env.local *)","Bash(cat .env.*.local)","Bash(cat .env.*.local *)","Bash(cat .env.production)","Bash(cat .env.production *)","Bash(cat .env.development)","Bash(cat .env.development *)","Bash(cat .env.staging)","Bash(cat .env.staging *)","Bash(cat .env.test)","Bash(cat .env.test *)"]'
 if [[ "$(printf '%s' "$SH_TMPL" | jq -c '.permissions.deny' 2>/dev/null)" == "$SH_DENY_WANT" ]]; then
   ok ".env deny: the template denies the conventional secret files by name and the one Bash spelling (measured 2026-09-07: both reads of an environment file refused, a file named env.txt allowed)"
 else
@@ -2469,6 +2471,53 @@ if [[ -z "$SH_EXAMPLE_HIT" ]] && grep -q '\.env\.example' "$ROOT/scripts/stamp.s
   ok ".env deny: the .env.example the stamp writes is matched by no Read rule"
 else
   bad ".env deny: the .env.example the stamp writes is matched by no Read rule" "matched by:${SH_EXAMPLE_HIT:- none (or the stamp no longer writes it)}"
+fi
+# The Bash rules, read as the glob the note gives them (spec 0203, item 10): no rule matches the
+# read of the example file, and each conventional secret file's read is matched by one
+# (`.env.*.local` read as `.env.dev.local`). Red first: under the one old rule the first half
+# fails. The command is assembled here from its two words, so no shipped line spells the read
+# itself, which the export's policy gate refuses.
+SH_READER="cat"; SH_EXAMPLE_FILE=".env.example"
+SH_BASH_EXAMPLE_HIT=""; SH_BASH_UNCOVERED=""
+SH_BASH_RULES="$(printf '%s' "$SH_TMPL" | jq -r '.permissions.deny[] | select(startswith("Bash("))' 2>/dev/null)"
+while IFS= read -r sh_rule; do
+  [[ -n "$sh_rule" ]] || continue
+  sh_glob="${sh_rule#Bash(}"; sh_glob="${sh_glob%)}"
+  # shellcheck disable=SC2053 # the pattern is a glob on purpose
+  [[ "$SH_READER $SH_EXAMPLE_FILE" == $sh_glob ]] && SH_BASH_EXAMPLE_HIT="$SH_BASH_EXAMPLE_HIT $sh_rule"
+done <<< "$SH_BASH_RULES"
+for sh_name in .env .env.local .env.dev.local .env.production .env.development .env.staging .env.test; do
+  sh_cov=""
+  while IFS= read -r sh_rule; do
+    [[ -n "$sh_rule" ]] || continue
+    sh_glob="${sh_rule#Bash(}"; sh_glob="${sh_glob%)}"
+    # shellcheck disable=SC2053 # the pattern is a glob on purpose
+    [[ "$SH_READER $sh_name" == $sh_glob ]] && sh_cov=1
+  done <<< "$SH_BASH_RULES"
+  [[ -n "$sh_cov" ]] || SH_BASH_UNCOVERED="$SH_BASH_UNCOVERED $sh_name"
+done
+if [[ -n "$SH_BASH_RULES" && -z "$SH_BASH_EXAMPLE_HIT" && -z "$SH_BASH_UNCOVERED" ]]; then
+  ok ".env deny 0203: the example file's read is matched by no Bash rule, and each conventional secret file's read is matched by one"
+else
+  bad ".env deny 0203: the example file's read is matched by no Bash rule, and each conventional secret file's read is matched by one" "matching .env.example:${SH_BASH_EXAMPLE_HIT:- none}; uncovered:${SH_BASH_UNCOVERED:- none}"
+fi
+# The two lists name ONE set (spec 0205, the 2.14.0 leg's F4): the Bash rules were prefix globs
+# (.env.production*), so the read of .env.production.example was refused while the Read rules let the
+# file through, and a name neither list carries is read by neither. Every example form reads from the
+# shell, and a name outside the Read rules (.env.prod) is matched by no Bash rule either. Red first.
+SH_SET_HIT=""
+for sh_name in .env.production.example .env.development.example .env.staging.example .env.test.example .env.local.example .env.prod; do
+  while IFS= read -r sh_rule; do
+    [[ -n "$sh_rule" ]] || continue
+    sh_glob="${sh_rule#Bash(}"; sh_glob="${sh_glob%)}"
+    # shellcheck disable=SC2053 # the pattern is a glob on purpose
+    [[ "$SH_READER $sh_name" == $sh_glob ]] && SH_SET_HIT="$SH_SET_HIT $sh_name:$sh_rule"
+  done <<< "$SH_BASH_RULES"
+done
+if [[ -n "$SH_BASH_RULES" && -z "$SH_SET_HIT" ]]; then
+  ok ".env deny 0205 F4: every example form reads from the shell, and no Bash rule reaches a name the Read rules leave readable"
+else
+  bad ".env deny 0205 F4: every example form reads from the shell, and no Bash rule reaches a name the Read rules leave readable" "matched:${SH_SET_HIT}"
 fi
 if printf '%s' "$SH_TMPL" | jq -e '.permissions._comment | test("SPELLING list") and test("Bash deny for reading environment files") and test("less, head") and test("\\.env\\.example") and (test("Read\\(\\.env\\.\\*\\)") | not)' >/dev/null 2>&1 && ! grep -q '^[[:space:]]*//' "$ROOT/templates/claude/settings.json.tmpl"; then
   ok ".env deny: the spelling-list note lives in the _comment key the harness tolerates, and no // comment is in the file (measured: a // comment drops every rule)"

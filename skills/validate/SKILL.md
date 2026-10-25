@@ -1,6 +1,6 @@
 ---
 name: validate
-description: Idempotent framework health check of the instance (Part 6). Reports findings, fixes nothing without approval.
+description: Idempotent framework health check of the instance (Part 6). Reports findings, fixes nothing without approval. With --board, adds the board.
 ---
 
 You are the framework health check (Part 6 of the committed edition). This
@@ -18,7 +18,10 @@ tier (Part 2, edition v1.21): hand it to a subagent through the Agent tool with
 probe stays in the session, since it measures the session's own models and
 spends quota the user is told about first. What a finding means, and anything to fix, stays with you. A journal
 line names the delegated run, the model it resolved to, its tokens, and its
-cost where the harness reports one.
+cost where the harness reports one. Checks 18, 21, 22 and 24 keep their full text in
+`${CLAUDE_PLUGIN_ROOT}/skills/validate/references/checks.md`: hand the subagent that path too. Never hand the check list to a fork: a fork
+runs on this session's model, not `haiku`, and the journal line's model field
+is the check.
 
 Open the report by stating the plugin version you are operating from and
 whether it is the newest one available: run
@@ -34,6 +37,13 @@ present, wiring intact, config coherent. It does not judge semantic consistency
 Planner work at spec time. Domain checks an instance accumulates (a shellcheck
 sweep, a stack-specific hygiene rule) live in an instance-owned skill under the
 instance's own name, never in a copy of this command.
+
+With `--board` (edition v1.22), after the checks below, run the board and print
+its report under its own heading: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/board.sh"`
+(the same script `/setlist:board` runs; `--offline` passes through). It reads
+the trunk and the remote, names every collision it can see, and refuses
+nothing; its lines are information, never findings, and it exits 2 only when it
+could not read, which is reported as the one line it prints.
 
 Checks:
 
@@ -174,13 +184,17 @@ Checks:
     audit reads `user.email`. Say that plainly, because this declaration has no
     enforcing layer; learning that during a health check is cheaper than learning
     it mid-close. An absent key is not a finding; the check is opt-in and most
-    projects will not want it.
+    projects will not want it. Where the ACTIVE spec's `Driver:` line (edition
+    v1.22) names a handle other than the declared one, report both as
+    INFORMATION: a teammate may hold the spec.
 16. The ACTIVE spec carries a `Spec-hash:` field (Part 6). Its ABSENCE is
     INFORMATION, not a finding: specs authored before edition v1.7 do not have
     one and acquire it on their next REVISED cycle. Do not recompute or write
     the value here; that is checkpoint's job at a lifecycle transition, and a
     health check that silently re-stamps a hash would erase the very drift the
-    field exists to surface.
+    field exists to surface. Report its `Driver:` line (edition v1.22) beside it,
+    as INFORMATION; an absent line is information too, for a spec flipped before
+    the line existed, and nothing here writes one.
 17. If `.claude/sdd.json` declares `"attestation": {"required": true}`, the
     ACTIVE spec has an approval attestation at `specs/attest/NNNN.json` with its
     `.sig` beside it (Part 6). **Presence is INFORMATION and absence is not a
@@ -192,59 +206,9 @@ Checks:
     produced an approval unseen would be manufacturing the exact thing the
     mechanism exists to make somebody do deliberately.
 
-18. **The git-hook boundary is LIVE** (Part 6). The guarantee is the push-time
-    trunk audit, the per-merge hooks are its early warning, and all three parts
-    below have to hold for either to run at all:
-    - `.githooks/` exists and carries `pre-commit`, `pre-merge-commit`,
-      `pre-push` and `setlist-hook-lib.sh`, and the three hooks are
-      EXECUTABLE. Git skips a non-executable hook silently, so a mode bit is
-      the difference between a boundary and a decoration.
-    - `git config core.hooksPath` is `.githooks`. Without it git runs
-      `.git/hooks` and every file above is inert.
-    - `git config merge.ff` is `false`. Without it a fast-forward merge fires
-      NO hook at all and walks unreviewed work onto the trunk.
-    Any of the three missing is a FINDING, not information. Unlike the release
-    block or the identity key, this is not opt-in, and an instance that has lost
-    it is running with the advisory layer only while the edition says otherwise.
-    Both config settings live in `.git/config`, which is not cloned, so a fresh
-    clone legitimately lacks them and the fix is to re-run the refresh.
-    Report what is missing and the exact command that restores it.
-    - **The trunk audit's declared baseline** (`audit.baseline` in
-      `.claude/sdd.json`, edition v1.18). The audit walks from the commit that
-      introduced `.claude/sdd.json` unless this key declares another, and for an
-      instance whose hooks arrived LATER than its stamp the default is not
-      merely imprecise: every merge in between was made when no
-      `pre-merge-commit` existed to record a completion, so the audit refuses
-      every push and calls those commits "made after this instance adopted the
-      rules". Two directions, both REPORT-ONLY. **Ask the audit's own
-      question, never re-derive it:** run
-      `bash "${CLAUDE_PLUGIN_ROOT}/scripts/refresh-instance.sh" .` in REPORT
-      mode (no `--apply`; it writes nothing) and quote its
-      `.claude/sdd.json audit.baseline` line, which is computed by
-      `slh_baseline_frame`, the same function the trunk audit runs (edition
-      v1.19, spec 0167).
-      - **Present**: the key is usable when it resolves to a commit here and is
-        an ancestor of the recorded trunk; the audit walks from the oldest
-        commit on the trunk's own first-parent line that contains it (the
-        declared commit itself, or the merge that brought it in), and the line
-        names that frame. It should equal what the refresh writes: the commit
-        that added `.githooks/pre-push`, or, when the refresh is delivering the
-        boundary now and no such commit exists yet, the trunk's tip at that
-        moment. Any other usable value is a DECLARATION that differs from what
-        the refresh would write: say so, name both commits and how many merges
-        lie between them, and leave it alone. A value the audit cannot use at
-        all (not a full 40-character lowercase-hex id, a present value that is
-        not a string, unresolvable, or not an ancestor of the trunk) is the same
-        report with the refusal the line names, because that instance is
-        refused at every push until it is corrected.
-      - **Absent** while `.githooks/pre-push` was added in a LATER commit than
-        `.claude/sdd.json` (compare the two with
-        `git log --root --diff-filter=A --format=%H -- <path> | tail -n1`):
-        that is a FINDING. Name the refresh as the fix and the value it would
-        write, because this is the instance that is refused at every push.
-        Absent with the two arriving together is correct and not a finding: the
-        default is the same commit.
-
+18. **The git-hook boundary is LIVE** (Part 6): `.githooks/` carries the three
+    hooks, `core.hooksPath` and `merge.ff` are set, and the audit's declared
+    baseline is reported. Run it from `${CLAUDE_PLUGIN_ROOT}/skills/validate/references/checks.md`, check 18.
 19. **The status record versus the page** (Part 3, edition v1.12). In a
     structured instance (`.claude/status.json` present), cross-check the
     record against specs/STATUS.md: a spec whose record token and inventory
@@ -268,55 +232,15 @@ Checks:
     at close time, two specs in flight at once (`SLH-OWNS-OVERLAP`, plugin
     2.11.0): a second close whose branch never took the first's change. Report
     the file and both owners; the human decides whether it is a handoff or a
-    lie.
-21. **The two wiring files the refresh never replaces** (2.6.0, spec 0132, the
-    owner's ruling 2 of 2026-09-07). `.github/workflows/setlist-forge-check.yml`
-    and `.github/CODEOWNERS` are delivered by `/setlist:upgrade`'s refresh when
-    ABSENT and LEFT AS IS when they differ from the plugin's templates, because
-    both are the team's wiring (a runner label, a matrix; the `@OWNER` slot and
-    the paths the team adds). A silent leave is refused the same way a silent
-    replace is: report, BY FILE, which of the two differs from its template
-    (`cmp -s` against `${CLAUDE_PLUGIN_ROOT}/templates/root/.github/workflows/
-    setlist-forge-check.yml` and `${CLAUDE_PLUGIN_ROOT}/templates/root/github/
-    CODEOWNERS.tmpl`). The ownership file differing is INFORMATION once its slot
-    is filled (a standing `@OWNER` slot is check 8's finding), with one clause
-    the refresh's report carries too: a file that does not name the
-    fourth protected path `/.github/` (ratification amendment 5, 2026-09-07:
-    the check's own workflow, the ownership file and the issue form) leaves
-    the check's wiring an unreviewed change, so say so by path and recommend
-    the line under the team's own owner; the refresh never adds it. The workflow
-    differing is INFORMATION naming the file, and a FINDING only when its edited
-    form no longer runs the stamped check (`.claude/hooks/forge-check.sh` absent
-    from its command line), because then the required check named `setlist
-    forge check` verifies nothing. Either file ABSENT is a finding recommending
-    `/setlist:upgrade`, which delivers it. Replace neither yourself.
-
-22. **The diagram reports** (projects with `docs/diagrams/`). Where the
-    directory does not exist, report nothing: the project has not opted in, and
-    check 6 above is the whole diagram check for it. Where it does exist, these
-    are REPORTS and never findings that block anything, because each has a
-    truthful answer that is "not yet" and the close is where refusal belongs:
-    - **Over twelve nodes.** Any diagram file whose Mermaid block draws more
-      than twelve primary nodes. Name the file and the count, and recommend the
-      split (`docs/diagrams/components/<parent>/<child>.md`). Twelve is a
-      drawing bound, never a refusal. For a diagram drawn INLINE in a document
-      that is not a diagram file there is no child to split into, so recommend
-      cutting a node instead of recommending a split that cannot be made.
-    - **Undiagrammed ownership.** Role paths appearing in closed specs' `Owns:`
-      lines that no L3 diagram names as a node. Name the paths; they are the
-      parts of the system no picture claims anything about.
-    - **Stale nodes from earlier specs.** Node names that are path-shaped and do
-      not resolve in the tree, whose `%% spec NNNN` is not the current work.
-      Name the node, the file, and the spec that introduced it, with the two
-      legitimate exits: redraw it in a close that names the file in the diagram
-      field, or retire it with a note. The close refuses only the CLOSING
-      spec's own stale nodes, so these are the ones that accumulate unnoticed.
-    - **Generated edges no hand diagram draws**, where `diagram_command` is
-      declared: edges present in `docs/diagrams/generated/` that appear in no
-      hand-drawn file. Each is either a real dependency nobody drew or a
-      generated artifact worth ignoring, and saying which is the reader's call.
-    Report each as a list with its subject, the measured evidence, and the
-    one-edit fix, which is the message shape the whole diagram half uses.
+    lie. Since edition v1.22 the item reaches the remote's spec branches too:
+    run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/board.sh"` and report each
+    `overlap:` line it prints beside the local ones, still as INFORMATION.
+21. **The two wiring files the refresh never replaces** (2.6.0): the forge
+    check's workflow and `.github/CODEOWNERS`, compared with the plugin's
+    templates and reported. Run it from `${CLAUDE_PLUGIN_ROOT}/skills/validate/references/checks.md`, check 21.
+22. **The diagram reports** (projects with `docs/diagrams/`): reports only,
+    never blocking findings; where the directory does not exist, report
+    nothing. Run it from `${CLAUDE_PLUGIN_ROOT}/skills/validate/references/checks.md`, check 22.
 23. **What loads from outside the instance** (plugin 2.11.0). Name the skills and
     plugins this machine loads into every session beside the instance's own:
     the directories under `~/.claude/skills/` (the user's) and
@@ -328,32 +252,19 @@ Checks:
     no content, and say that no Setlist check compares these files, so a stale
     edition claim or a model binding living there is in no report. This is a
     report, not a finding.
-24. **The model binding answers now** (Part 2's third fact under the bindings
-    table; plugin 2.11.0). Where `.claude/settings.json` sets `"model":
-    "opusplan"`, say first, before anything runs, that this check spends two
-    short headless sessions of the user's quota (measured at about 0.21 USD for
-    the pair on 2026-09-29), then run
-    `bash "${CLAUDE_PLUGIN_ROOT}/scripts/model-probe.sh"` and quote its lines.
-    It probes the plan phase and the execution phase of `opusplan` and prints
-    the model each served, and a `served <phase> <id>` line per phase. Where
-    `.claude/sdd.json` records `models` (the ids the bootstrap probe read,
-    plugin 2.12.0 and later), compare each live id with the recorded one and
-    name a change ("planning: recorded <id>, served now <id>"): a report, not
-    a finding, unless the family left its tier (rc 1 below). Where nothing is
-    recorded (an instance stamped before 2.12.0, whose answer was a yes or a
-    no), say so and print the live ids; never read an old answer in place of
-    this check. rc 1
-    (`[MP-PLAN-OFF-TIER]` or `[MP-EXEC-OFF-TIER]`) is a finding: a phase was
-    served by a model outside its tier's family, which a managed allowlist
-    changed after the stamp (exact version matching, or a denied model) or a
-    provider that does not serve the family can cause, since the harness
-    substitutes a blocked model rather than refusing it; report the phase, the
-    model and the script's sentence, and fix nothing. rc 2
-    (`[MP-PROBE-UNAVAILABLE]`, `[MP-FAMILY-UNREADABLE]`) is a report with its
-    reason, never a pass. A served version older than the one Part 2's table
-    names, in the right family, is a line, not a finding: the table names the
-    alias. Where the model line is absent or names something else, say the
-    check did not run and why.
+24. **The model binding answers now** (Part 2; plugin 2.11.0): where the
+    settings set `"model": "opusplan"`, say first that it spends two short
+    headless sessions, then probe both phases and name any phase off its tier,
+    and the Haiku generation of this check's own run. Run it from
+    `${CLAUDE_PLUGIN_ROOT}/skills/validate/references/checks.md`, check 24.
+25. **The system spec** (edition v1.22). Where `.claude/sdd.json` records
+    `system_spec`, read it. A path is resolved against the instance root: one
+    that does not exist or cannot be read is a finding, naming the path and the
+    fix (record the path `system.md` has from here, or restore the file). A URL
+    is reported as recorded and not fetched; tell the user to open it. Then read
+    spec 0001's `Cites:` header lines: none naming the recorded system spec is a
+    finding. Where the key is absent, report nothing. No hook reads the key or
+    the citation; this check is the one reader.
 
 ## Gotchas (field-observed)
 

@@ -1,9 +1,208 @@
-**Edition v1.21 (the delegation edition)**
+**Edition v1.22 (the session-zero edition)**
 
 This is the third of the edition's three files, the Changelog; `setlist.md` holds the core
 (Parts 1 to 6) and `setlist-operations.md` Parts 7 to 10 and Appendices A to C.
 
 ## Changelog
+
+- **v1.22 (the session-zero edition).** This delta list is authoritative for `/setlist:upgrade`.
+  The counters stay separate: this edition ships as plugin 2.14.0, and an instance upgrading from
+  v1.20 or earlier reads every entry from its own edition up. v1.22 moves because the PROTOCOL
+  changes what session zero says and asks before it proposes anything, how a team sees who holds a
+  spec, where a design is drawn and locked, and how Part 2 reads its delegated tier.
+
+  - **THE SESSION CONTRACT (Part 8 Step 1, Part 8b Step 2).** Session zero is an architecture
+    session the engineer drives, and its first message says so after the model line. Three
+    sentences follow. The first names what the agent decides only with approval: the stack, the
+    core data model, the scope and every default it writes down. The second names what it never
+    decides: boundaries, data ownership, the repository split and anything with a cost. The third
+    says how to go deeper ("ask me anything at the level you work at; I keep going until you stop
+    me"). The retrofit's first message opens the same way, before the observe question.
+  - **THE SIZING QUESTION (Part 8 Steps 1 and 3, Part 8b Step 1, Part 4).** Step 1's second
+    bullet, after the drift question that stays first, sizes the system on three axes: the
+    deployables (one, several with their own pipelines, or an existing estate), who else builds
+    here, and what already exists. The answers select the mode and are written into `product.md`
+    as the sizing line and into the answers file as `sizing=`, which the stamp does not read. The
+    retrofit's inventory proposes the answer from what it read.
+  - **THE DEPTH MODES (Part 8 Step 1, Part 8b Step 2).** The sizing selects one of three modes.
+    Ordinary, for one deployable, is the round as it stood, with Part 2's stopping rule as
+    written. Deep, for several, adds the deep rounds, one topic per round, each ending with what
+    was decided and what stays open. Estate is deep plus Part 8b Step 1's estate inventory. In deep
+    and estate the stopping rule is per round: a round ends when its decisions are written or the
+    engineer says enough, never when the agent runs out of defaults, and a third round on one
+    topic is procrastination. Deep is never forced on one deployable. Part 2 does not move.
+  - **THE DEEP ROUNDS (Part 8 Steps 1 and 4, Part 4, Appendix C).** Deep and estate mode ask six
+    rounds in order, one topic each. Boundaries and ownership writes the component list into
+    `structure.md`, an owner line each and an owner for every piece of state, the three hardest
+    boundaries asked first. Contracts between components gives every crossing a named contract or
+    an open question (protocol, shape, versioning, who publishes and where), proposes a
+    `contracts/` location, and writes into `structure.md`. Data writes `state.md`: where each
+    record lives, the copy that is the truth, consistency per user flow, migrations, retention and
+    privacy. Pipelines and deployment writes `RUNBOOK.md` and `tech.md` and names each repository's
+    full-suite command for `/scaffold`. Failure modes per crossing and the riskiest integration
+    replace the single riskiest-assumption bullet in these modes and scope spike 0000.
+    Observability and operations comes last, as an Operations section in `tech.md`. The steering
+    set does not grow.
+    Appendix C's header gains an optional `Contracts touched:` line that no hook reads.
+  - **THE ESTATE INVENTORY (Part 8b Steps 1 and 3).** The retrofit's inventory asks first
+    whether the repository is the whole system or one of several. For several it reads each
+    sibling the engineer names, by path or URL and read-only: layout, languages, pipeline files,
+    and the crossings it can see (imports, HTTP clients, queue names). The role-path scan's
+    candidates are shown with their counts and confirmed per path; several code directories, or
+    none, are asked, never written from the first candidate. For an estate, phase 2 writes a
+    System section in `structure.md` from the inventory, every missing piece an open question in
+    spec 0001's Open questions, and spec 0001 stays the characterization harness.
+  - **THE SYSTEM SPEC (Parts 3, 4 and 5, Part 8 Steps 3 and 4, Part 8b Step 3, Appendix C).** A
+    system of several repositories has one system spec: `system.md`, `contracts/` and the
+    system's ADRs, in a system repository of its own or the API's. `system.md` carries the
+    components with their owners and pipelines, every crossing with its contract and failure
+    lines, the data each repository owns, and the bootstrap plan. Each repository's spec 0001
+    cites it in an optional `Cites:` header line, by path or URL, which `/setlist:validate`
+    reads and nothing refuses on. A change across repositories is one system spec, numbered in
+    the system repository and cited as `system/NNNN`, plus one spec per repository citing it.
+    Part 8 Step 3 writes the system spec before any repository is stamped, and Part 8b Step 3
+    writes it from the estate inventory. A system of one repository keeps its System section
+    in `structure.md`.
+  - **THE BOOTSTRAP PLAN (Parts 3 and 6, Part 8 Step 3, the stamp, the refresh, validate).** A
+    `## Bootstrap plan` section of `system.md` lists the repositories to stamp in order, each
+    with its directory, role paths, gate command and `system_spec`. The session walks it: per
+    step, the answers file with `system_spec=`, the Phase 1 stamp, Phase 2, spec 0001 with its
+    `Cites:` line, and one progress line; a stamp exit other than 0 stops the plan at that step.
+    The stamp records `system_spec` in `.claude/sdd.json` and reads it back (absent, no key is
+    written); the refresh keeps it and names it in its reading; `/setlist:validate`'s item 25
+    reports a path that does not resolve and a spec 0001 that does not cite it. No hook reads the
+    key, and an instance without it behaves as before.
+  - **THE READERS READ THE REGISTER (Parts 5 and 7, the two agents, the checkpoint).** The spec
+    reader also reads the Assumptions sections of the owner docs a spec names and lists, in its
+    `Q<n>` shape, every assumption the spec depends on that is not approved (a line answered keep
+    or change is approved). The close reviewer takes the register as a fifth named input, the
+    Assumptions sections of `product.md` and `tech.md`, and a criterion that rests on a line
+    answered "ask me later" is a MAJOR finding. The close gate reads the block as before.
+  - **THE ASSUMPTION REGISTER (Part 8 Steps 1 and 4, Part 8b Step 2, Part 4).** Step 1's rule
+    "Use one structured round of several questions where possible, and only real forks become
+    questions" now reads "every decision the idea leaves open is a question or a stated
+    default". A stated default is a register line: an id (`A-07`), the decision, the default
+    taken, why, and the question that would change it, answered inline (keep, change, ask me
+    later). Part 2's stopping rule bounds the rounds of questions and never the register.
+    `product.md` and `tech.md` each carry an Assumptions section; spec 0001 carries the "ask me
+    later" lines under `## Open questions`, and STATUS.md names their ids. The retrofit follows
+    the rule by reference.
+  - **DERIVATION BEFORE PROPOSAL (Part 8 Step 1).** An idea is high-level when the agent cannot
+    name the deployables, the users and the core data from what it was told. Then it derives the
+    decisions the idea leaves open and asks them in order of consequence, three at a time, before
+    proposing anything, and Part 2's stopping rule does not apply until the derivation is done.
+  - **THE REPOSITORY SPLIT (Part 8 Steps 1 and 2, Part 4).** Step 1 asks the pipelines question
+    (the deployables, and each one's pipeline, release cadence and team). Step 2 proposes the
+    split from it: one repository per deployable that needs its own pipeline, cadence or team, one
+    repository where they share all three. It names the trade (each repository is its own
+    instance, and a change across them is a spec in each) and records the choice with its reason
+    in `product.md`. Its boundary enters the public Known-limitations list under the rule that a
+    new bullet bounds a new capability: one repository is one instance, no gate reads across
+    repositories, and a change that spans them is governed by each repository's own hooks and by
+    a citation a reviewer checks and no hook verifies.
+  - **THE TEAM ROUND (Part 8 Step 1, Part 8b Step 2, Parts 3 and 4).** Where the answer is team,
+    session zero asks who else builds and how many at once, whether the trunk is protected and by
+    what, who approves a spec, who may flip it ACTIVE, and what happens to a claim nobody touches
+    for N days. The answers write a Team section in `product.md`. Who may flip ACTIVE feeds Step
+    2's attestation question, whose default stays OFF; the stale-claim answer is the optional
+    `stale_days` key in `.claude/sdd.json`, which no hook reads. The retrofit asks the same round
+    and records the team as it works.
+  - **THE VISIBILITY BLOCK (Part 7, the checkpoint).** After every lifecycle flip the checkpoint
+    prints four lines read from git: what landed on the trunk (the sha), what was pushed (the
+    branch), who can see it now, and what is still only local. The loop names it at Branch and at
+    Close. It reports and refuses nothing, and the checkpoint still pushes only when asked.
+  - **THE TRUNK CLAIM (Parts 5 and 7, the checkpoint).** The QUEUED cut and the opening ACTIVE
+    flip land on the trunk and are pushed, with the ask, before `spec/NNNN-<slug>` is cut, in
+    every instance and not only under `forge` custody; a return from REVISED stays on the branch.
+    The checkpoint refuses in words to open a branch whose spec the trunk does not carry at
+    ACTIVE. No hook reads the order.
+  - **THE DRIVER LINE (Part 6, Appendix C, the checkpoint, validate).** The header gains
+    `Driver: <handle>`, written by the opening flip from `identity.user_email`, else git's
+    `user.email`, before the hash and inside the hashed range. Validate reports it as information.
+    The status record gains no key: its shape is read by the hooks, and the header is the one
+    record of the driver.
+  - **THE SPEC BOARD (Part 6, the board skill, validate).** `/setlist:board` and
+    `/setlist:validate --board` run one script, `scripts/board.sh`, over the trunk's record and
+    spec headers and the remote's spec branches with their own spec files: every spec by state
+    with its driver, `Owns:` set, branch and age, and each collision a read can see. It needs no
+    server, works from any clone, and refuses nothing; no hook reads it.
+  - **THE NEXT NUMBER (Parts 3 and 5, the checkpoint, new and spec-authoring skills).** A cut
+    takes the highest number on the trunk, this clone's trunk and the remote's spec branches,
+    plus one (`board.sh --next`). Part 3 writes the convention: the first trunk landing owns a
+    number, and the other renumbers before it merges. No hook reads it (2.15.0 carries the arm).
+  - **THE CLAIM PUSHED (Part 6, the checkpoint, the re-grounding hook).** The opening flip cuts
+    `spec/NNNN-<slug>` at the flip commit and pushes it with the trunk in one atomic push after the
+    ask. The re-grounding hook names the remote's other spec branches from the last fetch with its
+    age, or says the age is unknown; it reads local refs only and makes no network call. A report, never a refusal.
+  - **THE OVERLAP REPORT (Parts 6 and 7, the checkpoint, validate).** Each `Owns:` append runs
+    `board.sh --owns` and names every other ACTIVE spec on the trunk and every spec on a remote
+    spec branch that declares the file, with its driver and the close's remedy. Validate's double
+    declaration item widens to the remote's spec branches. The parallel-spec paragraph now says the
+    guarantee is the declarations and the close-time refusal, and what the board and the report are.
+  - **THE PUSH RACE (Part 5, the checkpoint).** The push race, or the forge's merge, is the mutual
+    exclusion. A rejected flip push (not a fast-forward, or `SLH-SCAN-UNREADABLE-RANGE` from the
+    stamped `pre-push` for a range whose remote end was never fetched) is handled by name: fetch,
+    read the trunk again, report who holds the spec, and ask before anything destructive.
+  - **STALE CLAIMS (Part 3, the board).** The board reads `stale_days` (default 7, and 7 for a
+    value that is not a positive whole number, said so) and shows an ACTIVE spec whose branch has
+    had no commit for longer, or whose trunk flip is older where it has no branch, as stale with
+    its driver. A count of ACTIVE specs per driver is reported, never enforced.
+  - **THE DESIGN CANVAS (Parts 0, 1, 4, 5 and 5c, Parts 7, 7b, 7c and 8, Appendix C, the
+    design-surface, new, retrofit and gate skills, browser-qa, the INDEX stub).** Part 5c rebinds
+    from a separate design project to Claude Code's `/design`, whose canvas is a Claude Design
+    artifact. The canvas is where a design is drawn and `docs/design/` is where it is locked: the
+    redline (its header naming the artifact, the version locked and the date), the picked
+    artboards' exports, the picked boards' source as a read of the artifact saves it, and every
+    decision a comment thread records are committed before the spec that builds to it goes ACTIVE. The intake reads the
+    docs' "pick one, tweak it, then have Claude implement it" as pick and tweak, then a spec. Design
+    QA reads the committed redline by decision id. /insights in the design project becomes a read of
+    the committed design record at major gates. A dated note says the standalone site closes on
+    2026-12-14, what moves to Claude and what does not (chats and comments); `/design-sync` and
+    `/design-login` serve that site and are not bound. The design-surface question names `/design`
+    and what yes commits the instance to. No hook reads any of it.
+  - **THE DELEGATED PHASE IS NEVER A FORK (Part 2, the checkpoint, gate, validate and
+    model-ladder skills).** A delegated phase runs through the Agent tool with `model: haiku` and
+    never as a fork, because a fork runs on the parent session's model and fork subagents are on by
+    default from Claude Code 2.1.302; the phase's journal line names the model it was served, and a
+    line naming the parent's model is the sign it ran as a fork.
+  - **PART 2'S READINGS, PER PROVIDER (Part 2, validate).** The table re-read on 2026-10-24 at
+    Claude Code 2.1.310: both phases of `opusplan` served `claude-opus-5-5` and `claude-sonnet-5-5`,
+    `fable` and `best` `claude-fable-5-1`, and `haiku` and a subagent on `model: haiku`
+    `claude-haiku-5-5`. The Delegated work row gains its per-provider reading: `haiku` resolves to
+    Haiku 4.5 on Claude Platform on AWS and on every cloud-provider platform. The Escalation row
+    gains the 2.1.301 retry: `fable` and `best` retry once on the previous Fable model where the
+    newest is unavailable, so read the served id and never the alias. The Execution row says a
+    partner-operated platform's own retirement date applies where `sonnet` resolves to Sonnet 4.5
+    there. `/setlist:validate`'s check 24 names the Haiku generation its own delegated run was
+    served when it is not Haiku 5, as a line and never a finding. The Binding column still names
+    aliases and tiers only.
+  - **REPLACE REFS IGNORED (the hook library, the trunk audit).** Each sets
+    `GIT_NO_REPLACE_OBJECTS=1` for every process it starts, so every git read judges the commit a
+    push sends and not a local `refs/replace/*` substitute; the Deliberate-evasion route list names
+    the route closed.
+  - **A FAILED READ OF HEAD REFUSED (the hook library).** `slh_on_trunk` reads only
+    `symbolic-ref`'s exit 1 (a detached HEAD) as not on the trunk; any other failure refuses as
+    `SLH-AUDIT-GIT-FAILED` at the merge hook and at `pre-commit`'s landing path.
+  - **THE BASH DENY NAMES THE SECRET FILES (Part 3, Part 8c, the stamped settings).** The Bash
+    entries for reading environment files name the seven files the Read rules name, so
+    `.env.example` reads from the shell too; the upgrade's offered edit carries them.
+  - **THE HASH REFRESH, REPORTED (Parts 6 and 7, the checkpoint, `scripts/spec-hash.sh`).** With
+    attestation off, checkpoint refreshes the Spec-hash after its own `Owns:` appends through
+    `spec-hash.sh --refresh-owns`, which writes only when nothing but appended `Owns:` lines moved
+    since the spec's last commit, prints each appended file and both digests, and refuses any other
+    edit with the REVISED route named.
+  - **THE EMPTY REMOTE (Part 6, `pre-push`).** On a first push to an empty remote `pre-push`
+    audits the declared trunk alone and names every other pushed branch unaudited by
+    `SLH-REF-NOT-AUDITED`, where it used to audit each as a trunk candidate and refuse a spec
+    branch pushed first. Nothing is audited in the declared trunk's place when it is not pushed.
+  - **THE LIST, 21 BEFORE AND AFTER (Part 6's public twin).** One bullet in, one out. In: "One
+    repository is one instance: no gate reads across repositories, and a change that spans them
+    is governed by each repository's own hooks and by a citation no hook verifies.", the bound of the
+    repository split above. Out: "A first push to a brand-new EMPTY remote audits every pushed
+    branch as a trunk candidate.", with the capability above. 21 design boundaries, 0 open
+    limitations, 0 upstream conditions, as at v1.21.
+  - **THE UPGRADE (Part 8c's v1.22 delta).** What an instance receives, and what it takes by hand,
+    is the v1.22 delta in Part 8c.
 
 - **v1.21 (the delegation edition).** This delta list is authoritative for `/setlist:upgrade`.
   The counters stay separate: this edition ships as plugin 2.13.0, and an instance upgrading from

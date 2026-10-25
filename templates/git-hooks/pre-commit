@@ -52,6 +52,12 @@
 
 set -u
 
+# REPLACE REFS IGNORED BEFORE THE FIRST GIT READ (spec 0205, the 2.14.0 leg's F1). The library sets
+# this for every reader it holds (spec 0203, C-84), but this hook reads git before it sources the
+# library, so a replacement could show it a pushed tip without .claude/sdd.json and the push read as
+# ungoverned. Set here too, before anything reads git.
+GIT_NO_REPLACE_OBJECTS=1; export GIT_NO_REPLACE_OBJECTS
+
 # THE CHAIN RUNNER'S ENTRY (spec 0173, item 2). One EXIT trap, set before anything
 # can exit, so whatever this hook decides (a pass, a refusal, the SETLIST_SKIP_HOOKS
 # escape), a hook manager recorded as "hooks_chain" in .claude/sdd.json then runs
@@ -323,7 +329,13 @@ if [ -n "$GITDIR" ]; then
   [ -f "$GITDIR/SQUASH_MSG" ] && LANDING="squash merge"
   [ -f "$GITDIR/MERGE_HEAD" ] && LANDING="merge"
 fi
-if [ -n "$LANDING" ] && slh_on_trunk "$PROJ" "$TRUNK"; then
+OT=1
+if [ -n "$LANDING" ]; then
+  OT=0; slh_on_trunk "$PROJ" "$TRUNK" || OT=$?
+  # A HEAD git could not read refused by name (spec 0203): never read as "not on the trunk".
+  [ "$OT" -ne 2 ] || exit 1
+fi
+if [ "$OT" -eq 0 ]; then
   printf 'setlist pre-commit: this commit completes a %s onto %s, so the close\n' "$LANDING" "$TRUNK" >&2
   printf '  verification runs here (git fires no pre-merge-commit for this path).\n' >&2
   # A squash landing produces a SINGLE-PARENT commit, so the ownership

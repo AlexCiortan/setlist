@@ -1567,5 +1567,44 @@ grep -q '^REFUSED=0$' <<< "$HG_OUT" && ok "0195 R16 (control): a pre-record bran
 hg_vc '*show [0-9a-f]*:specs/STATUS.md*' "$HGD"
 hg_refused "0195 R16: the merged branch's page unreadable refuses by name, never completes nothing" vc SLH-CLOSES-NO-SPEC
 
+
+# --- R5 (spec 0203, item 3): slh_on_trunk tells a detached HEAD from a symbolic-ref git could not answer.
+# symbolic-ref exits 1 on a detached HEAD (not on the trunk, right) and 128 when git cannot read HEAD;
+# `|| true` read both as "not on the trunk", so pre-merge-commit let an unclosed merge pass ungated.
+# A shim exits 128 for that one call. Red first: before the fix the merge hook exited 0.
+HG_BIN128="$WORK/hg-bin128"; mkdir -p "$HG_BIN128"
+printf '#!/usr/bin/env bash\ncase "$*" in *"symbolic-ref --quiet --short HEAD"*) echo "fatal: unable to read HEAD" >&2; exit 128 ;; esac\nexec "$HG_REALGIT" "$@"\n' > "$HG_BIN128/git"
+chmod +x "$HG_BIN128/git"
+hg_pmc() { # hg_pmc <dir> <bin-dir-or-empty>: the instance's own pre-merge-commit over a merge in progress
+  HG_OUT="$(cd "$1" && env ${2:+PATH="$2:$PATH"} HG_REALGIT="$HG_REALGIT" bash .githooks/pre-merge-commit </dev/null 2>&1)"; HG_RC=$?
+}
+HGD="$WORK/hg-r5b"; gh_fixture "$HGD" no; git -C "$HGD" checkout -q main
+git -C "$HGD" -c core.hooksPath=/dev/null merge -q --no-commit --no-ff spec/0001-thing >/dev/null 2>&1
+hg_pmc "$HGD" ""
+[[ "$HG_RC" -ne 0 ]] && ok "0203 R5 (control): an unclosed spec merged onto the trunk is refused by the merge hook" || bad "0203 R5 (control): an unclosed spec merged onto the trunk is refused by the merge hook" "exit $HG_RC"
+hg_pmc "$HGD" "$HG_BIN128"
+if [[ "$HG_RC" -eq 1 ]] && grep -q '\[SLH-AUDIT-GIT-FAILED\]' <<< "$HG_OUT" && grep -q 'symbolic-ref' <<< "$HG_OUT"; then
+  ok "0203 R5: a symbolic-ref that exits 128 is refused by name at the merge hook, never read as not on the trunk"
+else
+  bad "0203 R5: a symbolic-ref that exits 128 is refused by name at the merge hook, never read as not on the trunk" "exit $HG_RC: $(grep -E 'setlist|SLH-' <<< "$HG_OUT" | head -2 | tr '\n' ' ' | cut -c1-220)"
+fi
+git -C "$HGD" merge --abort >/dev/null 2>&1
+# control: a detached HEAD is "not on the trunk" (exit 1 from symbolic-ref), so a merge there is not a close
+git -C "$HGD" checkout -q --detach main
+git -C "$HGD" -c core.hooksPath=/dev/null merge -q --no-commit --no-ff spec/0001-thing >/dev/null 2>&1
+hg_pmc "$HGD" ""
+[[ "$HG_RC" -eq 0 ]] && ok "0203 R5 (control): on a detached HEAD the merge is not a close and passes, as before" || bad "0203 R5 (control): on a detached HEAD the merge is not a close and passes, as before" "exit $HG_RC: $(grep -E 'setlist|SLH-' <<< "$HG_OUT" | head -2 | tr '\n' ' ')"
+git -C "$HGD" merge --abort >/dev/null 2>&1
+# the other caller: pre-commit completing a squash landing onto the trunk
+HGD="$WORK/hg-r5c"; gh_fixture "$HGD" no; git -C "$HGD" checkout -q main
+# merge.ff=true for this one call: gh_fixture sets merge.ff false, and git refuses --squash with it
+git -C "$HGD" -c core.hooksPath=/dev/null -c merge.ff=true merge -q --squash spec/0001-thing >/dev/null 2>&1
+[[ -f "$HGD/.git/SQUASH_MSG" ]] || bad "0203 R5 (fixture): the squash landing exists" "no SQUASH_MSG, so the case below would test nothing"
+HG_OUT="$(cd "$HGD" && env PATH="$HG_BIN128:$PATH" HG_REALGIT="$HG_REALGIT" bash .githooks/pre-commit </dev/null 2>&1)"; HG_RC=$?
+if [[ "$HG_RC" -eq 1 ]] && grep -q '\[SLH-AUDIT-GIT-FAILED\]' <<< "$HG_OUT" && grep -q 'symbolic-ref' <<< "$HG_OUT"; then
+  ok "0203 R5: a symbolic-ref that exits 128 is refused by name at pre-commit's squash landing, never read as not on the trunk"
+else
+  bad "0203 R5: a symbolic-ref that exits 128 is refused by name at pre-commit's squash landing, never read as not on the trunk" "exit $HG_RC: $(grep -E 'setlist|SLH-' <<< "$HG_OUT" | head -2 | tr '\n' ' ' | cut -c1-220)"
+fi
 fi; shard_region_end
 # <<< SHARD-END hook-git-0195

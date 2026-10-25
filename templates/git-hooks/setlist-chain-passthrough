@@ -12,6 +12,12 @@
 
 set -u
 
+# REPLACE REFS IGNORED BEFORE THE FIRST GIT READ (spec 0205, the 2.14.0 leg's F1). The library sets
+# this for every reader it holds (spec 0203, C-84), but this hook reads git before it sources the
+# library, so a replacement could show it a pushed tip without .claude/sdd.json and the push read as
+# ungoverned. Set here too, before anything reads git.
+GIT_NO_REPLACE_OBJECTS=1; export GIT_NO_REPLACE_OBJECTS
+
 # THE CHAIN RUNNER'S ENTRY (spec 0173, item 2). One EXIT trap, set before anything
 # can exit, so whatever this hook decides (a pass, a refusal, the SETLIST_SKIP_HOOKS
 # escape), a hook manager recorded as "hooks_chain" in .claude/sdd.json then runs

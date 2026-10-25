@@ -65,6 +65,13 @@ set -u
 # carries the same line and the same reasoning.
 LC_ALL=C; export LC_ALL
 
+# EVERY GIT READ IN THIS PROCESS READS THE OBJECTS A PUSH SENDS (spec 0203, C-84). This file ships
+# alone and is run by hand, so it sets its own: git substitutes a refs/replace/* object wherever it
+# reads a commit while a push sends the original, and an audit that honoured a local `git replace`
+# read a compliant commit where the remote received an unspecced one. The library carries the same
+# line and the same reasoning.
+GIT_NO_REPLACE_OBJECTS=1; export GIT_NO_REPLACE_OBJECTS
+
 # NO READER EXITS BEFORE ITS WRITER IS DONE (spec 0169, CHK-REPORT-READ's cause,
 # h5). `printf ... | grep -q` let grep exit at its first match while the writer
 # was still writing; where SIGPIPE is ignored (the Linux CI runner) the writer

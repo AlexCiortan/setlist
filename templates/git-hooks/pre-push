@@ -65,6 +65,12 @@
 
 set -u
 
+# REPLACE REFS IGNORED BEFORE THE FIRST GIT READ (spec 0205, the 2.14.0 leg's F1). The library sets
+# this for every reader it holds (spec 0203, C-84), but this hook reads git before it sources the
+# library, so a replacement could show it a pushed tip without .claude/sdd.json and the push read as
+# ungoverned. Set here too, before anything reads git.
+GIT_NO_REPLACE_OBJECTS=1; export GIT_NO_REPLACE_OBJECTS
+
 # THE CHAIN RUNNER'S ENTRY (spec 0173, item 2). One EXIT trap, set before anything
 # can exit, so whatever this hook decides (a pass, a refusal, the SETLIST_SKIP_HOOKS
 # escape), a hook manager recorded as "hooks_chain" in .claude/sdd.json then runs
@@ -234,6 +240,7 @@ if [[ -n "${1:-}" ]]; then
 fi
 
 PUSH_REFS=""
+REMOTE_EMPTY_UNAUDITED=0
 
 # HISTORY: ruling PP-06 (plugin 2.6.0): THE SCAN WALKS THE RANGE PER COMMIT, and the walk lives in the library since.
 
@@ -306,8 +313,16 @@ while read -r _lref _loid rref _roid; do
   if [[ -n "$CFG_FROM" && "$_loid" != "$CFG_FROM" ]] && git -C "$REPO" show "$_loid:.claude/sdd.json" > "$CFG_TMPD/tip.json" 2>/dev/null; then
     _own_trunk="$(SLH_SDD="$CFG_TMPD/tip.json" slh_trunk "$REPO" 2>/dev/null)" || _own_trunk="" # fail-open-ok: a tip whose trunk cannot be read adds no trunk; the first governed tip's reading above still decides
   fi
-  if [[ "$rname" == "$TRUNK_NAME" || ( -n "$_own_trunk" && "$rname" == "$_own_trunk" ) || ( -n "$REMOTE_TRUNK" && "$rname" == "$REMOTE_TRUNK" ) || "$REMOTE_EMPTY" -eq 1 ]]; then
+  if [[ "$rname" == "$TRUNK_NAME" || ( -n "$_own_trunk" && "$rname" == "$_own_trunk" ) || ( -n "$REMOTE_TRUNK" && "$rname" == "$REMOTE_TRUNK" ) ]]; then
     PUSH_REFS="$PUSH_REFS $_loid"
+  elif [[ "$REMOTE_EMPTY" -eq 1 ]]; then
+    # AN EMPTY REMOTE HAS NO TRUNK YET, AND THE INSTANCE DECLARES ONE (spec 0203, the empty-remote
+    # retirement). Until 2.14.0 every branch pushed here was audited as a trunk candidate, because the
+    # host adopts the first pushed branch as its default, and a spec branch pushed first or beside the
+    # trunk was refused as if it were the trunk. The declared trunk is audited above; any other branch
+    # is named here, unaudited, and never stands in for the trunk. The content scan above read it.
+    slh_report "SLH-REF-NOT-AUDITED" "no trunk audit ran for $rref: the remote ${REMOTE_ARG:-} is empty, so it has no trunk yet, and this hook audits the declared trunk ($TRUNK_NAME) alone. If the host makes this branch its default because it arrived first, unaudited work becomes that default. Push the trunk first, and require the stamped forge check on the trunk, which judges every merge into it."
+    REMOTE_EMPTY_UNAUDITED=1
   fi
 done <<< "$PUSH_LINES"
 
@@ -351,6 +366,11 @@ if [[ -n "$PUSH_REFS" ]]; then
     bash "$AUDIT" "$REPO" --until "$_oid" ${_cfg:+--config-from "$_cfg"} || RC=$?
     [[ "$RC" -eq 0 ]] || break
   done
+elif [[ "$REMOTE_EMPTY_UNAUDITED" -eq 1 ]]; then
+  # fail-open-ok: an empty remote and no declared trunk among the pushed refs. Every pushed branch was
+  # named unaudited above, and the content scan read each one; auditing the LOCAL trunk here instead
+  # would report on a ref this push never touched (F1 of the plugin-2.0.0 leg), so nothing is audited.
+  exit 0
 elif [[ "$REMOTE_UNREACHABLE" -eq 1 ]]; then
   # HISTORY: ruling PP-13 (plugin 2.6.0): The remote could not be reached, so which of its refs is the trunk is unknown, and auditing the local trunk instead would report on a ref this push may not touch.
   printf 'setlist pre-push [SLH-REMOTE-UNRESOLVED]: cannot reach %s to ask which branch\n' "${1:-the remote}" >&2

@@ -24,6 +24,10 @@ documentation, never copied into instances.
   version aborts the stamp rather than producing an instance that records
   none, because `scripts/refresh-instance.sh` trusts the recorded value when
   it decides whether a refresh moves forward or backward.
+- **Recorded, not substituted** (since 2.14.0): an answer `system_spec=<path or
+  URL>` is written into `.claude/sdd.json` as `"system_spec"` by jq and read
+  back; absent or empty, no key is written. No template carries a placeholder
+  for it.
 - **Conditional lines**: a line starting with `{{IF:OPUSPLAN}}` is kept (marker
   stripped) when the interview verified `opusplan` resolves, dropped otherwise.
 - **Phase-2 slots** are marked `[PHASE 2 SLOT: ...]` in stamped files; tailored

@@ -23,6 +23,12 @@ it that way.
   stated check could pass or fail.
 - One line per question: `Q<n> | <file>:<line> | <the question>`. A question
   without a line of the spec is not a question; say which line raises it.
+- Read the Assumptions sections of those owner docs too (the assumption
+  register). List each assumption the spec depends on that is not approved,
+  one line each in the same shape: the spec's line that depends on it, and a
+  question naming the register id and the document line it sits on. A line
+  answered keep or change is approved; one unanswered, or answered "ask me
+  later", is not.
 - If you would need to ask nothing, say exactly `No questions.` and stop. Do
   not invent questions to have some.
 - You never edit a file, never judge whether the spec is a good idea, and

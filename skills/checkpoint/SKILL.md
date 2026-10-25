@@ -26,6 +26,11 @@ full mandate when in doubt:
    landed), specs/STATUS.md carries the matching one-line inventory update in
    the SAME commit, and in a structured instance the status record moves with
    it (the section below; the record and the page always travel together).
+   After every lifecycle flip, print the visibility block, four lines read
+   from git and never from memory: `trunk:` what landed on the trunk (the
+   sha, or "nothing"); `pushed:` what was pushed (the branch, or "nothing
+   pushed"); `visible to:` who can see it now (anyone who fetches the remote,
+   or only this clone); `local only:` what is still only here.
 5. Never push without being asked; destructive operations always ask first.
 
 The mechanical half of this list is delegated (Part 2, "Delegate the mechanical,
@@ -36,35 +41,36 @@ with its exit status. What to commit, the message, and every close decision stay
 with you. Give each delegated phase one journal line: the phase, the model the
 subagent resolved to (the Agent tool's result names it), its tokens, and its
 cost in dollars where the harness reports one (a headless result's
-`total_cost_usd`), else "not reported".
+`total_cost_usd`), else "not reported". Never run the delegated phase as a fork:
+a fork runs on this session's model, not `haiku`, and the journal line's model
+field is the check.
 
 ## Branch lifecycle
 
-- Opening a spec: branch `spec/NNNN-<slug>` from the trunk (the `trunk` field
-  in `.claude/sdd.json`; main is only the fallback). Feature code never lands
-  directly on the trunk. The scope hook WARNS about it once the project is
-  scaffolded (it is advisory since 2026-08-04 and does not stop the write), and the
-  trunk audit at `pre-push` is what actually refuses it. `pre-commit` does NOT check for
-  role-path code on the trunk: it scans staged content and pairs lifecycle changes with
-  STATUS.md, and runs the close verification only for a merge or squash. So the commit
-  succeeds locally and the PUSH is refused (v1.7 claims audit).
-- Chores: small ones commit directly on the trunk like docs-only changes;
-  larger ones get `chore/<slug>` and merge `--no-ff`. **A chore branch that
-  touches a role path must record its completion in specs/STATUS.md in the SAME
-  commit**, in Part 5b's archive-line form:
-
-      - CHORE-007: DONE 2026-08-02. Renamed the duplicate helper in src/parse.js.
-
-  `DONE` is the first token after the colon, because that is what the hooks read.
-  Without it the merge is refused, and correctly: a chore branch that records
-  nothing is indistinguishable from an unspecced feature, which is why Part 6
-  treats the two alike. (Before v1.7 the edition never said what an archive line
-  looked like, so the enforcement layer had nothing to read and refused the whole
-  route while advising the operator to take it.)
-- This command is a mandate, not a required wrapper: a session may run a
-  checkpoint duty inline (a Builder opening its spec branch, a close merging
-  once the checklist below passes) provided it executes the same checklist.
-  The hooks enforce the same conditions either way.
+- Opening a spec (Part 5, edition v1.22): the ACTIVE flip comes FIRST, as a
+  commit on the trunk (the `trunk` field in `.claude/sdd.json`; main is only
+  the fallback): the Status line, the `Spec-hash:` and `Driver:` fields, the
+  STATUS.md row and the record token, and the attestation where one is
+  declared. Cut `spec/NNNN-<slug>` at the flip commit, empty. Push both in ONE
+  push after the ask: `git push --atomic <remote> <trunk> spec/NNNN-<slug>`.
+  The claim branch then exists on the remote exactly when the flip does, and a
+  rejected trunk push leaves no claim behind. A forge that refuses `--atomic`
+  says so; then push the trunk, and the branch once the trunk is accepted. The
+  remote is the trunk's upstream, else `origin`. With none, nothing is pushed,
+  and the block says only this clone can see the claim.
+  Under `forge` custody the flip reaches the trunk through the pull request
+  instead. Then switch to the branch and print the visibility block for the
+  flip (step 4).
+- **A rejected flip push is the lock working** (edition v1.22): never retry,
+  rebase or reset on your own; read `${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/rejected-flip-push.md` and
+  follow it. REFUSE to open the branch while the
+  trunk does not carry spec NNNN at ACTIVE, and say why in one line: a claim
+  that lives only on a branch is invisible to every other clone, so two people
+  can build the same spec. A return from REVISED stays on the spec's branch,
+  which already exists. Feature code never lands directly on the trunk; why the
+  push, not the commit, refuses it: `${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/gotchas.md`.
+- Chores, and a chore branch's archive line: read `${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/chores.md` before
+  starting or merging a chore.
 
 ## Drafting the paperwork at the close (Part 7, edition v1.14)
 
@@ -84,12 +90,8 @@ record and the tree already hold, and leave every VERDICT to the human:
 - Deviations, Open verifications, Migrations, Design QA, Follow-ups: the
   field names, answers blank;
 - the diagram field: NEVER pre-filled. "no impact" written by a tool is the
-  claim the field exists to make a person make. What you MAY draft, on a project
-  where `docs/diagrams/` exists, is the file list the answer will need: read the
-  branch's diff for files under `docs/diagrams/` and for changed Mermaid blocks
-  in `steering/structure.md`, and offer them as the parenthesised list for a
-  person to accept or correct. The answer stays theirs; the list is evidence you
-  gathered, and naming it saves them a refusal at the merge.
+  claim the field exists to make a person make; where `docs/diagrams/` exists,
+  the file list you MAY draft is in `${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/diagram-close.md`.
 
 A drafted report is a scaffold; the close comes after it. In a lite spec (`Tier: lite`,
 Part 5) the scaffold is one verdict line and the same fields; the tier saves
@@ -113,9 +115,11 @@ close against the spec. Two rounds at most; the gates read the block it leaves
    with one line below it, "Skipped by rule: this close touches no role
    path.", and nothing is spent. The gates re-derive this from the diff and
    refuse a skip on a role-path close (`SLH-CLOSE-REVIEW-SKIP-REFUSED`).
-2. **Otherwise run the `close-reviewer` agent** with its four named inputs and
+2. **Otherwise run the `close-reviewer` agent** with its five named inputs and
    nothing else: the spec file's path, the trunk's name, the `qa-pass-1` block,
-   and the gate command's output from a fresh run; tell it the round number
+   the gate command's output from a fresh run, and the register. The register is
+   the Assumptions sections of `steering/product.md` and `steering/tech.md`.
+   Tell it the round number
    and the effort level it runs at. Ask for a level with the Agent tool's
    `effort` parameter, or leave the agent's frontmatter default (`medium`) in
    force and tell it that; where `CLAUDE_CODE_EFFORT_LEVEL` is set, that level
@@ -130,18 +134,10 @@ close against the spec. Two rounds at most; the gates read the block it leaves
    in one the same way. A report's own `##` headings, unfenced, end the Closing
    report section before the block, and the gate and the audit then refuse the
    close naming the heading; inside the fence they are content.
-4. **Round 1 reads FAIL, or carries findings at MAJOR or above:** append those
-   findings to the spec under `## Close review, round 1`, above the Closing
-   report heading, one line each as the block writes them; fix them in
-   commits; re-run the gate command; run the agent again as round 2 on the new
-   diff; add its round to the SAME block beneath round 1, and its MAJOR-and-up
-   findings under `## Close review, round 2`.
-5. **Round 2 still reads FAIL: stop, and put the findings in front of the
-   human.** There is no third round under any label. The human decides: merge
-   past them, recorded as the block's last line
-   `verdict: ACCEPTED-BY-HUMAN F2 F3` (every round-2 finding at MAJOR or
-   above named, nothing round 2 does not carry), or revise the spec, or park
-   it. Write that line only on the human's word, never on your own.
+4. **Round 1 reads FAIL, or carries findings at MAJOR or above:** read
+   `${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/close-review-rounds.md` and follow it: round 2 on the new diff, and
+   on a second FAIL the findings go to the human, who alone may write
+   `verdict: ACCEPTED-BY-HUMAN <ids>`. There is no third round.
 
 ## Closing a spec (the gatekeeper role)
 
@@ -181,70 +177,24 @@ Refuse to merge until every check passes; name the missing item when refusing:
    (`CI run <id> unobserved`) before the session ends. Deferring it is allowed;
    dropping it is not.
 
+The pre-merge-commit git hook independently verifies the same conditions on any
+merge, reading the spec file and STATUS.md from the branch being merged, so
+the Closing report and the CLOSED row count only once COMMITTED on the branch;
+working-tree edits do not satisfy it. Passing this checklist is what satisfies
+it. A hook denial is a finding to act on: fix the named
+item and retry.
+
 ## The diagram half at the close (projects with `docs/diagrams/`)
 
-None of this runs where `docs/diagrams/` does not exist; there the close behaves
-exactly as it did before, and the presence of the directory is what arms it.
-Where it does exist, before you merge:
+Where `docs/diagrams/` exists, read `${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/diagram-close.md` before the merge:
+the sync edit, the promoted flows, `Synced by:`, and the five diagram refusals.
+Where it does not, the close behaves as it always did.
 
-- **Draft the sync edit, do not perform it silently.** Read the spec's
-  `## Design sketch` if it has one, name the living diagrams it touches
-  (`docs/diagrams/context.md`, the L2 block in its home, usually
-  `steering/structure.md`, the L3
-  file for each role path in the spec's `Owns:` list), draft the edit for each,
-  and let the human approve. The edit rides THIS closing commit; a diagram
-  synced in a separate commit on the trunk both breaks the Git rules and opens a
-  window where the trunk lies about itself.
-- **Promote a flow worth keeping** to `docs/diagrams/flows/<NNNN>-<slug>.md`
-  with `Synced by:` set to the closing spec. A sketch that was only the change's
-  scaffolding stays in the closed spec and is promoted nowhere.
-- **Update `Synced by:`** in every diagram file the close changes. It is the one
-  header line the checks read.
+## The release model and cutting a release (Part 6)
 
-The three refusals the close can now draw, at the merge hook, the trunk audit
-and the forge check alike. Name the one that will fire BEFORE the merge, because
-saying so here is cheaper than a refused merge:
-
-- `SLH-DIAGRAM-CLAIM`: the field claims `updated` and names a file this commit
-  does not touch, or names nothing at all.
-- `SLH-DIAGRAM-UNDECLARED`: the field says `no impact` while the commit touched
-  a file under `docs/diagrams/` or the Mermaid blocks in
-  `steering/structure.md`.
-- `SLH-DIAGRAM-STALE-NODE`: a node whose drawn path does not exist in the tree
-  under review AND whose `%% spec NNNN` names a spec this commit closes. The
-  same node from an EARLIER spec is reported, not refused, with two legitimate
-  exits: redraw it in this close and name the file in the field, or retire it
-  with a note. Node names that are not path-shaped (no slash, or containing
-  whitespace) are printed as unverified rather than skipped in silence
-  (`SLH-DIAGRAM-NODE-SKIPPED`); read that list, because a path you meant and
-  spelled as prose appears in it.
-
-Where the project declares `diagram_command` in `.claude/sdd.json`, the close
-also runs it and requires the single committed file under
-`docs/diagrams/generated/` to equal what it prints (`SLH-DIAGRAM-DRIFT`), and
-refuses `SLH-DIAGRAM-SHAPE` when the command fails, prints no Mermaid block, or
-the project commits none or more than one generated view. Re-run the command and
-commit its output as part of the closing commit.
-
-The record does not change for any of this: `.claude/status.json` keeps
-`"diagram": "updated"` or `"no-impact"` and gains no key. The file list lives in
-the Closing report's field text, which is where the hooks read it.
-
-## The release model this project declares
-
-Read `release.model` from `.claude/sdd.json` before answering any question about
-what users are running or about cutting a release (Part 6, the release rail).
-
-An ABSENT `release` block reads as `model: none`, and you say so rather than
-inferring anything. An instance stamped before v1.7 has no block, and "no
-block" is a real answer (nothing is released; users run the trunk), not missing
-information to be filled in by guessing. If a session needs a model that is not
-declared, the fix is for someone to declare one; this skill never picks.
-
-- `none`: there is no release ceremony. Say that plainly when asked, and stop.
-- `tags`: an annotated tag on the trunk is the release. See the cut-release
-  section for the ceremony.
-- `version-file`: the bump rides the close commit as ordinary checkpoint work.
+Before answering what users are running, or cutting a release, read
+`${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/releases.md`: `release.model` from `.claude/sdd.json` (an absent block
+reads as `none`), and the cut's five steps under `tags`.
 
 ## The status record: this command is its ONE writer (Part 3, edition v1.12)
 
@@ -253,7 +203,11 @@ write to the machine inventory, and each write rides the SAME commit as the
 human-page edit it mirrors. The gates read the record, not the page, so a write
 this command skips is a fact the machine never learns:
 
-- **Spec cut:** add `specs.<num>: {"status": "queued"}` (or the state being
+- **Spec cut:** take the number from
+  `bash "${CLAUDE_PLUGIN_ROOT}/scripts/board.sh" --next` (edition v1.22): the
+  highest number on the trunk, this clone's trunk and the remote's `spec/`
+  branches, plus one, so a number a teammate pushed is not handed out again. Then
+  add `specs.<num>: {"status": "queued"}` (or the state being
   cut to) beside the new STATUS.md row.
 - **Lifecycle flip:** update the one token beside the row edit. Tokens are the
   Part 5 states, lowercase, one word.
@@ -262,28 +216,33 @@ this command skips is a fact the machine never learns:
   the Closing report heading), one verbatim file per line. REFUSE to write a
   glob, a directory, a `./`-prefixed or quoted path: a declared set you cannot
   enumerate is an exemption wearing a declaration, and the audit reads exactly
-  that grammar. In a spec whose header reads `Tier: lite`, REFUSE to write a
+  that grammar. At EACH append, before the build writes a line of the file,
+  run `bash "${CLAUDE_PLUGIN_ROOT}/scripts/board.sh" --owns <file> --spec <NNNN>`
+  (edition v1.22) and tell the engineer what it printed: every other ACTIVE
+  spec on the trunk, and every spec on a remote `spec/` branch, that declares
+  the file, with its driver, and the close's remedy. It is a report, not a
+  refusal: two specs may both declare a file (a handoff is legitimate), and
+  the close-time refusal stays the guarantee. In a spec whose header reads `Tier: lite`, REFUSE to write a
   sixth line: the cap is the tier's (Part 3), and the close would refuse it as
   `SLH-LITE-OVERSIZED`; the legitimate moves are dropping the tier line or
   splitting. Under declared attestation custody these appends drift the
   hash; that is the mechanism working, and the re-attestation happens at your
-  next invocation, where the human already is.
+  next invocation, where the human already is. With attestation off they drift
+  it too (edition v1.22): in the append's commit, run
+  `bash "${CLAUDE_PLUGIN_ROOT}/scripts/spec-hash.sh" --refresh-owns specs/NNNN-slug.md`
+  and tell the engineer what it printed, each appended file and the hash
+  before and after. It writes only when nothing but appended `Owns:` lines
+  moved since the spec's last commit; anything else it refuses, writing
+  nothing, and that change goes to REVISED.
 - **Close (on the branch, before the merge):** flip `status` to `closed` and
   write the close facts from the QA you just gated: `"qa_pass_1": "ok"` and
   `"diagram": "updated"` or `"no-impact"`. The single-parent audit refuses a
   close whose facts are missing (`SLH-RECORD-NO-CLOSE`), so a close that skips
   this is unpushable, correctly.
-- **Chores:** record the chore under `chores.<id>` with its `files` (the
-  declared set the audit checks per file) as the chore is worked, and flip
-  `status` to `"done"` beside the archive line.
-- **The one-time transcription (upgraded instances only):** when asked to
-  create the record for an instance that predates it, read STATUS.md, PRINT
-  the full list of what you would record (every spec number with its state,
-  every chore with its state), and write the file ONLY after the human
-  confirms the list. Never unattended: an unconfirmed transcription launders
-  the page readers' possible misreadings into the authoritative record.
-  Transcribed closed specs get NO close facts; only closes made after the
-  record exists carry them.
+- **Chores:** `${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/chores.md`.
+- **The one-time transcription (upgraded instances only):** read
+  `${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/status-record-transcription.md` before creating the record for an
+  instance that predates it.
 
 A spec with no entry cannot close (`SLH-RECORD-NO-SPEC`); the fix is one
 invocation of this command to record it, which backfills the entry from the
@@ -291,13 +250,20 @@ row the human is already looking at.
 
 ## Writing the Spec-hash when a spec goes ACTIVE (Part 6)
 
-When you flip a spec's Status to ACTIVE (branch-opening, or a return from
-REVISED), compute and write its `Spec-hash:` field IN THE SAME COMMIT as the
+When you flip a spec's Status to ACTIVE (the opening flip, on the trunk, or a
+return from REVISED, on its branch), compute and write its `Spec-hash:` field IN THE SAME COMMIT as the
 Status change:
 
 ```
 bash "${CLAUDE_PLUGIN_ROOT}/scripts/spec-hash.sh" specs/NNNN-slug.md
 ```
+
+Write the header's `Driver:` field FIRST (edition v1.22): one handle, from
+`.claude/sdd.json`'s `identity.user_email` where declared, else
+`git config user.email`; with neither, ask, and write only what you are told.
+The line is inside the hashed range, so it is written before the hash, and the
+status record gains no key for it (the record's shape is the hooks', and the
+header is the one record of the driver).
 
 Put the digest in the header's `Spec-hash:` field. The script is the recipe. Do
 not hand-roll a sha256 over the file, because the hash deliberately excludes the
@@ -308,7 +274,10 @@ Writing it is idempotent: recomputing after the value is in place yields the
 same value.
 
 Never recompute a hash to silence a drift warning. That inverts the
-mechanism into a rubber stamp. A spec that truly needs to change goes to
+mechanism into a rubber stamp. The one refresh this command makes after the
+flip is `--refresh-owns`, after its own `Owns:` appends with attestation off
+(the acquisition bullet above): it prints what it refreshed, and it refuses
+every other edit. A spec that truly needs to change goes to
 REVISED with Planner sign-off and comes back to ACTIVE, and the rewrite happens
 on that return.
 
@@ -357,103 +326,11 @@ UNVERIFIED, which is the truthful state.
 
 ## BUILT and PARKED transitions (Part 5)
 
-Two inventory states for work that is finished on its branch and not on the
-trunk. Both are recorded in STATUS.md in the same commit as the state change,
-like every other transition.
-
-- **BUILT**: complete on its branch, close pending.
-- **PARKED**: deliberately paused, unmerged. **A PARKED row states its reason
-  AND its revisit trigger.** A parked row with neither is not a decision, it is
-  an abandoned branch wearing a label; refuse to write one without both.
-
-Resuming a PARKED spec re-validates the branch against the trunk as it exists
-NOW, before it may continue toward close. Rebase it, or re-run the gate
-command against it and say so. The trunk moved while the branch slept, and the
-close checklist below is about to assert a green full suite that was last true
-against a different trunk.
-
-When closing anything, remember that a PARKED spec's work is NOT on the trunk.
-Do not describe it as done in STATUS.md's current state, and name it in the
-exclusions of any release cut.
-
-## Cutting a release (Part 6)
-
-Only when `release.model` is `tags`. Under `version-file` the bump rides the
-close commit as ordinary work above; under `none` there is no ceremony and you
-say so.
-
-1. **The trunk is green.** Verify it now, against the files. A cut is not the
-   place to discover a red trunk.
-2. **State what the release CONTAINS and what it EXCLUDES.** The exclusion half
-   is the one that gets skipped and the one that matters. Read the STATUS
-   inventory and name every PARKED row: that work is on a branch, not on the
-   trunk, so it is not in this release however finished it looked.
-3. **Write the short release notes.**
-4. **Create the annotated tag.**
-5. **Push only with human approval.** Ask, and wait.
-
-Approval binds to OUTWARDNESS, not to versioning. Creating a tag or bumping
-a file is bookkeeping and needs no ceremony. A push that triggers a deploy or a
-publish is outward-facing and effectively irreversible, so it asks first. That
-is why `version-file` bumps need no approval and a `tags` push does: one
-instance shipped three patches in a day, and a confirmation on each would be
-theater that teaches people to click through.
-
-Do not report a release as cut until the tag exists AND the push has happened.
-"Tagged locally" is not released.
-
-The pre-merge-commit git hook independently verifies the same conditions on any
-merge, reading the spec file and STATUS.md from the branch being merged, so
-the Closing report and the CLOSED row count only once COMMITTED on the branch;
-working-tree edits do not satisfy it. Passing this checklist is what satisfies
-it. A hook denial is a finding to act on: fix the named
-item and retry.
+BUILT is complete on its branch, close pending; PARKED is paused, unmerged, and
+its row states a reason AND a revisit trigger. Read
+`${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/built-and-parked.md` before writing either state or resuming a parked spec.
 
 ## Gotchas (field-observed)
 
-- Stage first, then commit as its own command. Nothing in the session reads a
-  `git add X && git commit` compound any more (the advisory gate that warned
-  about it left in 2.8.0), and the git pre-commit hook scans the real index
-  either way, so the split is for review: what is staged is seen before it is
-  committed. An em-dash file once reached a trunk through a compound read
-  before its index was written, which is why the scan lives in the git hook.
-- Pasted tool output is new content. A QA report pasted verbatim into a
-  Closing report has carried em-dashes into staged content; the pre-commit git
-  hook refuses exactly this. Fix the paste before staging; the scan exempts nothing.
-- A trunk sat RED for two days because a session pushed and stopped. The step
-  existed as words and went unperformed, which is why it is now a numbered
-  duty with a written fallback rather than a reminder. "The push succeeded" is
-  not "CI is green"; only reading the run is. If you find yourself about to end
-  a session having pushed and not looked, that is the exact moment the duty
-  exists for.
-- Do not invent a branch per environment. The recurring intuition is that
-  `main -> staging -> production` gives you control over what ships; it gives
-  you three branches that drift and a production whose contents are knowable
-  only by diffing. The deployment is gated by the TRIGGER (a tag, a dispatch,
-  an approval), not by which branch the code sits on. Part 6 names and rejects
-  the pattern; if an instance really needs it, that is a decision for an ADR.
-- If this repository EXPORTS its own `.github/` (a template, plugin, or
-  starter repo copies its workflows into a published tree), a `runs-on:` change
-  is not a local edit. It must go through whatever repository-conditional
-  expression the workflow already uses, never a hardcoded self-hosted label,
-  or the published copy gets a workflow whose jobs queue forever and a README
-  badge that never resolves. In an ordinary instance, which exports nothing,
-  editing the label directly is correct, and that is exactly why the instinct
-  travels wrong: the safe habit in most repos is the unsafe one here. The
-  occasion this gets ignored is a runner migration, when the change looks
-  purely operational.
-- Never accept temporary broad write access to live infrastructure "just to get
-  unblocked". Anything pasted into a transcript is compromised whatever is
-  revoked afterwards, and live infra has no branch-like undo, so the usual
-  reasoning ("I will rotate it after") does not hold. Ask for a read-only scoped
-  token and write a local script the developer runs themselves. In the field
-  that shape is what surfaced the real security finding, so it is not the
-  cautious option, it is the one that worked.
-- Do not print a generated secret to check it. Pipe it into the write-only
-  store, and verify by reading back the STORE, never the value. A secret shown
-  once in a transcript is disclosed.
-- Sessions misreport hook denials. One session narrated a compound
-  checkout-and-merge as "checkout succeeded, then the merge was denied" when
-  the repo showed the whole command was denied and the checkout never ran.
-  After any deny, re-read `git status` and the current branch before acting
-  on your own account of what happened.
+Read `${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/gotchas.md` after a hook denial, before pasting a
+report, and before any push or secret.

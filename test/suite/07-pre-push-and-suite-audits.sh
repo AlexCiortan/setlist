@@ -66,8 +66,12 @@ expect_script "pre-push e: a repo that is not a framework instance is untouched"
 # whose name is not the local trunk used to miss PUSH_REFS, control fell through
 # to auditing the LOCAL trunk, and unclosed feature code was ALLOWED onto the
 # remote's about-to-be default branch, a ref the push never touched. The fix
-# detects the empty remote (no HEAD symref AND no branch refs) and audits EVERY
-# pushed ref as a trunk candidate. These invoke the hook the way git does, with a
+# detects the empty remote (no HEAD symref AND no branch refs) and audited EVERY
+# pushed ref as a trunk candidate. SINCE SPEC 0203 (the empty-remote retirement) it
+# audits the DECLARED trunk alone and names every other pushed branch unaudited by
+# SLH-REF-NOT-AUDITED: a spec branch is no longer refused as if it were the trunk,
+# and the fall-through to the local trunk stays closed (nothing is audited in its
+# place, and the report says so). These invoke the hook the way git does, with a
 # remote name and stdin refspecs, against a real bare remote, because the fall-
 # through only exists on that path (the </dev/null tests above cannot reach it).
 ZERO=0000000000000000000000000000000000000000
@@ -78,11 +82,28 @@ git -C "$PPE" add -A && git -C "$PPE" commit -qm "raw feature straight on a spec
 FOID="$(git -C "$PPE" rev-parse spec/0009-raw)"
 MOID="$(git -C "$PPE" rev-parse main)"
 
-# g: a feature branch pushed FIRST to an EMPTY remote is audited as trunk and refused.
+# g: a feature branch pushed FIRST to an EMPTY remote is named unaudited, never audited as the
+# trunk (spec 0203; until then it was audited as a trunk candidate and refused, F1's fix).
 git init --bare -q "$WORK/emptyremote-g.git"
 git -C "$PPE" remote add origin_g "$WORK/emptyremote-g.git"
 run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPE' && CLAUDE_PLUGIN_ROOT='$ROOT' bash '$PP' origin_g '$WORK/emptyremote-g.git' <<< 'refs/heads/spec/0009-raw $FOID refs/heads/spec/0009-raw $ZERO'"
-expect_script "pre-push g: a feature branch pushed first to an EMPTY remote is audited as trunk and refused (F1)" 1 "did not arrive through a"
+expect_script "pre-push g: a feature branch pushed alone to an EMPTY remote is named unaudited, not audited as the trunk (0203)" 0 "SLH-REF-NOT-AUDITED" "refs/heads/spec/0009-raw"
+
+# j: the trunk and a spec branch pushed together to an EMPTY remote: the declared trunk is
+# audited (clean, so allowed) and the spec branch is named unaudited (spec 0203).
+git init --bare -q "$WORK/emptyremote-j.git"
+git -C "$PPE" remote add origin_j "$WORK/emptyremote-j.git"
+run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPE' && CLAUDE_PLUGIN_ROOT='$ROOT' bash '$PP' origin_j '$WORK/emptyremote-j.git' <<< 'refs/heads/main $MOID refs/heads/main $ZERO
+refs/heads/spec/0009-raw $FOID refs/heads/spec/0009-raw $ZERO'"
+expect_script "pre-push j: the trunk and a spec branch pushed together to an EMPTY remote: the trunk audited clean, the spec branch named unaudited (0203)" 0 "SLH-REF-NOT-AUDITED" "refs/heads/spec/0009-raw" "audited"
+
+# k (control): unspecced work on the declared trunk pushed to an EMPTY remote is refused, before
+# and after spec 0203.
+PPK="$WORK/prepush-emptyremote-k"; audit_fixture "$PPK" direct
+git init --bare -q "$WORK/emptyremote-k.git"
+git -C "$PPK" remote add origin_k "$WORK/emptyremote-k.git"
+run_script env -u CLAUDE_PLUGIN_ROOT bash -c "cd '$PPK' && CLAUDE_PLUGIN_ROOT='$ROOT' bash '$PP' origin_k '$WORK/emptyremote-k.git' <<< 'refs/heads/main $(git -C "$PPK" rev-parse main) refs/heads/main $ZERO'"
+expect_script "pre-push k (control): unspecced work on the trunk pushed to an EMPTY remote is refused" 1 "did not arrive through a"
 
 # h: a clean trunk pushed first to an EMPTY remote still bootstraps (allow).
 git init --bare -q "$WORK/emptyremote-h.git"

@@ -15,6 +15,14 @@ and follow that text (the Retrofit Protocol) for everything below. The whole
 retrofit is planning plus documentation: reading the de-facto src and tests is
 required; editing them is forbidden.
 
+Your FIRST message opens with the contract (Part 8 Step 1, which Part 8b Step 2
+follows), before any question, the observe question included. Say that this is
+an architecture session the user drives. Then three sentences: "I decide the
+stack's future, the core data model, the scope and every default I write down
+only with your approval." "I never decide boundaries, data ownership, the
+repository split or anything with a cost for you." "Ask me anything at the
+level you work at; I keep going until you stop me."
+
 ## 0. Observe, on request, before anything is written (plugin 2.11.0)
 
 When the command was invoked with `--observe`, or when the user answers yes to
@@ -58,33 +66,68 @@ nothing and writes nothing." A no, or no answer, goes straight to section 1.
 
 ## 2. Inventory first (Part 8b Step 1, read-only)
 
+Ask first: "Is this repository the whole system, or one of several?" For
+several, ask for each sibling's local path or URL and read each one,
+read-only: its layout, languages, pipeline files and the crossings you can
+see (imports, HTTP clients, queue names). Read a local path in place; read a
+URL through a shallow clone into a temporary directory and remove it after.
+Never write to a sibling, and ask about one you cannot read rather than
+guess. The inventory report covers the siblings too.
+
 Explore before asking, exactly as Step 1 lists: stack and versions, the
 de-facto core data model, state ownership, error handling as practiced, test
 coverage reality, secrets handling, the riskiest areas, and the de-facto src
 and tests locations (paths are roles; they may not exist by those names). Show
 the inventory report to the user BEFORE any interview question.
 
+The report proposes the answer to Part 8 Step 1's sizing question from what
+you read: the deployables you found, the contributors in `git shortlog -sn`,
+and whether the code runs in production. The interview confirms it, and it
+selects the depth mode (Part 8 Step 1): ordinary, deep or estate, with the
+stopping rule that mode carries.
+
 The role paths come from one mechanical scan, never from the defaults. Run
 the inventory scan from the repository root and show its output in the report:
 
 ```sh
-git ls-files | awk -F/ '{ top = (NF > 1) ? $1 : "."; k = split($NF, part, "."); ext = (k > 1) ? tolower(part[k]) : "" } ext ~ /^(c|cc|cpp|cs|go|java|js|jsx|kt|m|mjs|php|py|rb|rs|scala|sh|swift|ts|tsx|vue|dart|ex|exs|clj|lua|r|sql|hs|ml|fs|elm|erl|zig)$/ { n[top]++ } END { for (d in n) printf "%d %s%s\n", n[d], d, (tolower(d) ~ /^(test|tests|spec|__tests__|e2e|testing)$/ ? " (tests)" : "") }' | sort -rn
+git ls-files | awk -F/ '{ top = (NF > 1) ? $(1) : "."; k = split($NF, part, "."); ext = (k > 1) ? tolower(part[k]) : "" } ext ~ /^(c|cc|cpp|cs|go|java|js|jsx|kt|m|mjs|php|py|rb|rs|scala|sh|swift|ts|tsx|vue|dart|ex|exs|clj|lua|r|sql|hs|ml|fs|elm|erl|zig)$/ { n[top]++ } END { for (d in n) printf "%d %s%s\n", n[d], d, (tolower(d) ~ /^(test|tests|spec|__tests__|e2e|testing)$/ ? " (tests)" : "") }' | sort -rn
 ```
 
 It counts the tracked source files under each top-level directory, most first,
-and marks the test-named ones. Write `src_role` from the first candidate not
+and marks the test-named ones. The block writes its first field as `$(1)`, and
+no dollar sign stands before a digit anywhere in it, because Claude Code
+substitutes a skill's positional arguments into the skill's text, so a
+`/setlist:retrofit` typed with words after it would rewrite such a field. Show each candidate with its count and ask for a
+yes per path before writing it: propose `src_role` from the first candidate not
 marked `(tests)` and `tests_role` from the first one marked, as the scan read
-them; never write `src` or `tests` unless the scan lists them. Where the code
-lives in several directories, stamp with the first and list the rest in
-`.claude/sdd.json`'s `roles` after the stamp (a role is a string or a list of
-strings). The stamp refuses a role path the repository does not have, by name.
+them; never write `src` or `tests` unless the scan lists them. Where the scan
+finds several code directories, or none, ask which paths hold the code and the
+tests; never write them from the first candidate. When the user names several,
+stamp with one and list the rest in `.claude/sdd.json`'s `roles` after the stamp
+(a role is a string or a list of strings). The stamp refuses a role path the
+repository does not have, by name.
 
 ## 3. Interview (Part 8b Step 2)
 
-Same structured-round rules as Part 8 Step 1, plus the sacred-vs-disposable
-question. One round, real forks only, recommendations inline, and the same
-opener: "what has changed since this framework edition was written" comes
-first.
+Same rules as Part 8 Step 1, the assumption register included, plus the
+sacred-vs-disposable question. Every decision the inventory leaves open is a
+question or a register line (`A-07 | decision | default taken | why | the
+question that would change it`), answered inline: keep, change, or ask me
+later. A retrofit's defaults are mostly what the inventory found, written as
+lines the same way. Where the inventory cannot name the deployables, the users
+and the core data, derive first as Part 8 Step 1 says: the open decisions in
+order of consequence, three at a time, before proposing anything. Recommendations inline, the stopping rule on the rounds,
+and the same opener: "what has changed since this framework edition was
+written" comes first. Phase 2 writes the lines into the Assumptions sections of
+`steering/product.md` and `steering/tech.md`, and the "ask me later" ones into
+spec 0001's `## Open questions`.
+
+Ask the team round too (Part 8 Step 1) and record the team as it works today:
+who builds here and how many at once, how the trunk is protected, who approves
+a spec, who may flip it ACTIVE, and what happens to a claim nobody touches for N
+days. The answers write a Team section in `steering/product.md`; the stale-claim
+answer becomes `"stale_days": <N>` in `.claude/sdd.json` after the stamp, and who
+may flip ACTIVE feeds the attestation question, which stays OFF by default.
 
 Ask the `diagram_command` question in this round too, DEFAULT NONE: is there a
 command that prints this project's structure as one Mermaid block (an import
@@ -92,6 +135,14 @@ graph, a schema dump)? A yes is recorded in `.claude/sdd.json` beside
 `gate_command` and its committed output under `docs/diagrams/generated/` must
 then equal what it prints at every close; a no records nothing, which is the
 right default.
+
+For a codebase with a UI, ask the design surface question as Part 8 Step 1
+words it: will design-heavy entries route through Claude Code's `/design`
+(Part 5c)? Yes commits the instance to an interactive `/design` session per
+intake. Each locked redline and its artboard exports are committed under
+`docs/design/` before the spec that builds to it goes ACTIVE, and design QA
+reads the committed redline. Mocks the codebase already keeps elsewhere are
+committed there too, and the answer is the answers file's `design_surface`.
 
 Verify the environment in this round too: the `opusplan` live probe
 (`bash "${CLAUDE_PLUGIN_ROOT}/scripts/model-probe.sh"`, two short headless
@@ -118,8 +169,20 @@ execution_model=<the id on the probe's "served execution" line, or empty>
 design_surface=<yes|no>
 src_role=<the scan's first candidate>
 tests_role=<the scan's first (tests) candidate>
+sizing=<ordinary | deep | estate, the mode the sizing selected>
+system_spec=<an estate of repositories only: the system spec's path from this repository, or its URL>
 mode=retrofit
 ```
+
+For an estate of several repositories, write `system.md` and its bootstrap
+plan first (section 5, Part 8 Step 3), one step per repository the user
+adopts, its role paths from that repository's own tree. The system repository
+is not stamped as an instance unless the user asks for it. Walk the plan as
+`/setlist:new` does: each repository's answers file with `system_spec=`, the
+stamp in retrofit mode with its exit code printed on a line of its own, its
+phase 2, one progress line, and a stop at the first exit other than 0. A
+default taken while writing is a register line shown with its id, and
+answered, before it is written.
 
 Then run:
 `bash "${CLAUDE_PLUGIN_ROOT}/scripts/stamp.sh" .claude/stamp-answers.txt .`
@@ -164,6 +227,14 @@ you already read (see below); the queue per Step 4 (spec 0001 is characterizatio
 de-facto core abstraction unless its Goal justifies otherwise); the whole
 retrofit landing as ONE commit on the default branch with message prefix
 `framework:`; and the Step 5 hand-off lines in RUNBOOK.md.
+
+For an estate of several repositories, phase 2 first writes the system spec
+(Part 4): `system.md` in the system repository, from the inventory, with the
+components, crossings and contracts as found or missing, and the bootstrap
+plan (section 4). Each repository's `structure.md` points at it, and each
+spec 0001 cites it in a `Cites:` line. For an estate of one repository, the
+same goes in a System section of `steering/structure.md`. Every missing piece
+is an open question in spec 0001's `## Open questions`.
 
 ### Seeding `docs/diagrams/` in phase 2
 

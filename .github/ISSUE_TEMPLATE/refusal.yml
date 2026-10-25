@@ -33,7 +33,7 @@ body:
     attributes:
       label: Plugin and edition
       description: The plugin version (`.claude/sdd.json`, the `plugin.version` field) and the edition line at the top of your committed `setlist.md`.
-      placeholder: plugin 2.7.0, edition v1.15
+      placeholder: plugin 2.14.0, edition v1.22
   - type: textarea
     id: command
     attributes:
