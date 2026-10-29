@@ -83,6 +83,13 @@ INSTANCE="$1"
 [[ -d "$INSTANCE" ]] || die "not a directory: $INSTANCE"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# The private copy the report modes read (obs_clone below) is made by the one
+# function in private-copy.sh, beside this file. Sourcing fails closed: without
+# it no copy can be made, and the modes would have nothing private to read.
+[[ -f "$SCRIPT_DIR/private-copy.sh" ]] \
+  || die "scripts/private-copy.sh is missing, so the private copy the audit reads cannot be made. Nothing was written."
+# shellcheck source=/dev/null
+source "$SCRIPT_DIR/private-copy.sh"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 HOOKS="$ROOT/templates/hooks"
 [[ -d "$HOOKS" ]] || die "templates/hooks/ not found at the plugin root ($ROOT)"
@@ -122,8 +129,8 @@ obs_clone() { # obs_clone <repo> <trunk> -> sets OBS_CLONE, the clone at the tru
     trap obs_cleanup EXIT
   fi
   c="$OBS_DIR/clone"
-  git clone -q --shared --no-checkout -b "$2" -- "$1" "$c" >/dev/null 2>&1 \
-    || die "could not clone the repository privately to read it (git clone --shared --no-checkout -b $(obs_text "$2") failed). Nothing was written."
+  private_copy -q --shared --no-checkout -b "$2" -- "$1" "$c" >/dev/null 2>&1 \
+    || die "could not make a private copy of the repository to read it (a shared copy with nothing checked out, at the trunk $(obs_text "$2"), failed). Nothing was written."
   OBS_CLONE="$c"
 }
 obs_range() { # obs_range <repo> <tip> -> "since merges commits": the parent of the Nth-newest first-parent merge, or the root
@@ -1477,10 +1484,11 @@ for f in CLAUDE.md AGENTS.md RUNBOOK.md specs/TEMPLATE.md; do
   [[ -f "$INSTANCE/$f" ]] && DRIFT_SET[${#DRIFT_SET[@]}]="$INSTANCE/$f"
 done
 if [[ -d "$INSTANCE/.claude/skills" ]]; then
+  DRIFT_SKILLS="$(find "$INSTANCE/.claude/skills" -type f -name '*.md' 2>/dev/null | sort)"
   while IFS= read -r f; do
     [[ -n "$f" ]] && DRIFT_SET[${#DRIFT_SET[@]}]="$f"
   done <<EOF
-$(find "$INSTANCE/.claude/skills" -type f -name '*.md' 2>/dev/null | sort)
+$DRIFT_SKILLS
 EOF
 fi
 if [[ -n "$DRIFT_ED" && -n "$DRIFT_BIND" && "${#DRIFT_SET[@]}" -gt 0 ]]; then

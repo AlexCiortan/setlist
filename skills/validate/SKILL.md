@@ -194,7 +194,10 @@ Checks:
     health check that silently re-stamps a hash would erase the very drift the
     field exists to surface. Report its `Driver:` line (edition v1.22) beside it,
     as INFORMATION; an absent line is information too, for a spec flipped before
-    the line existed, and nothing here writes one.
+    the line existed, and nothing here writes one. Where the status record carries
+    the spec's `driver` key (edition v1.23) and it names another handle than the
+    header's line, report both as INFORMATION: one of them was edited by hand, or a
+    handoff was written in one place; nothing refuses either.
 17. If `.claude/sdd.json` declares `"attestation": {"required": true}`, the
     ACTIVE spec has an approval attestation at `specs/attest/NNNN.json` with its
     `.sig` beside it (Part 6). **Presence is INFORMATION and absence is not a

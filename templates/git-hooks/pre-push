@@ -242,6 +242,35 @@ fi
 PUSH_REFS=""
 REMOTE_EMPTY_UNAUDITED=0
 
+# THE CLAIM ARMS' INPUTS (spec 0207): the trunk the push answers to is the pushed trunk tip when
+# the trunk is in this push, and the refs this push deletes are not claims the remote still makes.
+# The remote they read is the location git pushes to, the hook's second argument, not the name:
+# ls-remote of a name reads its fetch url, and a remote whose pushurl differs (the fork shape) was
+# checked against the remote the push does not reach (the 2.15.0 second leg's F3, spec 0210). The
+# spec/ refs this push creates or moves are claims too, compared with each other (its F4).
+CLAIM_REMOTE="${2:-$REMOTE_ARG}"
+# The trunk they read is the DECLARED trunk, by name on the remote the push reaches, or the ref
+# branch.<trunk>.merge names when the trunk tracks that remote under another name (ruling PP-04's
+# shape). The remote's HEAD, cached or live, is never read here: a remote whose HEAD names another
+# branch moved the arms off the trunk the audit reads (the 2.15.0 eleventh leg's F2 and twelfth
+# leg's F1 and F3, spec 0210).
+CLAIM_TRUNK="$TRUNK_NAME"
+if [[ -n "$REMOTE_ARG" && "$(git -C "$REPO" config --get "branch.$TRUNK_NAME.remote" 2>/dev/null || true)" == "$REMOTE_ARG" ]]; then # fail-open-ok: an unset upstream leaves the declared name
+  _up="$(git -C "$REPO" config --get "branch.$TRUNK_NAME.merge" 2>/dev/null || true)" # fail-open-ok: an unset merge ref leaves the declared name
+  case "$_up" in refs/heads/?*) CLAIM_TRUNK="${_up#refs/heads/}" ;; esac
+fi
+# shellcheck disable=SC2034  # read by the sourced library in the claim arms' refusal text
+SLH_CLAIM_DECLARED="$TRUNK_NAME"
+CLAIM_PUSHED_TRUNK=""
+CLAIM_DELETED=" "
+CLAIM_PUSHED=" "
+while read -r _l _lo _r _ro; do
+  [[ -n "${_r:-}" ]] || continue
+  case "$_lo" in *[!0]*) ;; *) CLAIM_DELETED="$CLAIM_DELETED${_r} "; continue ;; esac
+  if [[ "$_r" == "refs/heads/$CLAIM_TRUNK" ]]; then CLAIM_PUSHED_TRUNK="$_lo"; fi
+  case "$_r" in refs/heads/spec/*) CLAIM_PUSHED="$CLAIM_PUSHED${_r} " ;; esac
+done <<< "$PUSH_LINES"
+
 # HISTORY: ruling PP-06 (plugin 2.6.0): THE SCAN WALKS THE RANGE PER COMMIT, and the walk lives in the library since.
 
 # HISTORY: ruling PP-07 (undated): TWO CHECKS, TWO SCOPES, AND THEY ARE NOT THE SAME SCOPE (F2, verdict leg).
@@ -303,6 +332,11 @@ while read -r _lref _loid rref _roid; do
     slh_scan_walk "$REPO" "the history this push adds to $rname" "${SCAN_ARGV[@]}" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below, so a non-zero return must not abort before every ref is read
     # HISTORY: ruling PP-10 (undated): --- half one-b: THE APPROVAL CHECK, over the same refs and the same range.
     slh_attest_walk "$REPO" "the history this push adds to $rname" "$_loid" "${SCAN_ARGV[@]}" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below, so a non-zero return must not abort before every ref is read
+    # --- half one-c: THE CLAIM ARMS (spec 0207), over the same refs, beside the scan, so
+    # SETLIST_SKIP_TRUNK_AUDIT does not skip them: a spec branch whose spec the trunk does not
+    # carry at ACTIVE, and a spec file whose number the remote carries under another slug.
+    slh_claim_flip "$REPO" "$CLAIM_REMOTE" "$CLAIM_TRUNK" "$rname" "$_loid" "$CLAIM_PUSHED_TRUNK" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below
+    slh_claim_number "$REPO" "$CLAIM_REMOTE" "$CLAIM_TRUNK" "$rname" "$_loid" "$CLAIM_DELETED" "$CLAIM_PUSHED" "$CLAIM_PUSHED_TRUNK" || true # fail-open-ok: the refusal is recorded in SLH_REFUSED and decided below
   else
     slh_refuse "SLH-SCAN-UNRESOLVED-TIP" "the tip this push would put on $rname ($_loid) does not resolve to a commit here, so what it publishes cannot be read. Refusing rather than reporting a scan that did not run."
   fi

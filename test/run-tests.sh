@@ -877,6 +877,12 @@ build_brokenjq_bin
 # hole: One repository is one instance: no gate reads across repositories, and a change that spans them is governed by each repository's own hooks and by a citation no hook verifies. | unassertable | a statement about what no gate reads: every hook, the trunk audit and the forge check read one repository's history, so a one-repository suite cannot drive a cross-repository case; the manual check is a reviewer reading a paired change in both repositories (added 2.14.0, spec 0198, the boundary of the repository split)
 # LEDGER-END
 
+# --- the private copy (scripts/private-copy.sh), before the shards ----------
+# Every shard that copies a repository on the local disk calls private_copy,
+# the plugin's one definition of that copy, rather than spelling it.
+# shellcheck source=/dev/null
+source "$ROOT/scripts/private-copy.sh"
+
 # --- the shards, in order; the program is their concatenation ---------------
 source "$SUITE_DIR/01-session-gates.sh"
 source "$SUITE_DIR/02-plugin-version-and-refresh.sh"

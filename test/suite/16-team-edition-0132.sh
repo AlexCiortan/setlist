@@ -287,7 +287,7 @@ fc_case "step 8: an audit that could not run (exit 2) is exit 2 with NOTHING on 
 # --- THE CHECKOUT AND THE INSTANCE (rows 10 through 13) -----------------------
 FCD="$WORK/fc-shallow-src"; fc_fixture "$FCD" off; fc_close_branch "$FCD"
 FCS="$WORK/fc-shallow"; rm -rf "$FCS"
-git clone -q --depth 1 --no-single-branch "file://$FCD" "$FCS" >/dev/null 2>&1
+private_copy -q --depth 1 --no-single-branch "file://$FCD" "$FCS" >/dev/null 2>&1
 mkdir -p "$FCS/.claude/hooks"; cp "$FC_SCRIPT" "$FCS/.claude/hooks/forge-check.sh"
 fc_run "$FCS" --base main --head origin/spec/0001-thing --forge none
 fc_case "row 10: a shallow checkout is SHALLOW-CHECKOUT, naming fetch-depth" 1 "SHALLOW-CHECKOUT" FC-SHALLOW-CHECKOUT
@@ -1282,6 +1282,34 @@ fi
 
 fi; shard_region_end
 # <<< SHARD-END forge-bound-0172
+
+# >>> SHARD-BEGIN forge-copy-0210 cost=1
+if shard_region forge-copy-0210; then
+# W1 of spec 0210's fix round 4. fc_private_copy borrowed the checkout's object store by writing the
+# SHELL's spelling of its path into objects/info/alternates; under Git Bash that is /tmp/..., which
+# the native git cannot read ("unable to normalize alternate object path"), so every forge check on
+# the owner's x64 PC could not run (118 cases red at 1e7f580b). The line is now what git itself
+# prints for the object store, so the shape is tested here on every platform: the alternates line
+# equals `rev-parse --path-format=absolute --git-path objects`, and the copy is connected.
+FY="$(mktemp -d "$WORK/fy.XXXXXX")"
+FY_OK=1
+fc_fixture "$FY/inst" off
+git -C "$FY/inst" branch spec/0001-thing 2>/dev/null || FY_OK=0
+# The shipped function itself, cut from the stamped script into a file and sourced.
+sed -n '/^fc_private_copy() {/,/^}/p' "$FC_SCRIPT" > "$FY/fc-private-copy.sh" && . "$FY/fc-private-copy.sh" || FY_OK=0
+FY_RC=0; ( REPO="$FY/inst"; FC_CLONE="$FY/merge"; fc_private_copy ) > /dev/null 2>&1 || FY_RC=$?
+FY_WANT="$(git -C "$FY/inst" rev-parse --path-format=absolute --git-path objects 2>/dev/null)"
+FY_HAVE="$(cat "$FY/merge/.git/objects/info/alternates" 2>/dev/null)"
+FY_FSCK=0; git -C "$FY/merge" fsck --connectivity-only > "$FY/fsck.log" 2>&1 || FY_FSCK=$?
+if [[ "$FY_OK" -eq 1 && "$FY_RC" -eq 0 && -n "$FY_WANT" && "$FY_HAVE" == "$FY_WANT" && "$FY_FSCK" -eq 0 ]] \
+   && [[ "$(git -C "$FY/merge" rev-parse refs/remotes/origin/spec/0001-thing 2>/dev/null)" == "$(git -C "$FY/inst" rev-parse spec/0001-thing)" ]]; then
+  ok "0210 W1 forge copy: the alternates line is the object store as git prints it, and the copy is connected"
+else
+  bad "0210 W1 forge copy: the alternates line is the object store as git prints it, and the copy is connected" \
+      "ok=$FY_OK rc=$FY_RC want=[$FY_WANT] have=[$FY_HAVE] fsck=$FY_FSCK $(head -3 "$FY/fsck.log" | tr '\n' ' ')"
+fi
+fi; shard_region_end
+# <<< SHARD-END forge-copy-0210
 
 # =============================================================================
 # THE COACHING LEAK (ER1), spec 0132 cluster B: the escape spellings leave the
@@ -2461,12 +2489,14 @@ else
 fi
 # .env.example is what the stamp writes (scripts/stamp.sh); no Read rule may match it. A rule's
 # pattern is read as a shell glob here, which is the reading the deny list's own note gives it.
+# Both rule lists below are read with CR stripped (spec 0208, item 5a): a native jq on Windows
+# ends each line in CR LF, and a rule that keeps its CR is a glob that matches nothing.
 SH_EXAMPLE_HIT=""
 while IFS= read -r sh_rule; do
   sh_glob="${sh_rule#Read(}"; sh_glob="${sh_glob%)}"
   # shellcheck disable=SC2053 # the pattern is a glob on purpose
   [[ ".env.example" == $sh_glob ]] && SH_EXAMPLE_HIT="$SH_EXAMPLE_HIT $sh_rule"
-done < <(printf '%s' "$SH_TMPL" | jq -r '.permissions.deny[] | select(startswith("Read("))' 2>/dev/null)
+done < <(printf '%s' "$SH_TMPL" | jq -r '.permissions.deny[] | select(startswith("Read("))' 2>/dev/null | tr -d '\r')
 if [[ -z "$SH_EXAMPLE_HIT" ]] && grep -q '\.env\.example' "$ROOT/scripts/stamp.sh"; then
   ok ".env deny: the .env.example the stamp writes is matched by no Read rule"
 else
@@ -2479,7 +2509,7 @@ fi
 # itself, which the export's policy gate refuses.
 SH_READER="cat"; SH_EXAMPLE_FILE=".env.example"
 SH_BASH_EXAMPLE_HIT=""; SH_BASH_UNCOVERED=""
-SH_BASH_RULES="$(printf '%s' "$SH_TMPL" | jq -r '.permissions.deny[] | select(startswith("Bash("))' 2>/dev/null)"
+SH_BASH_RULES="$(printf '%s' "$SH_TMPL" | jq -r '.permissions.deny[] | select(startswith("Bash("))' 2>/dev/null | tr -d '\r')"
 while IFS= read -r sh_rule; do
   [[ -n "$sh_rule" ]] || continue
   sh_glob="${sh_rule#Bash(}"; sh_glob="${sh_glob%)}"

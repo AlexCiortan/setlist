@@ -1,7 +1,7 @@
 # Setlist
 ### A spec-driven development framework: build real software with Claude Code by directing rather than typing
 
-**Edition v1.22 (the session-zero edition)**
+**Edition v1.23 (the claims edition)**
 
 This file is always named `setlist.md`. The edition version lives on the line above and in
 the Changelog, never in the filename.
@@ -689,12 +689,19 @@ The grammar, in full, because a grammar this small is the point:
   `qa_pass_1` admits exactly `ok`, and `diagram` admits exactly `updated` or `no-impact`.
   Checkpoint writes all three close facts at the close, in the close commit on the branch.
   There is one token per fact, because a record that can express a tally will be read as
-  prose. **The diagram field's FILE LIST (v1.15) lives in the Closing report's field text
-  and never here.** The reason is this grammar's own strictness. An unknown key is
-  MALFORMED and never ignored, so the first instance on a new edition to write a new key
-  would make every clone still on the previous one refuse ordinary commits. The schema is
-  therefore frozen for as long as two editions may share a repository. The readers parse
-  the file list out of the report, the way the audit already reads an `Owns:` declaration.
+  prose. `driver` (new in v1.23) admits one non-empty string, the handle the spec's
+  `Driver:` header line names, which checkpoint writes at the opening ACTIVE flip; no gate
+  reads its value. **The diagram field's FILE LIST (v1.15) lives in the Closing report's
+  field text and never here.** The reason is this grammar's own strictness. An unknown key
+  is MALFORMED and never ignored, so the first instance on a new edition to write a new key
+  makes every clone still on the previous one refuse ordinary commits. A key is therefore
+  added only when that cost is paid on purpose, and `driver` is the one key added since
+  v1.12: checkpoint writes it only where `.claude/sdd.json` stamps plugin 2.15 or later,
+  and the upgrade moves that stamp in the same change that delivers the hooks accepting the
+  key. A clone that still runs older hooks (a branch cut before the upgrade and not yet
+  merged with the trunk, or an older plugin's audit) refuses a record that carries it as
+  `SLH-RECORD-MALFORMED` until it takes the upgrade. The readers parse the file list out of
+  the report, the way the audit already reads an `Owns:` declaration.
 - `chores.<id>.status` admits `open` or `done`. `files` is the chore's declared set (Part
   6's ownership question), present from the first checkpoint that touches the chore.
 - Unknown top-level keys, unknown tokens, wrong types, a missing `setlist_status` and
@@ -727,7 +734,14 @@ from the trunk and the remote (new in v1.22): the highest number on the trunk an
 remote's `spec/` branches, plus one, which `/setlist:board` prints and the skills that cut a spec
 take. Two cuts can still collide, two clones that had not fetched each other's claim; then the
 first trunk landing owns the number, and the other renumbers before it merges. The board names a
-number claimed twice; no hook refuses it before the close. A system spec (Part 4,
+number claimed twice, and since v1.23 `pre-push` refuses the push that would make the second
+claim: a pushed spec file whose number the remote's trunk or one of its `spec/` branches carries
+under another slug, and a pushed `spec/NNNN-<slug>` whose number the trunk's spec file carries
+under another slug, are refused as `SLH-CLAIM-NUMBER-TAKEN`, with the remedy (renumber from the
+board's next number and push again). Two cuts made apart still collide in the clones that made
+them, and the second one's push is where it stops. The check reads the remote as the push finds
+it, compares only spec files the remote's trunk does not already carry at the same path, and is
+in force where the pushed commit's `.claude/sdd.json` stamps plugin 2.15 or later. A system spec (Part 4,
 new in v1.22) is numbered in the system repository's own `specs/` and cited from another
 repository with the prefix `system/`: `system/0003`.
 
@@ -1304,7 +1318,17 @@ on the trunk, and both are PUSHED, with the ask `settings.json` already enforces
 `spec/NNNN-<slug>` is cut. The opening flip carries the `Spec-hash:` (Part 6), the `Driver:` line
 (Appendix C) and, where custody is declared, the attestation. This holds in every instance, not
 only under `forge` custody, because a claim that lives only on a local branch is invisible to every
-other clone, and two people can then build the same spec. Under `forge` custody the trunk is
+other clone, and two people can then build the same spec. Since v1.23 `pre-push` refuses the other
+order by name: a pushed `spec/NNNN-<slug>` whose spec the trunk the push answers to (the pushed
+trunk when the trunk is in the push, else the declared trunk as the remote carries it, by its name
+or by the ref its upstream names, never the remote's default branch) does not carry at ACTIVE or a
+later state in its status record is refused as `SLH-CLAIM-NOT-ON-TRUNK`, with the remedy, so the
+checkpoint's atomic push of the flip and the branch passes and a branch pushed ahead of its flip
+does not. A remote trunk this clone has not fetched refuses as `SLH-CLAIM-UNREADABLE` (fetch, then
+push again), and so does a remote that carries branches but no trunk of that name.
+The check is in force where the pushed commit's `.claude/sdd.json` stamps plugin 2.15 or later, and
+it is not asked of an instance without the status record or under `forge` custody, whose pull
+request branch is pushed before its flip lands. Under `forge` custody the trunk is
 reached through the pull request, as before. A return from REVISED to ACTIVE is made on the spec's
 branch, which already exists and is pushed. With no remote configured the flip lands on the local
 trunk, and the checkpoint's visibility block says that only this clone can see it. The number
@@ -3025,6 +3049,15 @@ an empty result is a refusal by construction. The codes:
 | a spec declared `Tier: lite` whose `Owns:` set exceeds five files, at any close (v1.14) | `SLH-LITE-OVERSIZED` |
 | a two-parent close declaring a file that a spec closed on the trunk's first-parent line after the branch left it also declares (plugin 2.11.0) | `SLH-OWNS-OVERLAP` |
 
+Since v1.23 `pre-push` adds three codes for the claims a push makes (Part 5, Part 3), read from
+the pushed commits and the remote, in force where the pushed commit stamps plugin 2.15 or later:
+
+| Condition | Code |
+|---|---|
+| a pushed `spec/NNNN-<slug>` whose spec the trunk the push answers to records as absent, `draft` or `queued` | `SLH-CLAIM-NOT-ON-TRUNK` |
+| a pushed spec file whose number the remote's trunk or one of its `spec/` branches carries under another slug, or a pushed `spec/NNNN-<slug>` whose number the trunk's spec file carries under another slug | `SLH-CLAIM-NUMBER-TAKEN` |
+| the remote's heads, or its trunk, could not be read for those two (a trunk this clone has not fetched, or a remote carrying branches but no trunk of the declared name) | `SLH-CLAIM-UNREADABLE` |
+
 The session layer carries none of these. The two advisory gates that mirrored them as warnings
 left in v1.16, and the git hooks are what refuse. Present-and-malformed is never a pass and
 never a fallback.
@@ -3105,7 +3138,14 @@ runs the board's read and names every other ACTIVE spec on the trunk, and every 
 `spec/` branch, that declares the same file, with its driver and the remedy above. The board
 (`/setlist:board`) shows the same overlap between any two ACTIVE specs. Both are reads of what was
 pushed and refuse nothing, so a claim nobody pushed is invisible to them, and the refusal at the
-close is still what holds.
+close is still what holds. Since v1.23 the claims themselves are refused at push, by `pre-push`: a
+`spec/NNNN-<slug>` branch whose spec the trunk does not carry at ACTIVE (Part 5,
+`SLH-CLAIM-NOT-ON-TRUNK`) and a spec file whose number the remote already carries under another slug
+(Part 3, `SLH-CLAIM-NUMBER-TAKEN`). Those two checks read the pushed commits and the remote as the
+push finds it, by the branch's name and the spec file's name. They do not see a claim nobody
+pushed, a push that skips the git hooks (`--no-verify`, `SETLIST_SKIP_HOOKS=1`), a trunk the remote
+refuses in a push that is not atomic, or a merge made on the forge, and they do not compare `Owns:`
+sets: an overlap is still reported when it is acquired and refused only at the close.
 
 The lite tier's cap rides the same reader (new in v1.14). A spec whose header reads
 `Tier: lite` (Part 3) declares at most five files, and a sixth is refused as

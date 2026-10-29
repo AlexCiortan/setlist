@@ -1,4 +1,4 @@
-**Edition v1.22 (the session-zero edition)**
+**Edition v1.23 (the claims edition)**
 
 This is the second of the edition's three files, Parts 7 to 10 and Appendices A to C;
 `setlist.md` holds the core (Parts 1 to 6) and `setlist-changelog.md` the Changelog.
@@ -29,7 +29,8 @@ This is the generic day-to-day manual. Bootstrap (Part 8, Step 5) turns it into 
 2. **Branch.** `/setlist:checkpoint` makes the opening flip on the trunk and pushes it, after
    the ask, before anything else (new in v1.22, Part 5): the spec reads ACTIVE on the trunk with
    its `Spec-hash:` and its `Driver:` line. Only then does it open `spec/NNNN-<slug>`, and it
-   refuses to open one whose spec the trunk does not carry at ACTIVE. It prints the visibility block
+   refuses to open one whose spec the trunk does not carry at ACTIVE; since v1.23 `pre-push` refuses
+   the push of such a branch too (`SLH-CLAIM-NOT-ON-TRUNK`, Part 5). It prints the visibility block
    (new in v1.22): what landed on the trunk, what was pushed, who can see it now, and what is
    still only local, so you know whether a teammate can see the spec is taken. If a split was
    pre-agreed at plan time, the sibling number is already decided (Part 6, the suffix
@@ -1006,6 +1007,20 @@ ADRs is the first planning action.
   2026-12-14, because its chats and comments do not move. The edition's three files are replaced as
   in every upgrade. The refresh records `plugin.version` 2.14.0, which dates no new rule; read the
   verdict delta before `--apply`.
+- **The v1.23 delta: the hooks through the refresh, two push refusals dated by the stamp, one
+  optional record key, nothing migrated (new in v1.23).** The refresh delivers through its CHANGED
+  arm the hook library, `pre-commit` and `pre-push` (the status record's shape check admits the
+  `driver` key; `pre-push` refuses a spec branch pushed before its flip is on the trunk and a spec
+  number the remote carries under another slug), the trunk audit (the same shape check), and the
+  re-grounding hook (a linked worktree on Git for Windows reads its repository's fetch age). Nothing
+  in the instance's own files is migrated: a record without `driver` reads as before, and the key
+  arrives with the next ACTIVE flip. The refresh records `plugin.version` 2.15.0, and that stamp is
+  what puts the two refusals in force: each is asked of a pushed commit whose own `.claude/sdd.json`
+  stamps 2.15 or later, so a branch cut before the upgrade is not asked until it merges the trunk,
+  and a branch cut before the upgrade refuses a record that carries the key as
+  `SLH-RECORD-MALFORMED` until it does (Part 3). An instance without `.claude/status.json` is not
+  asked by the flip refusal and is asked by the number refusal. The edition's three files are
+  replaced as in every upgrade; read the verdict delta before `--apply`.
 - **Accepted deviations are recorded, and never erased.** If the repo keeps a non-canonical
   layout (paths are roles), say so inside the umbrella ADR; a future chore can relocate it.
 - **Close like any chore:** the gates pass (docs-only, so the results must match the ones
@@ -1204,8 +1219,11 @@ One header line names who holds the spec (new in v1.22): **`Driver:`**, one hand
 `/setlist:checkpoint` at the opening ACTIVE flip from `.claude/sdd.json`'s `identity.user_email`
 where it is declared, else from git's `user.email`, before the `Spec-hash:` is computed. It sits in
 the header, inside the hashed range, so an attestation signs it and an edit to it drifts the hash.
-`/setlist:board` and `/setlist:validate` read it, and no hook does. The status record carries no
-copy: the header is the one record of the driver.
+`/setlist:board` and `/setlist:validate` read it, and no hook does. Since v1.23 checkpoint also
+writes the same handle into the status record as the spec's `driver` key, in the same commit,
+where `.claude/sdd.json` stamps plugin 2.15 or later (Part 3); the board reads the key where it is
+present and the line otherwise, validate reports the two when they differ, and no hook reads the
+value.
 
 Two header lines are optional and read by no hook (new in v1.22). `Contracts touched:` names the
 contract lines the spec changes. `Cites:`, zero or more, names the system spec of a system of

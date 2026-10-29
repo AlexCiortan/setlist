@@ -780,7 +780,7 @@ mkdir -p "$R7O/.githooks"
 printf '#!/bin/sh\necho "project scanner refuses" >&2\nexit 1\n' > "$R7O/.githooks/pre-commit"
 chmod +x "$R7O/.githooks/pre-commit"
 git -C "$R7O" add -A >/dev/null 2>&1; git -C "$R7O" -c core.hooksPath=/dev/null commit -qm i >/dev/null 2>&1
-git clone -q "$R7O" "$WORK/r7-clone" 2>/dev/null
+private_copy -q "$R7O" "$WORK/r7-clone" 2>/dev/null
 git -C "$WORK/r7-clone" config user.email t@t; git -C "$WORK/r7-clone" config user.name t
 
 # get() takes the LAST match, so appending mode=retrofit is authoritative
@@ -822,7 +822,7 @@ else
 fi
 # The refresh path sees the same clone state the same way.
 RFI_R7="$WORK/rfi-r7-clone"; rm -rf "$RFI_R7"
-git clone -q "$R7O" "$RFI_R7" 2>/dev/null
+private_copy -q "$R7O" "$RFI_R7" 2>/dev/null
 mkdir -p "$RFI_R7/.claude/hooks"
 printf '{"trunk":"main","scaffolded":true,"gate_command":"true","roles":{"src":"src"}}\n' > "$RFI_R7/.claude/sdd.json"
 bash "$SCRIPTS/refresh-instance.sh" --apply "$RFI_R7" >"$WORK/rfi-r7.out" 2>&1
@@ -1658,8 +1658,8 @@ fi
 CHR="$WORK/chain-remote.git"; rm -rf "$CHR"; git init -q --bare -b main "$CHR"
 CHS="$WORK/chain-seed"; chain_fixture "$CHS"
 git -C "$CHS" push -q "$CHR" main >/dev/null 2>&1
-CHP="$WORK/chain-clone-a"; rm -rf "$CHP"; git clone -q "$CHR" "$CHP" >/dev/null 2>&1
-CHQ="$WORK/chain-clone-b"; rm -rf "$CHQ"; git clone -q "$CHR" "$CHQ" >/dev/null 2>&1
+CHP="$WORK/chain-clone-a"; rm -rf "$CHP"; private_copy -q "$CHR" "$CHP" >/dev/null 2>&1
+CHQ="$WORK/chain-clone-b"; rm -rf "$CHQ"; private_copy -q "$CHR" "$CHQ" >/dev/null 2>&1
 for d in "$CHP" "$CHQ"; do
   git -C "$d" config user.email t@e.invalid; git -C "$d" config user.name T
   git -C "$d" config commit.gpgsign false; git -C "$d" config merge.ff false
@@ -2285,7 +2285,7 @@ fi
 # at it does not (which is the residual hole the README states).
 GH="$WORK/gh-clone-src"; gh_fixture "$GH" no
 GHC="$WORK/gh-clone-dst"; rm -rf "$GHC"
-if git clone -q "$GH" "$GHC" >/dev/null 2>&1; then
+if private_copy -q "$GH" "$GHC" >/dev/null 2>&1; then
   if [[ -f "$GHC/.githooks/pre-merge-commit" ]]; then
     ok "git hooks n: a fresh clone DOES carry the tracked .githooks/ directory"
   else
@@ -2298,7 +2298,7 @@ if git clone -q "$GH" "$GHC" >/dev/null 2>&1; then
         "the config survived the clone, so the README overstates the gap"
   fi
 else
-  bad "git hooks n/o: the clone fixture could be created" "git clone failed (rc $?), so neither half was checked"
+  bad "git hooks n/o: the clone fixture could be created" "the private copy failed (rc $?), so neither half was checked"
 fi
 
 # --ff-only, the documented hole, asserted in BOTH directions: it really does
@@ -3234,7 +3234,7 @@ else
 fi
 # c: the refusals to run, each by name and exit 1, nothing written.
 OB_BAD=""
-git clone -q --depth 1 "file://$OB" "$WORK/ob-shallow" >/dev/null 2>&1
+private_copy -q --depth 1 "file://$OB" "$WORK/ob-shallow" >/dev/null 2>&1
 bash "$SCRIPTS/refresh-instance.sh" --observe --role src "$WORK/ob-shallow" >"$WORK/ob-c1.out" 2>&1; OB_RC=$?
 [[ "$OB_RC" -eq 1 ]] && grep -q 'shallow clone' "$WORK/ob-c1.out" || OB_BAD="$OB_BAD shallow:rc=$OB_RC"
 bash "$SCRIPTS/refresh-instance.sh" --observe --trunk nosuch --role src "$OB" >"$WORK/ob-c2.out" 2>&1; OB_RC=$?

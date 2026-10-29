@@ -3,14 +3,14 @@
   "name": "setlist",
   "displayName": "Setlist",
   "description": "Spec-driven development for Claude Code: you direct, the agent builds. A structured interview locks the foundational decisions before any file is written, work proceeds one small spec at a time with an enforced out-of-scope list, git hooks gate commits, merges and pushes to the trunk, and every feature passes automated plus human QA. Eight /setlist commands (new, retrofit, upgrade, checkpoint, validate, gate, board, journal), reference skills, and stamped instance templates. Scaffolding a new project may install your chosen stack's tooling; the plugin itself collects no data.",
-  "version": "2.14.0",
+  "version": "2.15.0",
   "author": {
     "name": "AlexCiortan",
     "email": "alexciortan@gmail.com"
   },
   "homepage": "https://github.com/AlexCiortan/setlist",
-  "documentationUrl": "https://github.com/AlexCiortan/setlist#readme",
-  "supportUrl": "https://github.com/AlexCiortan/setlist/issues",
+  "documentationUrl": "https://github.com/AlexCiortan/setlist#commands-and-skills",
+  "supportUrl": "https://github.com/AlexCiortan/setlist/issues/new/choose",
   "repository": "https://github.com/AlexCiortan/setlist",
   "license": "Apache-2.0 AND CC-BY-4.0",
   "icon": "./.claude-plugin/icon.svg",

@@ -4,8 +4,11 @@ Read on demand from `/setlist:checkpoint` (its SKILL.md names when). The edition
 
 - **A rejected flip push is the lock working** (edition v1.22). The trunk
   moved: git rejects the push as not a fast-forward, or the stamped `pre-push`
-  refuses it first as `SLH-SCAN-UNREADABLE-RANGE`, because this clone never
-  fetched the remote end of the range. Either way: fetch, read the trunk's
+  refuses it first as `SLH-SCAN-UNREADABLE-RANGE` or (edition v1.23)
+  `SLH-CLAIM-UNREADABLE`, because this clone never fetched the remote end of
+  the range or the remote's trunk. Since v1.23 it may also refuse it as
+  `SLH-CLAIM-NUMBER-TAKEN`: the remote already holds this number under another
+  slug, a teammate's cut. Every way: fetch, read the trunk's
   record and the spec's header again (or run the board), and report who holds
   the spec, its `Driver:` line and the trunk's sha, or that the trunk moved for
   another reason. Never retry, rebase or reset on your own. Ask the engineer:

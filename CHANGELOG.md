@@ -9,6 +9,47 @@ The plugin version counter restarted at 1.0.0 when the plugin was renamed to
 changelog belong to the pre-rename plugin, so a Setlist version below those
 numbers is not a downgrade.
 
+## 2.15.0
+
+Edition v1.23, the claims edition. A team's claims were visible from the trunk in 2.14.0, and
+nothing refused them. In 2.15.0 the two claims that collide are refused at push, and the status
+record carries who holds each spec. The hook that now refuses both is `templates/git-hooks/pre-push`,
+through `templates/git-hooks/setlist-hook-lib.sh`, and the checkpoint writes the driver
+(`skills/checkpoint/SKILL.md`).
+
+- **A spec branch pushed before its flip is refused.** `pre-push` refuses a pushed
+  `spec/NNNN-<slug>` whose spec the trunk does not carry at ACTIVE, as `SLH-CLAIM-NOT-ON-TRUNK`, and
+  says to land the flip on the trunk first. The checkpoint's push of the flip and its empty branch
+  together passes. A remote trunk your clone has not fetched refuses as `SLH-CLAIM-UNREADABLE`:
+  fetch, then push again. An instance without a status record is not asked, and neither is one
+  under `forge` custody, whose pull-request branch is pushed before its flip lands.
+- **A spec number the remote already holds is refused.** `pre-push` refuses a pushed spec file
+  whose number the remote's trunk or one of its `spec/` branches carries under another slug, and a
+  pushed `spec/NNNN-<slug>` whose number the trunk's spec file carries under another slug, as
+  `SLH-CLAIM-NUMBER-TAKEN`, and says to renumber from `board.sh --next`. Two cuts made apart still
+  collide in the clones that made them, and the second push is where it stops.
+- **The driver key.** The status record carries the spec's driver beside the header's `Driver:`
+  line, written by the checkpoint at the ACTIVE flip. The board reads it first, and
+  `/setlist:validate` tells you when the key and the line name different people. No gate reads it.
+- **The upgrade to 2.15.0.** `/setlist:upgrade` delivers the changed hook library, `pre-commit`,
+  `pre-push`, the trunk audit and the re-grounding hook, and migrates nothing in your own files.
+  Both refusals are dated by the plugin version a commit stamps, so a branch cut before the
+  upgrade is not asked, and every push after it is.
+
+What you stop meeting: in a linked worktree on Git for Windows, the re-grounding hook calling the
+last fetch "of unknown age" when it was minutes old. It no longer does (`templates/hooks/regrounding-hook.sh`).
+
+The Known-limitations list as it stands in this release: 21 design boundaries, 0 open
+limitations, 0 upstream conditions. It held 21 at 2.14.0, and nothing entered or left. The two
+refusals bound nothing new: each narrows what [the declarations bullet](LIMITATIONS.md#declarations-claim)
+allows, and its paragraph on parallel specs now says what is refused at push. No capability of this
+release retires a whole boundary.
+
+The status record's new key has one cost, stated in the edition's Part 3: the hooks from before
+this release refuse a record that carries it. So a branch cut before the upgrade and not yet merged
+with the trunk refuses a commit of such a record until it takes the upgrade. A record without the
+key reads as before.
+
 ## 2.14.0
 
 Edition v1.22, the session-zero edition. Session zero says what it is before it asks anything.

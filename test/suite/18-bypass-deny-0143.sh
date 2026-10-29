@@ -776,7 +776,7 @@ chmod -x "$ACK/.githooks/pre-push"; ac_run "$ACK"; ac_silent "4a, chmod -x .gith
 chmod +x "$ACK/.githooks/pre-push"
 
 # 5. A fresh clone carries neither setting: reported, both named.
-ACC="$WORK/ack-clone"; rm -rf "$ACC"; git clone -q "$ACK" "$ACC" 2>/dev/null
+ACC="$WORK/ack-clone"; rm -rf "$ACC"; private_copy -q "$ACK" "$ACC" 2>/dev/null
 ac_run "$ACC"; ac_report "5, a fresh clone" "core.hooksPath is unset" "merge.ff is unset"
 
 # 6. Silent where there is nothing to arm: not an instance, no repository yet, no .githooks/.
@@ -826,7 +826,7 @@ ACE="$WORK/ack-envarmed"; ac_fixture "$ACE"; git -C "$ACE" config --unset core.h
 ACK_OUT="$(printf '%s' "$(hook_payload startup)" | env GIT_CONFIG_COUNT=1 "$(sx_join GIT_CONFIG_ KEY_0)=core.hooksPath" GIT_CONFIG_VALUE_0=.githooks CLAUDE_PROJECT_DIR="$ACE" bash "$ACK_HOOK" 2>/dev/null)"
 ACK_CTX="$(printf '%s' "$ACK_OUT" | jq -r '.hookSpecificOutput.additionalContext // empty' 2>/dev/null)"
 ac_report "12a, an environment arming the session does not hide an unarmed .git/config" "core.hooksPath is unset"
-ACP="$WORK/ack-sepgit"; rm -rf "$ACP" "$ACP.gitdir"; git clone -q --separate-git-dir "$ACP.gitdir" "$ACK" "$ACP" 2>/dev/null
+ACP="$WORK/ack-sepgit"; rm -rf "$ACP" "$ACP.gitdir"; private_copy -q --separate-git-dir "$ACP.gitdir" "$ACK" "$ACP" 2>/dev/null
 if [[ -f "$ACP/.git" ]]; then
   ac_run "$ACP"; ac_report "12b, a separated git dir is not a linked worktree" "Run /setlist:upgrade to restore them"
   [[ "$ACK_CTX" != *"main worktree"* ]] && ok "armed check 12c: a separated git dir is not told to run from a main worktree" \

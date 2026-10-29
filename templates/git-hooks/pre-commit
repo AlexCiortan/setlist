@@ -212,7 +212,7 @@ if [ "$__RP" -eq 0 ]; then
   if grep -qx '.claude/status.json' <<< "$STAGED"; then
     __REC_STAGED="$(slh_record_show "$PROJ" "")" || exit 1
     if [ "$(slh_record_verdict "$__REC_STAGED")" != "ok" ]; then
-      slh_refuse "SLH-RECORD-MALFORMED" "the staged .claude/status.json is not a well-formed status record (Part 3 of the edition: setlist_status 1; specs.<num> with a lowercase lifecycle token, qa_pass_1 exactly ok, diagram exactly updated or no-impact; chores.<id> open or done with files as an array). Only /setlist:checkpoint writes this file; fix the staged copy rather than committing a record no gate can read, because every gate that reads it refuses a malformed record outright."
+      slh_refuse "SLH-RECORD-MALFORMED" "the staged .claude/status.json is not a well-formed status record (Part 3 of the edition: setlist_status 1; specs.<num> with a lowercase lifecycle token, qa_pass_1 exactly ok, diagram exactly updated or no-impact, driver a non-empty string; chores.<id> open or done with files as an array). Only /setlist:checkpoint writes this file; fix the staged copy rather than committing a record no gate can read, because every gate that reads it refuses a malformed record outright."
     fi
   fi
 else

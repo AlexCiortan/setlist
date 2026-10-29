@@ -1,4 +1,4 @@
-# Dated additions and edition deltas, v1.7 to v1.22 (Part 8c)
+# Dated additions and edition deltas, v1.7 to v1.23 (Part 8c)
 
 Read on demand from `/setlist:upgrade` (its SKILL.md names when). The edition wins on any conflict: `bash "${CLAUDE_PLUGIN_ROOT}/scripts/part.sh" 8c`.
 
@@ -210,4 +210,15 @@ Read on demand from `/setlist:upgrade` (its SKILL.md names when). The edition wi
   standalone design site is committed under `docs/design/` before 2026-12-14.
   The plugin's own skills load from the plugin and reach no instance file. The
   refresh records `plugin.version` 2.14.0, which dates no new rule.
+- **The v1.23 delta (plugin 2.15.0): the hooks through the refresh, two push
+  refusals dated by the stamp, one optional record key** (Part 8c). The refresh
+  delivers the hook library, `pre-commit`, `pre-push`, the trunk audit and the
+  re-grounding hook through its report of changed bytes; quote the verdict delta
+  before `--apply`. Migrate nothing: a record without `driver` reads as before,
+  and the checkpoint writes the key at the next ACTIVE flip. Say that the
+  refresh's record of `plugin.version` 2.15.0 is what puts the two refusals in
+  force (`SLH-CLAIM-NOT-ON-TRUNK`, `SLH-CLAIM-NUMBER-TAKEN`): each is asked of a
+  pushed commit stamping 2.15 or later, so an unmerged branch cut before the
+  upgrade is not asked, and refuses a record carrying `driver` as
+  `SLH-RECORD-MALFORMED` until it merges the trunk.
 - Record all of this inside the umbrella ADR.

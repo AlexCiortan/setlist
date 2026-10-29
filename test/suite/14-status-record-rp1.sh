@@ -835,3 +835,78 @@ fi
 
 fi; shard_region_end
 # <<< SHARD-END rp1-ownership
+
+# --- THE DRIVER KEY (spec 0207, item 1) ----------------------------------------
+# The record's spec entry admits one optional key more, "driver", a non-empty
+# string the checkpoint writes at the opening flip beside the header's Driver:
+# line. No verdict reads its value. The cost is measured, not assumed: the
+# 2.14.0 generation (its hook bytes read from this repository's history at
+# a45db706, the commit whose git hooks are the staged 2.14.0 blobs) refuses a
+# record that carries the key, which is why the checkpoint writes it only under
+# a 2.15 stamp (the spec's Q1).
+# >>> SHARD-BEGIN driver-key-0207 cost=2
+if shard_region driver-key-0207; then
+DK_BAD=""
+for DK_F in "$ROOT/templates/git-hooks/setlist-hook-lib.sh" "$SCRIPTS/trunk-audit.sh"; do
+  DK_JQ="$(grep -m1 -E '^[[:space:]]*SLH_RECORD_CHECK_JQ=' "$DK_F" | sed -e "s/^[[:space:]]*SLH_RECORD_CHECK_JQ='//" -e "s/'$//")"
+  while IFS='	' read -r DK_WANT DK_JSON; do
+    [[ -n "$DK_WANT" ]] || continue
+    DK_GOT="$(printf '%s' "$DK_JSON" | jq -r "$DK_JQ" 2>/dev/null || printf 'malformed')"
+    [[ "$DK_GOT" == "$DK_WANT" ]] || DK_BAD="$DK_BAD $(basename "$DK_F"):$DK_JSON=$DK_GOT"
+  done <<'DKCORPUS'
+ok	{"setlist_status":1,"specs":{"0001":{"status":"active","driver":"a@example.org"}},"chores":{}}
+ok	{"setlist_status":1,"specs":{"0001":{"status":"closed","qa_pass_1":"ok","diagram":"no-impact","driver":"a@example.org"}},"chores":{}}
+malformed	{"setlist_status":1,"specs":{"0001":{"status":"active","driver":5}},"chores":{}}
+malformed	{"setlist_status":1,"specs":{"0001":{"status":"active","driver":""}},"chores":{}}
+malformed	{"setlist_status":1,"specs":{"0001":{"status":"active","driver":{}}},"chores":{}}
+malformed	{"setlist_status":1,"specs":{"0001":{"status":"active","driver":["a"]}},"chores":{}}
+malformed	{"setlist_status":1,"specs":{"0001":{"status":"active","drivers":"a@example.org"}},"chores":{}}
+DKCORPUS
+done
+if [[ -z "$DK_BAD" ]]; then
+  ok "0207 driver a: the shape check admits an optional non-empty string driver and refuses any other value or spelling, in both carriers"
+else
+  bad "0207 driver a: the shape check admits an optional non-empty string driver and refuses any other value or spelling, in both carriers" "got:$DK_BAD"
+fi
+
+DKG="$WORK/dk-commit"
+rp1_fixture "$DKG"
+printf '{"setlist_status":1,"specs":{"0001":{"status":"active","driver":"a@example.org"}},"chores":{}}\n' > "$DKG/.claude/status.json"
+printf '| 0001 | Thing | ACTIVE | driver recorded |\n' >> "$DKG/specs/STATUS.md"
+printf 'docs\n' > "$DKG/docs.txt"
+git -C "$DKG" add -A >/dev/null 2>&1
+if git -C "$DKG" commit -qm "the flip writes the driver" >"$WORK/dk-commit.out" 2>&1 \
+   && DK_AUD="$(bash "$SCRIPTS/trunk-audit.sh" "$DKG" 2>&1)" && ! printf '%s' "$DK_AUD" | grep -q 'SLH-RECORD-MALFORMED'; then
+  ok "0207 driver b: a record carrying driver commits clean through pre-commit and the trunk audit reads it without SLH-RECORD-MALFORMED"
+else
+  bad "0207 driver b: a record carrying driver commits clean through pre-commit and the trunk audit reads it without SLH-RECORD-MALFORMED" \
+      "$(tr '\n' ' ' < "$WORK/dk-commit.out" | cut -c1-300) $(printf '%s' "${DK_AUD:-}" | grep -m1 'SLH-' | cut -c1-300)"
+fi
+
+# The second generation: 2.14.0's pre-commit and library, which a clone on an
+# unmerged pre-upgrade branch still runs, refuse the same record by name.
+DK_GEN=a45db706
+if ! git -C "$ROOT" cat-file -e "$DK_GEN:templates/git-hooks/setlist-hook-lib.sh" 2>/dev/null; then
+  ok "0207 driver c: SKIPPED, the 2.14.0 generation ($DK_GEN) is not in this checkout's history (a shallow or exported copy)"
+else
+  DKO="$WORK/dk-gen214"
+  rp1_fixture "$DKO"
+  for DK_H in pre-commit pre-merge-commit setlist-hook-lib.sh; do
+    git -C "$ROOT" show "$DK_GEN:templates/git-hooks/$DK_H" > "$DKO/.githooks/$DK_H"
+  done
+  chmod +x "$DKO/.githooks/pre-commit" "$DKO/.githooks/pre-merge-commit"
+  printf '{"setlist_status":1,"specs":{"0001":{"status":"active","driver":"a@example.org"}},"chores":{}}\n' > "$DKO/.claude/status.json"
+  printf '| 0001 | Thing | ACTIVE | driver recorded |\n' >> "$DKO/specs/STATUS.md"
+  printf 'docs\n' > "$DKO/docs.txt"
+  git -C "$DKO" add -A >/dev/null 2>&1
+  if git -C "$DKO" commit -qm "a 2.15 record under 2.14.0 hooks" >"$WORK/dk-gen214.out" 2>&1; then
+    bad "0207 driver c: the 2.14.0 generation refuses a record carrying driver as SLH-RECORD-MALFORMED (the seam Q1 names)" "it committed"
+  elif grep -q 'SLH-RECORD-MALFORMED' "$WORK/dk-gen214.out"; then
+    ok "0207 driver c: the 2.14.0 generation refuses a record carrying driver as SLH-RECORD-MALFORMED (the seam Q1 names)"
+  else
+    bad "0207 driver c: the 2.14.0 generation refuses a record carrying driver as SLH-RECORD-MALFORMED (the seam Q1 names)" \
+        "$(tr '\n' ' ' < "$WORK/dk-gen214.out" | cut -c1-300)"
+  fi
+fi
+fi; shard_region_end
+# <<< SHARD-END driver-key-0207

@@ -941,12 +941,13 @@ fi
 # The close and commit gates were in this set until 2.8.0.
 DC_MISSING=""
 for hookfile in "$HOOKS"/scope-hook.sh; do
+  DC_LINES="$(grep -hE '^\s*deny(_literal)? "' "$hookfile")"
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
     printf '%s' "$line" | grep -qE '\[SH-[A-Z0-9-]+\]' || DC_MISSING="$DC_MISSING
     $(basename "$hookfile"): $(printf '%s' "$line" | cut -c1-72)"
   done <<DCEOF
-$(grep -hE '^\s*deny(_literal)? "' "$hookfile")
+$DC_LINES
 DCEOF
 done
 if [[ -z "$DC_MISSING" ]]; then

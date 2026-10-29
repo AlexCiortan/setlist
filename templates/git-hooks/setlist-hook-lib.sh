@@ -767,7 +767,7 @@ slh_sdd() { printf '%s' "${SLH_SDD:-$1/.claude/sdd.json}"; } # slh_sdd <proj> ->
 # by the suite exactly as the three frozen awk readers are. The frozen readers
 # themselves are RETAINED byte-identical as the permanent absence path, never
 # repaired and never removed (both freeze documents name that role).
-SLH_RECORD_CHECK_JQ='if (type != "object") or (.setlist_status != 1) or (((keys - ["setlist_status","specs","chores"]) | length) > 0) or (((.specs // {}) | type) != "object") or (((.chores // {}) | type) != "object") then "malformed" elif (((.specs // {}) | to_entries | all((.key | test("^[0-9]+[a-z]*$")) and (.value | if type != "object" then false else (((keys - ["status","qa_pass_1","diagram"]) | length) == 0) and (.status as $s | (["draft","queued","active","revised","built","parked","closed"] | index($s)) != null) and ((.qa_pass_1 == null) or (.qa_pass_1 == "ok")) and ((.diagram == null) or (.diagram == "updated") or (.diagram == "no-impact")) end))) | not) then "malformed" elif (((.chores // {}) | to_entries | all((.key | test("^CHORE-[0-9]+$")) and (.value | if type != "object" then false else (((keys - ["status","files"]) | length) == 0) and ((.status == "open") or (.status == "done")) and ((.files == null) or (((.files | type) == "array") and (.files | all(type == "string")))) end))) | not) then "malformed" else "ok" end'
+SLH_RECORD_CHECK_JQ='if (type != "object") or (.setlist_status != 1) or (((keys - ["setlist_status","specs","chores"]) | length) > 0) or (((.specs // {}) | type) != "object") or (((.chores // {}) | type) != "object") then "malformed" elif (((.specs // {}) | to_entries | all((.key | test("^[0-9]+[a-z]*$")) and (.value | if type != "object" then false else (((keys - ["status","qa_pass_1","diagram","driver"]) | length) == 0) and (.status as $s | (["draft","queued","active","revised","built","parked","closed"] | index($s)) != null) and ((.qa_pass_1 == null) or (.qa_pass_1 == "ok")) and ((.diagram == null) or (.diagram == "updated") or (.diagram == "no-impact")) and ((.driver == null) or (((.driver | type) == "string") and ((.driver | length) > 0))) end))) | not) then "malformed" elif (((.chores // {}) | to_entries | all((.key | test("^CHORE-[0-9]+$")) and (.value | if type != "object" then false else (((keys - ["status","files"]) | length) == 0) and ((.status == "open") or (.status == "done")) and ((.files == null) or (((.files | type) == "array") and (.files | all(type == "string")))) end))) | not) then "malformed" else "ok" end'
 SLH_RECORD_CLOSED_JQ='((.specs // {}) | to_entries[] | select(.value.status == "closed") | .key)'
 SLH_RECORD_ACTIVE_JQ='((.specs // {}) | to_entries[] | select(.value.status == "active") | .key)'
 SLH_RECORD_DONE_JQ='((.chores // {}) | to_entries[] | select(.value.status == "done") | .key)'
@@ -1721,9 +1721,12 @@ slh_attest_active_specs() { # slh_attest_active_specs <status-text>
 #
 # The file list comes from the Closing report's FIELD TEXT and not from
 # .claude/status.json (the owner's ruling S1, 2026-09-10). The record refuses
-# any spec key outside status, qa_pass_1 and diagram as malformed, on the
-# ORDINARY path, so a new key here would make every older clone in the same
-# repository refuse ordinary commits. The cost of that decision is DE4.
+# any spec key outside status, qa_pass_1, diagram and (since 2.15.0) driver as
+# malformed, on the ORDINARY path, so a new key here would make every older
+# clone in the same repository refuse ordinary commits. The cost of that
+# decision is DE4. The driver key paid that cost once, in 2.15.0 (spec 0207,
+# Q1): the checkpoint writes it only under a 2.15 stamp, which arrives with the
+# hooks that accept it, and a clone on older hooks refuses it until it upgrades.
 
 slh_report() { # slh_report <code> <message...>   -- prints, never refuses
   local code="$1"; shift
@@ -2376,6 +2379,207 @@ slh_rule_in_force() { # slh_rule_in_force <proj> <major.minor> -> 0 when the IND
   v="$(slh_index_show "$1" .claude/sdd.json)" || return 2
   v="$(slh_text "$v" | jq -r '(.plugin.version // "") | strings' 2>/dev/null || true)" # fail-open-ok: a stamp jq cannot read is the pre-rule exemption this function exists to state; a stamp git could not read refused above (spec 0195)
   awk -v v="$v" -v want="$2" "$SLH_VERSION_AT_LEAST_AWK"
+}
+
+# THE CLAIM ARMS (spec 0207, edition v1.23): pre-push asks two questions of a push that the
+# board (scripts/board.sh) could only show. A pushed refs/heads/spec/NNNN-<slug> whose spec the
+# trunk does not carry at ACTIVE or later is refused (slh_claim_flip), because a claim that lives
+# only on a branch is invisible to every other clone; and a pushed spec file whose number the
+# remote carries under another slug is refused (slh_claim_number, below). Both read the pushed
+# tips and the remote as the push finds it: the remote's heads come from one git ls-remote per
+# push, its trunk from this clone's objects, and no fetch is made. Both are DATED by the release
+# that introduced them, as slh_rule_in_force dates a close rule: in force for a pushed tip whose
+# own .claude/sdd.json stamps plugin 2.15 or later, so an in-flight branch flipped under an older
+# rule (before v1.22 the flip was made on the branch) is not asked until it takes the upgrade.
+SLH_CLAIM_HEADS=""        # the remote's heads, "<sha> <ref>" lines, read once per push
+SLH_CLAIM_HEADS_READ=0
+SLH_CLAIM_TRUNK_REV=""    # the trunk the push answers to, set by slh_claim_trunk
+
+slh_claim_stamp() { # slh_claim_stamp <proj> <rev> -> new | forge | old on stdout; 2 after refusing a read that failed
+  # "new": the claim arms are in force; "forge": in force, under forge custody, where the flip
+  # reaches the trunk through a pull request whose branch is pushed first; "old": not in force.
+  local t v c
+  t="$(slh_git_blob "$1" "$2" .claude/sdd.json "the configuration the pushed commit $2 carries")" || return 2
+  v="$(slh_text "$t" | jq -r '(.plugin.version // "") | strings' 2>/dev/null || true)" # fail-open-ok: a stamp that is absent or does not parse is the pre-rule exemption, as slh_rule_in_force states it; a stamp git could not read refused above
+  if ! awk -v v="$v" -v want=2.15 "$SLH_VERSION_AT_LEAST_AWK"; then printf 'old'; return 0; fi
+  c="$(slh_text "$t" | jq -r 'if ((.attestation.required // false) == true) then ((.attestation.custody // "") | strings) else "" end' 2>/dev/null || true)" # fail-open-ok: an unreadable custody is read as no custody, which ASKS the flip arm rather than exempting it
+  if [ "$c" = "forge" ]; then printf 'forge'; else printf 'new'; fi
+}
+
+slh_claim_heads() { # slh_claim_heads <proj> <remote> -> 0 once SLH_CLAIM_HEADS holds the heads, 1 after refusing
+  [ "$SLH_CLAIM_HEADS_READ" -eq 0 ] || return 0
+  local st=0
+  SLH_CLAIM_HEADS="$(git -C "$1" ls-remote --heads "$2" 2>/dev/null)" || st=$?
+  if [ "$st" -ne 0 ]; then
+    slh_refuse "SLH-CLAIM-UNREADABLE" "git ls-remote --heads $(slh_bound name "$2") exited $st, so which spec branches and which trunk the remote carries could not be read, and the claims this push makes were not checked. A check that cannot run has not passed: fix the connection to the remote and push again."
+    return 1
+  fi
+  SLH_CLAIM_HEADS_READ=1
+}
+
+slh_claim_trunk_missing() { # slh_claim_trunk_missing <remote> <trunk> -> refuses SLH-CLAIM-UNREADABLE by name
+  # A remote that carries branches but no ref of the trunk's name, the trunk not in the push: the
+  # arms read the declared trunk (or the ref its upstream names), never the remote's HEAD, so a
+  # missing ref is a trunk that could not be read, not a trunk that carries nothing (spec 0210,
+  # fix round 13). An empty remote has no trunk yet and is not this refusal.
+  local d="${SLH_CLAIM_DECLARED:-$2}"
+  slh_refuse "SLH-CLAIM-UNREADABLE" "the remote $(slh_bound name "$1") carries branches but no $(slh_bound name "refs/heads/$2"), the trunk the claim checks read (the declared trunk, or the ref git config $(slh_bound name "branch.$d.merge") names when the trunk tracks this remote under another name), and this push does not carry it, so whether the trunk carries the claims this push makes could not be read. A check that cannot run has not passed: push the trunk with this push, or, if the remote's trunk has another name, set $(slh_bound name "branch.$d.remote") to this remote and $(slh_bound name "branch.$d.merge") to refs/heads/<that name>, then push again."
+}
+
+slh_claim_trunk() { # slh_claim_trunk <proj> <remote> <trunk> <pushed-trunk-oid-or-""> -> 0 once SLH_CLAIM_TRUNK_REV names the trunk (empty for a remote with no trunk), 1 after refusing
+  # The trunk the push answers to: the pushed trunk tip when the trunk is in this push (the
+  # checkpoint's atomic flip push), else the remote's trunk as ls-remote names it, read from this
+  # clone's objects. A hand invocation with no remote reads the local trunk.
+  local sha
+  SLH_CLAIM_TRUNK_REV=""
+  if [ -n "$4" ]; then SLH_CLAIM_TRUNK_REV="$4"; return 0; fi
+  if [ -z "$2" ]; then
+    SLH_CLAIM_TRUNK_REV="$(git -C "$1" rev-parse --verify -q "refs/heads/$3^{commit}" 2>/dev/null || true)" # fail-open-ok: no local trunk leaves the revision empty, which the callers read as a trunk that carries no claim
+    return 0
+  fi
+  slh_claim_heads "$1" "$2" || return 1
+  sha="$(printf '%s\n' "$SLH_CLAIM_HEADS" | awk -v r="refs/heads/$3" '$2 == r { print $1; exit }')"
+  if [ -z "$sha" ]; then
+    [ -z "$SLH_CLAIM_HEADS" ] || { slh_claim_trunk_missing "$2" "$3"; return 1; }
+    return 0
+  fi
+  if ! git -C "$1" cat-file -e "$sha^{commit}" 2>/dev/null; then
+    slh_refuse "SLH-CLAIM-UNREADABLE" "the remote's trunk $(slh_bound name "$3") is at $sha, which this clone does not have, so whether it carries the claims this push makes could not be read. A check that cannot run has not passed: run git fetch $(slh_bound name "$2"), then push again."
+    return 1
+  fi
+  SLH_CLAIM_TRUNK_REV="$sha"
+}
+
+slh_claim_flip() { # slh_claim_flip <proj> <remote> <trunk> <branch> <tip> <pushed-trunk-oid-or-""> -> 1 after refusing by name
+  local proj="$1" remote="$2" trunk="$3" name="$4" tip="$5" num st rec rp state
+  [[ "$name" =~ ^spec/([0-9]+[a-z]*)- ]] || return 0 # fail-open-ok: a branch outside spec/NNNN-<slug> names no spec the record can answer for
+  num="${BASH_REMATCH[1]}"
+  st="$(slh_claim_stamp "$proj" "$tip")" || { SLH_REFUSED=1; return 1; }
+  [ "$st" = "new" ] || return 0 # fail-open-ok: dated (older stamp) or forge custody, where the forge check's FC-FLIP-NOT-ON-TRUNK and the required review are the exclusion
+  slh_claim_trunk "$proj" "$remote" "$trunk" "$6" || return 1
+  if [ -z "$SLH_CLAIM_TRUNK_REV" ]; then
+    slh_refuse "SLH-CLAIM-NOT-ON-TRUNK" "$(slh_bound name "$name") is pushed while the remote carries no trunk $(slh_bound name "$trunk") yet, so no trunk carries spec $num at ACTIVE. Push the trunk in the same push: /setlist:checkpoint makes the ACTIVE flip on the trunk and pushes the trunk and this branch together."
+    return 1
+  fi
+  slh_record_present "$proj" "$SLH_CLAIM_TRUNK_REV"; rp=$?
+  [ "$rp" -ne 2 ] || return 1
+  [ "$rp" -eq 0 ] || return 0 # fail-open-ok: a trunk without .claude/status.json is a legacy instance, read through the page path, and this arm is the record's
+  rec="$(slh_record_show "$proj" "$SLH_CLAIM_TRUNK_REV")" || { SLH_REFUSED=1; return 1; }
+  if [ "$(slh_record_verdict "$rec")" != "ok" ]; then
+    slh_refuse "SLH-RECORD-MALFORMED" "the trunk's .claude/status.json at $SLH_CLAIM_TRUNK_REV is present and is not a well-formed status record, so whether it carries spec $num at ACTIVE cannot be read for the push of $(slh_bound name "$name"). Fix the record on the trunk (jq . .claude/status.json shows the syntax; Part 3 of the edition shows the grammar)."
+    return 1
+  fi
+  if ! state="$(printf '%s' "$rec" | jq -r --arg num "$num" "$SLH_RECORD_STATUS_JQ" 2>/dev/null)"; then
+    slh_refuse "SLH-RECORD-MALFORMED" "jq failed while reading spec $num from the trunk's .claude/status.json, so the push of $(slh_bound name "$name") could not be checked. A reader that could not run has not read."
+    return 1
+  fi
+  case "$state" in
+    active|revised|built|parked|closed) return 0 ;; # the opening flip is on the trunk; every later state passes
+  esac
+  slh_refuse "SLH-CLAIM-NOT-ON-TRUNK" "$(slh_bound name "$name") is pushed while the trunk $(slh_bound name "$trunk") (at ${SLH_CLAIM_TRUNK_REV:0:12}) carries spec $num as $(slh_bound name "${state:-nothing}") in .claude/status.json, not at ACTIVE. A spec branch whose claim is not on the trunk is invisible to every other clone, so two people can build the same spec. Land the ACTIVE flip on the trunk first: /setlist:checkpoint makes it and pushes the trunk and this branch together."
+  return 1
+}
+
+# The number arm: the spec files a pushed tip carries that the remote's trunk does not carry at the
+# same path (so a tip that merely carries the trunk's own specs is not compared, and a legacy trunk
+# already holding two files of one number is not refused at every push), each compared, number to
+# number as scripts/board.sh normalises them, with the remote's spec/ branch names (the ref being
+# pushed and every ref this push deletes left out) and the remote trunk's spec files; and, since the
+# 2.15.0 second leg's F4 (spec 0210), with the push's own: the other spec/ refs it creates or moves,
+# and the spec files of the trunk tip it pushes; and, since the fourth leg's F4 (spec 0210, fix
+# round 5), with each other, so one push cannot land two slugs of one number by any pair of sources.
+# The sources: T the remote trunk's spec files, B the remote's spec/ branch names, P the pushed
+# trunk's spec files, Q the push's other spec/ refs, M this tip's spec files that neither trunk
+# carries, N the pushed ref's own name when it is a spec/NNNN-<slug> claim. Every pair, and whether
+# this arm compares it:
+#   M by T, M by B, M by P, M by Q  compared: a new file against every number already claimed.
+#   M by M                          compared: two new files of one number in one tip.
+#   P by T, P by B, P by Q          compared, as M: the pushed trunk is a ref of this push, and the
+#                                   arm's run for that ref reads P's new files as its own M.
+#   T by T, P by P                  not compared: a legacy trunk already holding two files of one
+#                                   number is not refused at every push.
+#   B by B, Q by Q, B by Q          not compared: branch names carry no spec file, and this arm
+#                                   reads the spec file (a branch name's number is the flip arm's).
+#   T by B                          not compared: the remote as it stands, which no push moves.
+#   N by T, N by P                  compared (spec 0210, fix round 13, the twelfth leg's F2): a
+#                                   claim branch whose slug no trunk spec file of its number
+#                                   carries is a number taken, even with no spec file of its own.
+#   N by B, N by Q, N by M          not compared: two branch names are the flip arm's, and M is
+#                                   already compared with every source above.
+SLH_CLAIM_NUMBER_AWK='function norm(n,   d, s) { d = n; sub(/[a-z]+$/, "", d); s = substr(n, length(d) + 1); sub(/^0+/, "", d); if (d == "") d = "0"; return d s }
+$1 == "T" || $1 == "B" { if (match($2, /^[0-9]+[a-z]*-/)) { n = substr($2, 1, RLENGTH - 1); g = substr($2, RLENGTH + 1); k = norm(n); th[k] = th[k] "\n" g "\t" $3 } next }
+$1 == "M" { if (match($2, /^[0-9]+[a-z]*-/)) { m[++c] = $2; mn[c] = norm(substr($2, 1, RLENGTH - 1)); mg[c] = substr($2, RLENGTH + 1) } next }
+$1 == "N" { if (match($2, /^[0-9]+[a-z]*-/)) { nb = $2; nn = norm(substr($2, 1, RLENGTH - 1)); ng = substr($2, RLENGTH + 1) } next }
+END { if (nb != "") { q = split(th[nn], a, "\n"); has = 0; hit = 0; fw = ""; for (j = 2; j <= q; j++) { split(a[j], b, "\t"); if (b[2] !~ /^[TP]:/) continue; has = 1; if (b[1] == ng) hit = 1; else if (fw == "") fw = b[2] } if (has && !hit) print "spec/" nb "\t" fw }
+  for (i = 1; i <= c; i++) { q = split(th[mn[i]], a, "\n"); for (j = 2; j <= q; j++) { split(a[j], b, "\t"); if (b[1] != mg[i]) print "specs/" m[i] ".md\t" b[2] }
+  for (j = i + 1; j <= c; j++) if (mn[j] == mn[i] && mg[j] != mg[i]) print "specs/" m[i] ".md\tM:specs/" m[j] ".md" } }'
+
+slh_claim_specs() { # slh_claim_specs <proj> <rev> -> the paths under specs/ at <rev>, one per line; git's status on failure
+  # Read null-separated (spec 0210, fix round 13, the twelfth leg's F4): a plain ls-tree wraps a
+  # name holding a double quote, a backslash, a tab or a control byte in quotes, and a quoted name
+  # never matched the spec filter, so it was no claim. A tab and a newline inside a name become
+  # \035 and \036, so each name stays one line and one tab-separated field, and is still compared
+  # as the name it is.
+  git -C "$1" ls-tree -z --name-only "$2" specs/ 2>/dev/null | tr '\t\n\000' '\035\036\n'
+  return "${PIPESTATUS[0]}"
+}
+
+slh_claim_number() { # slh_claim_number <proj> <remote> <trunk> <ref-name> <tip> <deleted-refs> [<pushed-spec-refs> <pushed-trunk-oid>] -> 1 after refusing by name
+  local proj="$1" remote="$2" trunk="$3" name="$4" tip="$5" deleted="$6" pushed="${7:- }" ptrunk="${8:-}" st rtrunk rfiles pfiles="" mine hits gst=0
+  [ -n "$remote" ] || return 0 # fail-open-ok: a hand invocation names no remote, so there is no remote claim to compare with
+  st="$(slh_claim_stamp "$proj" "$tip")" || { SLH_REFUSED=1; return 1; }
+  [ "$st" != "old" ] || return 0 # fail-open-ok: dated, as the flip arm is
+  slh_claim_heads "$proj" "$remote" || return 1
+  rtrunk="$(printf '%s\n' "$SLH_CLAIM_HEADS" | awk -v r="refs/heads/$trunk" '$2 == r { print $1; exit }')"
+  rfiles=""
+  if [ -z "$rtrunk" ] && [ -z "$ptrunk" ] && [ -n "$SLH_CLAIM_HEADS" ]; then
+    slh_claim_trunk_missing "$remote" "$trunk"
+    return 1
+  fi
+  if [ -n "$rtrunk" ]; then
+    if ! git -C "$proj" cat-file -e "$rtrunk^{commit}" 2>/dev/null; then
+      slh_refuse "SLH-CLAIM-UNREADABLE" "the remote's trunk $(slh_bound name "$trunk") is at $rtrunk, which this clone does not have, so whether a spec this push carries takes a number the trunk already holds could not be read. A check that cannot run has not passed: run git fetch $(slh_bound name "$remote"), then push again."
+      return 1
+    fi
+    rfiles="$(slh_claim_specs "$proj" "$rtrunk")" || gst=$?
+    [ "$gst" -eq 0 ] || { slh_git_failed "$gst" "ls-tree -z --name-only $rtrunk specs/" "the spec files on the remote's trunk"; return 1; }
+  fi
+  if [ -n "$ptrunk" ] && [ "$name" != "$trunk" ]; then
+    pfiles="$(slh_claim_specs "$proj" "$ptrunk")" || gst=$?
+    [ "$gst" -eq 0 ] || { slh_git_failed "$gst" "ls-tree -z --name-only $ptrunk specs/" "the spec files on the trunk this push carries"; return 1; }
+  fi
+  mine="$(slh_claim_specs "$proj" "$tip")" || gst=$?
+  [ "$gst" -eq 0 ] || { slh_git_failed "$gst" "ls-tree -z --name-only $tip specs/" "the spec files $(slh_bound name "$name") carries"; return 1; }
+  hits="$( {
+      printf '%s\n' "$rfiles" | awk '/^specs\/[0-9]+[a-z]*-.+\.md$/ { f = $0; sub(/^specs\//, "", f); sub(/\.md$/, "", f); print "T\t" f "\tT:" $0 }'
+      printf '%s\n' "$pfiles" | awk '/^specs\/[0-9]+[a-z]*-.+\.md$/ { f = $0; sub(/^specs\//, "", f); sub(/\.md$/, "", f); print "T\t" f "\tP:" $0 }'
+      printf '%s\n' "$SLH_CLAIM_HEADS" | SLH_OWN="refs/heads/$name" SLH_DEL="$deleted$pushed" awk '$2 ~ /^refs\/heads\/spec\// && $2 != ENVIRON["SLH_OWN"] && index(ENVIRON["SLH_DEL"], " " $2 " ") == 0 { b = $2; sub(/^refs\/heads\//, "", b); f = b; sub(/^spec\//, "", f); print "B\t" f "\tB:" b }'
+      printf '%s\n' "$name" | awk '/^spec\/[0-9]+[a-z]*-./ { f = $0; sub(/^spec\//, "", f); print "N\t" f }'
+      printf '%s\n' $pushed | SLH_OWN="refs/heads/$name" awk '$1 ~ /^refs\/heads\/spec\// && $1 != ENVIRON["SLH_OWN"] { b = $1; sub(/^refs\/heads\//, "", b); f = b; sub(/^spec\//, "", f); print "B\t" f "\tQ:" b }'
+      printf '%s\n' "$mine" | SLH_HAVE="$(printf '%s\n' "$rfiles" "$pfiles" | tr '\n' '\034')" awk '/^specs\/[0-9]+[a-z]*-.+\.md$/ && index("\034" ENVIRON["SLH_HAVE"], "\034" $0 "\034") == 0 { f = $0; sub(/^specs\//, "", f); sub(/\.md$/, "", f); print "M\t" f }'
+    } | awk -F'\t' "$SLH_CLAIM_NUMBER_AWK" )" # fail-open-ok: the reads above carried their statuses; this composes their text
+  [ -n "$hits" ] || return 0
+  # Each path is a value the repository chose, so it goes through slh_bound name (the 2.15.0 leg's
+  # F3, spec 0210): a spec slug written as prose is quoted and cut, never read as this file speaking.
+  local list="" n=0 f w d
+  while IFS="$(printf '\t')" read -r f w; do
+    [ -n "$f" ] || continue
+    n=$((n + 1)); [ "$n" -le 5 ] || continue
+    case "$w" in
+      T:*) d="the remote holds it as $(slh_bound name "${w#T:}") on the trunk" ;;
+      P:*) d="this push carries it as $(slh_bound name "${w#P:}") on the trunk" ;;
+      Q:*) d="this push carries it as the branch $(slh_bound name "${w#Q:}")" ;;
+      M:*) d="this push carries it as $(slh_bound name "${w#M:}")" ;;
+      *) d="the remote holds it as the branch $(slh_bound name "${w#B:}")" ;;
+    esac
+    list="${list:+$list; }$(slh_bound name "$f") ($d)"
+  done <<SLHNUMEOF
+$hits
+SLHNUMEOF
+  # A list cut at five says how many it left out, as slh_bound names does (the 2.15.0 leg 3's F4).
+  [ "$n" -le 5 ] || list="$list; and $((n - 5)) more"
+  slh_refuse "SLH-CLAIM-NUMBER-TAKEN" "$(slh_bound name "$name") carries a spec whose number the remote or this push already holds under another slug: $list. Two specs cannot hold one number. Renumber this spec from scripts/board.sh --next (the checkpoint's spec cut takes it) and push again, deleting the old spec branch from the remote if it was pushed; the first trunk landing keeps the number."
+  return 1
 }
 
 slh_close_review_check() { # slh_close_review_check <proj> <num> <spec-text> <carries-code 0|1> -> 1 after refusing by name

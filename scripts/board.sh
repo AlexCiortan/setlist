@@ -21,8 +21,9 @@
 # remote-tracking ref (a fetch writes no working tree and no local branch).
 # --offline reads the last fetch's remote-tracking refs alone and names their age
 # from FETCH_HEAD. With no remote it reads the local trunk and says so. On the
-# trunk it reads .claude/status.json (the state) and each specs/NNNN-<slug>.md
-# header (Status, Driver, Owns); on each spec branch, that branch's own spec file,
+# trunk it reads .claude/status.json (the state, and the driver where the record
+# carries one, edition v1.23) and each specs/NNNN-<slug>.md header (Status,
+# Driver where the record carries none, Owns); on each spec branch, that branch's own spec file,
 # because Owns: lines are appended on the branch. A spec's Owns: set on the board
 # is the union of the trunk's header and its branch's.
 #
@@ -172,7 +173,7 @@ done < "$W/trunk-files"
 
 RECORD_NOTE=""
 if G cat-file -e "$TRUNK_REV:.claude/status.json" 2>/dev/null; then
-  if G show "$TRUNK_REV:.claude/status.json" 2>/dev/null | jq -r '.specs // {} | to_entries[] | [.key, (.value.status // "")] | @tsv' > "$W/record" 2>/dev/null; then
+  if G show "$TRUNK_REV:.claude/status.json" 2>/dev/null | jq -r '.specs // {} | to_entries[] | [.key, (.value.status // ""), ((.value.driver // "") | strings)] | @tsv' > "$W/record" 2>/dev/null; then
     RECORD_NOTE="states from the trunk's status record"
   else
     : > "$W/record"; RECORD_NOTE="the trunk's status record does not parse, so states are read from the spec headers"
@@ -219,9 +220,9 @@ if [[ "$MODE" == next ]]; then echo "$NEXT"; exit 0; fi
 
 # 4. The units: one per (number, slug), the trunk's row first, its branch beside it.
 UNITS="$(awk -F'\t' -v now="$NOW" -v stale="$STALE_DAYS" -v recf="$W/record" -v ownf="$W/owns" '
-  function norm(n,   d, s) { d = n; sub(/[a-z]+$/, "", d); s = substr(n, length(d) + 1); return (d + 0) s }
+  function norm(n,   d, s) { d = n; sub(/[a-z]+$/, "", d); s = substr(n, length(d) + 1); sub(/^0+/, "", d); if (d == "") d = "0"; return d s }
   BEGIN {
-    while ((getline l < recf) > 0) { split(l, r, "\t"); rec[norm(r[1])] = r[2] }
+    while ((getline l < recf) > 0) { split(l, r, "\t"); rec[norm(r[1])] = r[2]; if (r[3] != "") recdrv[norm(r[1])] = r[3] }
     while ((getline l < ownf) > 0) { split(l, o, "\t"); k = norm(o[2]) "\t" o[3]; if (!((k, o[4]) in seenown)) { seenown[k, o[4]] = 1; own[k] = (own[k] == "" ? o[4] : own[k] "\034" o[4]) } }
   }
   {
@@ -235,7 +236,7 @@ UNITS="$(awk -F'\t' -v now="$NOW" -v stale="$STALE_DAYS" -v recf="$W/record" -v 
       k = order[i]; split(k, kk, "\t"); nn = kk[1]
       if (ontrunk[k]) st = ((nn in rec) && rec[nn] != "" ? rec[nn] : hst[k]); else st = bst[k]
       if (st == "") st = "unknown"
-      d = (drv[k] != "" ? drv[k] : bdrv[k])
+      d = ((ontrunk[k] && (nn in recdrv)) ? recdrv[nn] : (drv[k] != "" ? drv[k] : bdrv[k]))
       ct = (bct[k] != "" ? bct[k] : tct[k]); if (ct == "") ct = 0
       printf "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", num[k], kk[2], st, d, (ontrunk[k] ? "yes" : "no"), br[k], ct, own[k]
     }
@@ -245,7 +246,7 @@ if [[ "$MODE" == owns ]]; then
   want="$OWNS_SPEC"; [[ "$want" =~ ^[0-9]+[a-z]*$ ]] || cant "--spec wants a spec number, got $(safe "$want")"
   myslug="$(ls "$ROOT/specs/" 2>/dev/null | sed -nE "s/^0*${want#"${want%%[!0]*}"}-(.*)\.md$/\1/p" | head -n1)"
   hits="$(printf '%s\n' "$UNITS" | awk -F'\t' -v want="$want" -v mine="$myslug" -v f="$OWNS_FILE" '
-    function norm(n,   d, s) { d = n; sub(/[a-z]+$/, "", d); s = substr(n, length(d) + 1); return (d + 0) s }
+    function norm(n,   d, s) { d = n; sub(/[a-z]+$/, "", d); s = substr(n, length(d) + 1); sub(/^0+/, "", d); if (d == "") d = "0"; return d s }
     NF == 0 { next }
     norm($1) == norm(want) && (mine == "" || $2 == mine) { next }
     !($3 == "active" || $6 != "") { next }
@@ -289,7 +290,7 @@ printf '%s\n' "$UNITS" | awk -F'\t' -v now="$NOW" '
 echo
 echo "collisions it can see:"
 COLL="$(printf '%s\n' "$UNITS" | awk -F'\t' -v now="$NOW" -v stale="$STALE_DAYS" '
-  function norm(n,   d, s) { d = n; sub(/[a-z]+$/, "", d); s = substr(n, length(d) + 1); return (d + 0) s }
+  function norm(n,   d, s) { d = n; sub(/[a-z]+$/, "", d); s = substr(n, length(d) + 1); sub(/^0+/, "", d); if (d == "") d = "0"; return d s }
   function who(i) { return "spec " N[i] "-" S[i] " (driver " (D[i] != "" ? D[i] : "unknown") (B[i] != "" ? ", branch " B[i] : "") ")" }
   NF == 0 { next }
   { c++; N[c] = $1; S[c] = $2; ST[c] = $3; D[c] = $4; T[c] = $5; B[c] = $6; CT[c] = $7; O[c] = $8 }

@@ -1,9 +1,55 @@
-**Edition v1.22 (the session-zero edition)**
+**Edition v1.23 (the claims edition)**
 
 This is the third of the edition's three files, the Changelog; `setlist.md` holds the core
 (Parts 1 to 6) and `setlist-operations.md` Parts 7 to 10 and Appendices A to C.
 
 ## Changelog
+
+- **v1.23 (the claims edition).** This delta list is authoritative for `/setlist:upgrade`. The
+  counters stay separate: this edition ships as plugin 2.15.0, and an instance upgrading from v1.21
+  or earlier reads every entry from its own edition up. v1.23 moves because the PROTOCOL changes
+  what a push decides: the claims v1.22 made visible from the trunk are refused at push, and the
+  status record carries who holds each spec.
+
+  - **THE DRIVER KEY (Part 3, Appendix C, the checkpoint, validate and board).** The status
+    record admits one optional key per spec, `driver`, one non-empty string: the handle the
+    header's `Driver:` line names. The checkpoint writes it at the opening ACTIVE flip, in the same
+    commit as the line, where `.claude/sdd.json` stamps plugin 2.15 or later. The board reads the
+    key where it is present and the line otherwise; validate reports the two when they differ, as
+    information. No gate reads its value. It is the one key added to the record since v1.12, and
+    Part 3 states its cost: a clone still on older hooks refuses a record carrying it as
+    `SLH-RECORD-MALFORMED` until it takes the upgrade. A record without the key reads as before.
+  - **THE FLIP REFUSED AT PUSH (Part 5, Part 6's codes, `pre-push`).** A pushed
+    `spec/NNNN-<slug>` whose spec the trunk the push answers to (the pushed trunk when it is in the
+    push, else the remote's) records as absent, `draft` or `queued` is refused as
+    `SLH-CLAIM-NOT-ON-TRUNK`, with the remedy: land the flip on the trunk first. The checkpoint's
+    atomic push of the flip and its empty branch passes. A remote trunk this clone has not fetched
+    refuses as `SLH-CLAIM-UNREADABLE` (fetch, then push again). It is not asked of an instance
+    without the status record, or under `forge` custody, whose pull-request branch is pushed before
+    its flip lands.
+  - **THE NUMBER REFUSED AT PUSH (Part 3's numbering, Part 6's codes, `pre-push`).** A pushed spec
+    file whose number the remote's trunk or one of its `spec/` branches carries under another slug,
+    and a pushed `spec/NNNN-<slug>` whose number the trunk's spec file carries under another slug,
+    are refused as `SLH-CLAIM-NUMBER-TAKEN`, with the remedy: renumber from `board.sh --next` and
+    push again. It compares only spec files the remote's trunk does not already carry at the same
+    path. Two cuts made apart still collide in the clones that made them; the second one's push is
+    where it stops.
+  - **BOTH DATED TO 2.15 (Part 6).** Both checks are in force where the pushed commit's own
+    `.claude/sdd.json` stamps plugin 2.15 or later, so a branch cut before the upgrade is not asked,
+    and neither sees a claim nobody pushed, a push that skips the git hooks or a merge made on the
+    forge. They compare no `Owns:` sets: an overlap is still reported when it is acquired and
+    refused only at the close.
+  - **THE WORKTREE AGE ON GIT FOR WINDOWS (Part 6, the re-grounding hook).** In a linked worktree
+    on Git for Windows the hook now reads its repository's last fetch and names its age, where it
+    read "of unknown age": a drive path counts as absolute.
+  - **THE LIST, 21 BEFORE AND AFTER (Part 6's public twin).** None in, none out. Nothing entered,
+    because the two refusals bound nothing new: each narrows what the declarations bullet's
+    parallel-spec paragraph allows without making a title false, and that paragraph now says what
+    is refused at push. Nothing left, because no capability of this edition retires a whole
+    boundary, and the one retirement weighed, the hashed-range bullet, was held to a later
+    release. 21 design boundaries, 0 open limitations, 0 upstream conditions, as at v1.22.
+  - **THE UPGRADE (Part 8c's v1.23 delta).** What an instance receives, and what it takes by hand,
+    is the v1.23 delta in Part 8c.
 
 - **v1.22 (the session-zero edition).** This delta list is authoritative for `/setlist:upgrade`.
   The counters stay separate: this edition ships as plugin 2.14.0, and an instance upgrading from

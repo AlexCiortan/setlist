@@ -128,9 +128,9 @@ refuse() { # refuse <token>
   fc_cleanup
   exit 1
 }
-# The code is passed BRACKETED, as it prints, so the leg trigger's identifier
-# extraction (bracketed codes in the mechanism files) sees every code this check
-# can emit where it is emitted.
+# fc_say's code is passed BRACKETED, as it prints, and refuse() takes its token
+# bare; the leg trigger's identifier extraction reads both where they are
+# emitted (the bare token since spec 0210), so it sees every code this check can emit.
 fc_say() { printf 'setlist forge check %s: %s\n' "$1" "$2" >&2; }
 fc_report() { printf 'setlist forge check report %s: %s\n' "$1" "$2" >&2; }
 
@@ -282,14 +282,59 @@ fi
 
 # --- 3. the scratch merge ---------------------------------------------------
 #
-# A shared clone rather than a worktree: the trunk branch must exist as a
+# A private copy rather than a worktree: the trunk branch must exist as a
 # LOCAL branch for the library's reducer and for the audit, and a worktree
-# cannot check out a branch the main checkout already has. The clone copies no
-# config, so the instance's own hooks do not run inside it, and the identity is
-# FIXED so nothing about the runner reaches the history the audit reads.
+# cannot check out a branch the main checkout already has. The copy borrows the
+# checkout's object store (objects/info/alternates, as git's shared mode writes
+# it) and carries the refs a fresh copy of the checkout carries: its branches
+# under origin/, its tags, and its own branch or detached commit as HEAD, with
+# nothing checked out. It copies no config, so the instance's own hooks do not
+# run inside it, and the identity is FIXED so nothing about the runner reaches
+# the history the audit reads. It is made here rather than by a shared helper
+# because this file is stamped alone into an instance.
+fc_private_copy() { # fc_private_copy -> the copy at $FC_CLONE, or status 1
+  local src refs head tip def objs
+  src="$(cd "$REPO" && pwd)" || return 1
+  refs="$(git -C "$src" for-each-ref --format='create %(refname) %(objectname)' refs/heads refs/tags)" || return 1
+  git init -q "$FC_CLONE" >/dev/null 2>&1 || return 1
+  # The object store is named as git itself prints it (spec 0210, fix round 4): the shell's spelling
+  # is /tmp/... under Git Bash, which the native git cannot read as an alternate. A git older than
+  # 2.31 does not know --path-format and echoes it back, so anything but one absolute line falls to
+  # the shell's spelling, which every other platform reads.
+  objs="$(git -C "$src" rev-parse --path-format=absolute --git-path objects 2>/dev/null)" || objs=""
+  case "$objs" in
+    *$'\n'*|'') objs="" ;;
+    /*|[A-Za-z]:[/\\]*) ;;
+    *) objs="" ;;
+  esac
+  [[ -n "$objs" ]] || objs="$(cd "$src" && cd "$(git rev-parse --git-common-dir)/objects" && pwd)" || return 1
+  printf '%s\n' "$objs" > "$FC_CLONE/.git/objects/info/alternates" || return 1
+  git -C "$FC_CLONE" config remote.origin.url "$src" || return 1
+  git -C "$FC_CLONE" config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' || return 1
+  if [[ -n "$refs" ]]; then
+    printf '%s\n' "$refs" | sed 's#^create refs/heads/#create refs/remotes/origin/#' | git -C "$FC_CLONE" update-ref --stdin || return 1
+  fi
+  head="$(git -C "$src" symbolic-ref -q HEAD 2>/dev/null)" || head="" # fail-open-ok: no symbolic HEAD is a detached checkout, read on the next lines
+  tip="$(git -C "$src" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null)" || tip="" # fail-open-ok: no commit at HEAD leaves the copy's HEAD unborn, as git's own copy leaves it
+  if [[ -z "$head" && -n "$tip" ]]; then # detached: the branch at that commit git's own copy chooses, the default branch name first
+    def="$(git config init.defaultBranch 2>/dev/null)" || def="master" # fail-open-ok: git's own fallback name
+    head="$(git -C "$src" for-each-ref --format='%(objectname) %(refname)' refs/heads | awk -v t="$tip" -v d="refs/heads/$def" '$1 == t && $2 == d { print $2; f = 1; exit } $1 == t && first == "" { first = $2 } END { if (!f && first != "") print first }')"
+  fi
+  if [[ -n "$head" && -n "$tip" ]]; then
+    git -C "$FC_CLONE" update-ref "$head" "$tip" || return 1
+    git -C "$FC_CLONE" symbolic-ref HEAD "$head" || return 1
+    git -C "$FC_CLONE" symbolic-ref refs/remotes/origin/HEAD "refs/remotes/origin/${head#refs/heads/}" || return 1
+    git -C "$FC_CLONE" config "branch.${head#refs/heads/}.remote" origin || return 1
+    git -C "$FC_CLONE" config "branch.${head#refs/heads/}.merge" "$head" || return 1
+  elif [[ -n "$tip" ]]; then
+    git -C "$FC_CLONE" update-ref --no-deref HEAD "$tip" || return 1
+  elif [[ -n "$head" ]]; then
+    git -C "$FC_CLONE" symbolic-ref HEAD "$head" || return 1
+  fi
+}
 FC_TMP="$(mktemp -d "${TMPDIR:-/tmp}/setlist-forge-check.XXXXXX" 2>/dev/null)" || could_not_run "could not create a scratch directory"
 FC_CLONE="$FC_TMP/merge"
-git clone -q --shared --no-checkout "$REPO" "$FC_CLONE" >/dev/null 2>&1 || could_not_run "could not clone the checkout into a scratch directory"
+fc_private_copy >/dev/null 2>&1 || could_not_run "could not copy the checkout privately into a scratch directory"
 git -C "$FC_CLONE" config user.email "forge-check@setlist.invalid"
 git -C "$FC_CLONE" config user.name "setlist-forge-check"
 git -C "$FC_CLONE" config commit.gpgsign false

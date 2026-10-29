@@ -290,14 +290,16 @@ if [[ -e "$PROJ/.git" || -L "$PROJ/.git" ]]; then
       # claim of the same number under another slug is the collision to name.
       RB_OWN=""
       [[ -n "${SPEC_FILE:-}" ]] && RB_OWN="spec/$(basename "$SPEC_FILE" .md)"
-      RB_SHOWN=""; RB_N=0; RB_REFS=()
+      RB_SHOWN=""; RB_N=0; RB_REFS=(); RB_NAMES=""
       while IFS= read -r RB_B; do
         [[ -n "$RB_B" ]] || continue
         RB_B="${RB_B#"refs/remotes/$RB_REMOTE/"}"
         [[ -n "$RB_OWN" && "$RB_B" == "$RB_OWN" ]] && continue
         RB_N=$((RB_N + 1))
-        [[ "$RB_N" -le 10 ]] || continue
         RB_REFS+=("refs/remotes/$RB_REMOTE/$RB_B")
+        RB_NAMES="${RB_NAMES:+$RB_NAMES
+}$RB_B"
+        [[ "$RB_N" -le 10 ]] || continue
         RB_SAFE="${RB_B//[^A-Za-z0-9._\/ :+=@-]/?}"
         # A name shown other than as the remote spells it says so, as the spec-file and armed paths
         # do (spec 0205, the 2.14.0 leg's F10): the name is text the remote chose.
@@ -313,21 +315,46 @@ if [[ -e "$PROJ/.git" || -L "$PROJ/.git" ]]; then
         # fetch, and a future time as fresh. The age is now the newer FETCH_HEAD of this worktree
         # and its repository that names a spec/ branch, else the newest reflog entry a fetch wrote
         # for a listed branch, else unknown; a time in the future is unknown.
+        # THE LIST NEVER READS FRESHER THAN ANY BRANCH IT LISTS (spec 0210, the 2.15.0 leg 10's F2, fix
+        # round 11): a fetch of one spec branch made every listed branch read as old as that fetch. A
+        # FETCH_HEAD counts only when it names EVERY listed branch of this remote; else the age is the
+        # OLDEST of the listed refs' newest reflog entries, and unknown when any listed ref has none. A
+        # fetch that found a branch unchanged writes no reflog entry, so this errs older, the safe side.
         RB_AGE="of unknown age"; RB_T=""
+        # A FETCH_HEAD line counts only when it names THIS remote (spec 0210, the 2.15.0 leg 3's F3): a
+        # fetch of spec/ branches from a second remote made this remote's stale list read fresh. git
+        # writes the url with its credentials, trailing slashes and .git removed, so this compares that
+        # spelling; a url that does not match falls to the reflog, never to fresh.
+        RB_URL="$(git -C "$PROJ" config --get "remote.$RB_REMOTE.url" 2>/dev/null)" || RB_URL=""
+        while [[ "$RB_URL" == */ ]]; do RB_URL="${RB_URL%/}"; done
+        RB_URL="${RB_URL%.git}"
+        if [[ "$RB_URL" =~ ^([A-Za-z][A-Za-z0-9+.-]*://)[^/@]*@(.*)$ ]]; then RB_URL="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+        elif [[ "$RB_URL" =~ ^[^/:@]+@([^/:]+:.*)$ ]]; then RB_URL="${BASH_REMATCH[1]}"; fi
         for RB_FH in "$(git -C "$PROJ" rev-parse --git-path FETCH_HEAD 2>/dev/null)" "$(git -C "$PROJ" rev-parse --git-common-dir 2>/dev/null)/FETCH_HEAD"; do
-          [[ -n "$RB_FH" && "$RB_FH" != /* ]] && RB_FH="$PROJ/$RB_FH"
+          # A drive path is absolute too (spec 0208, item 5b): Git for Windows prints C:/... for both
+          # reads in a linked worktree, and prefixing it with the project path named no file.
+          case "$RB_FH" in ''|/*|[A-Za-z]:[/\\]*) ;; *) RB_FH="$PROJ/$RB_FH" ;; esac
           [[ -f "$RB_FH" ]] || continue
-          grep -q "branch 'spec/" "$RB_FH" 2>/dev/null || continue
+          [[ -n "$RB_URL" ]] || continue
+          RB_U="$RB_URL" RB_W="$RB_NAMES" awk '
+            BEGIN { n = split(ENVIRON["RB_W"], w, "\n"); for (i = 1; i <= n; i++) need[w[i]] = 1; tail = "'\'' of " ENVIRON["RB_U"] }
+            {
+              k = index($0, "\tbranch '\''"); if (!k) next
+              rest = substr($0, k + 9)
+              if (length(rest) <= length(tail) || substr(rest, length(rest) - length(tail) + 1) != tail) next
+              got[substr(rest, 1, length(rest) - length(tail))] = 1
+            }
+            END { if (n == 0) exit 1; for (b in need) if (!(b in got)) exit 1; exit 0 }' "$RB_FH" 2>/dev/null || continue
           RB_M="$(date -r "$RB_FH" +%s 2>/dev/null)" || continue
           [[ "$RB_M" =~ ^[0-9]+$ ]] || continue
           [[ -z "$RB_T" || "$RB_M" -gt "$RB_T" ]] && RB_T="$RB_M"
         done
         if [[ -z "$RB_T" ]]; then
           for RB_R in ${RB_REFS[@]+"${RB_REFS[@]}"}; do
-            RB_G="$(git -C "$PROJ" reflog show -1 --format=%gd --date=unix "$RB_R" 2>/dev/null)" || continue
+            RB_G="$(git -C "$PROJ" reflog show -1 --format=%gd --date=unix "$RB_R" 2>/dev/null)" || RB_G=""
             RB_M="${RB_G##*@\{}"; RB_M="${RB_M%\}}"
-            [[ "$RB_M" =~ ^[0-9]+$ ]] || continue
-            [[ -z "$RB_T" || "$RB_M" -gt "$RB_T" ]] && RB_T="$RB_M"
+            if ! [[ "$RB_M" =~ ^[0-9]+$ ]]; then RB_T=""; break; fi
+            [[ -z "$RB_T" || "$RB_M" -lt "$RB_T" ]] && RB_T="$RB_M"
           done
         fi
         if [[ -n "$RB_T" ]]; then

@@ -249,12 +249,12 @@ When the instance predates this plugin, also:
   `AGENTS.md` exists, it is the project's: surface the diff instead of
   overwriting, and tell the human that Claude Code reads `CLAUDE.md` where both
   exist.
-- **Every dated addition and every edition's delta, v1.7 to v1.22**: read
+- **Every dated addition and every edition's delta, v1.7 to v1.23**: read
   `${CLAUDE_PLUGIN_ROOT}/skills/upgrade/references/deltas.md` and walk each entry whose edition or plugin
   version lies after the instance's recorded one, in order. It holds the
   `release` block, the git hooks and their config, the per-push escape, the git
   identity, the `Spec-hash:` field, the attestation block, the diagram half, the
-  status record, and the v1.14 to v1.22 deltas, each with the edits it offers and
+  status record, and the v1.14 to v1.23 deltas, each with the edits it offers and
   what it migrates (most migrate nothing). An entry you skip is an edit the
   instance never receives.
 

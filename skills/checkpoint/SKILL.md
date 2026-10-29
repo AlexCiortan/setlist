@@ -50,8 +50,8 @@ field is the check.
 - Opening a spec (Part 5, edition v1.22): the ACTIVE flip comes FIRST, as a
   commit on the trunk (the `trunk` field in `.claude/sdd.json`; main is only
   the fallback): the Status line, the `Spec-hash:` and `Driver:` fields, the
-  STATUS.md row and the record token, and the attestation where one is
-  declared. Cut `spec/NNNN-<slug>` at the flip commit, empty. Push both in ONE
+  STATUS.md row and the record token (and `driver`, below), and the
+  attestation where one is declared. Cut `spec/NNNN-<slug>` at the flip commit, empty. Push both in ONE
   push after the ask: `git push --atomic <remote> <trunk> spec/NNNN-<slug>`.
   The claim branch then exists on the remote exactly when the flip does, and a
   rejected trunk push leaves no claim behind. A forge that refuses `--atomic`
@@ -64,7 +64,8 @@ field is the check.
 - **A rejected flip push is the lock working** (edition v1.22): never retry,
   rebase or reset on your own; read `${CLAUDE_PLUGIN_ROOT}/skills/checkpoint/references/rejected-flip-push.md` and
   follow it. REFUSE to open the branch while the
-  trunk does not carry spec NNNN at ACTIVE, and say why in one line: a claim
+  trunk does not carry spec NNNN at ACTIVE (v1.23: `pre-push` refuses its
+  push too, `SLH-CLAIM-NOT-ON-TRUNK`), and say why in one line: a claim
   that lives only on a branch is invisible to every other clone, so two people
   can build the same spec. A return from REVISED stays on the spec's branch,
   which already exists. Feature code never lands directly on the trunk; why the
@@ -206,7 +207,8 @@ this command skips is a fact the machine never learns:
 - **Spec cut:** take the number from
   `bash "${CLAUDE_PLUGIN_ROOT}/scripts/board.sh" --next` (edition v1.22): the
   highest number on the trunk, this clone's trunk and the remote's `spec/`
-  branches, plus one, so a number a teammate pushed is not handed out again. Then
+  branches, plus one, so a number a teammate pushed is not handed out again
+  (v1.23: `pre-push` refuses a taken one, `SLH-CLAIM-NUMBER-TAKEN`). Then
   add `specs.<num>: {"status": "queued"}` (or the state being
   cut to) beside the new STATUS.md row.
 - **Lifecycle flip:** update the one token beside the row edit. Tokens are the
@@ -261,9 +263,10 @@ bash "${CLAUDE_PLUGIN_ROOT}/scripts/spec-hash.sh" specs/NNNN-slug.md
 Write the header's `Driver:` field FIRST (edition v1.22): one handle, from
 `.claude/sdd.json`'s `identity.user_email` where declared, else
 `git config user.email`; with neither, ask, and write only what you are told.
-The line is inside the hashed range, so it is written before the hash, and the
-status record gains no key for it (the record's shape is the hooks', and the
-header is the one record of the driver).
+The line is inside the hashed range, so it is written before the hash. Under a
+`plugin.version` 2.15 stamp (edition v1.23) write the same handle as the
+record's `specs.<num>.driver`, same commit; under an older stamp write none:
+older hooks refuse the key (`SLH-RECORD-MALFORMED`).
 
 Put the digest in the header's `Spec-hash:` field. The script is the recipe. Do
 not hand-roll a sha256 over the file, because the hash deliberately excludes the

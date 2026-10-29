@@ -859,7 +859,7 @@ esac
 # this since 2.6.0. Red watched on the pre-fix bytes: exit 0 with that line.
 BLSH="$WORK/audit-shallow-src"; baseline_fixture "$BLSH" bare
 rm -rf "$WORK/audit-shallow"
-if git clone -q --depth 1 --no-local "file://$BLSH" "$WORK/audit-shallow" 2>/dev/null \
+if private_copy -q --depth 1 --no-local "file://$BLSH" "$WORK/audit-shallow" 2>/dev/null \
    && [[ "$(git -C "$WORK/audit-shallow" rev-parse --is-shallow-repository 2>/dev/null)" == "true" ]]; then
   run_script bash "$SCRIPTS/trunk-audit.sh" "$WORK/audit-shallow"
   expect_script "0164 shallow i1: a shallow clone is refused by name, never reported clean" 2 "SLH-SHALLOW-CLONE"
